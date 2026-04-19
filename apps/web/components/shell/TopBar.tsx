@@ -1,6 +1,6 @@
 'use client'
 
-import { Hexagon, PanelLeftClose, PanelRightClose } from 'lucide-react'
+import { PanelLeftClose, PanelRightClose } from 'lucide-react'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { Button } from '../ui/Button'
 import { Segmented } from '../ui/Segmented'
@@ -28,7 +28,8 @@ export function TopBar() {
           <PanelLeftClose className="w-4 h-4" />
         </Button>
         <div className="flex items-center gap-2">
-          <Hexagon className="w-5 h-5 text-amber-500" fill="currentColor" />
+          {/* biome-ignore lint/performance/noImgElement: next/image incompatible with static export */}
+          <img src="/logo.svg" alt="OpenHive" className="w-6 h-6" />
           <span className="font-semibold text-neutral-900">OpenHive</span>
         </div>
         <div className="w-px h-5 bg-neutral-200 mx-1" />
