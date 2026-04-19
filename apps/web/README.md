@@ -11,17 +11,6 @@ pnpm dev       # from repo root, or `pnpm --filter @openhive/web dev`
 # open http://localhost:4483
 ```
 
-## Keyboard shortcuts
-
-| Key | Action |
-| --- | --- |
-| `D` | Switch to Design mode |
-| `R` | Switch to Run mode |
-| `[` | Toggle left sidebar |
-| `]` | Toggle right drawer |
-
-Shortcuts are ignored while focus is inside an input, textarea, or contenteditable.
-
 ## Structure
 
 ```

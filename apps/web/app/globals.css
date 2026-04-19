@@ -14,6 +14,15 @@ body {
   height: 100%;
 }
 
+/* All non-disabled buttons are clickable → show a pointer */
+button:not(:disabled):not([aria-disabled='true']) {
+  cursor: pointer;
+}
+button:disabled,
+button[aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
 body {
   background: var(--bg);
   color: #111;
