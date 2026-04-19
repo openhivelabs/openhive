@@ -1,6 +1,8 @@
 'use client'
 
+import { ReactFlowProvider } from '@xyflow/react'
 import { clsx } from 'clsx'
+import { OrgCanvas } from '@/components/canvas/OrgCanvas'
 import { Sidebar } from '@/components/shell/Sidebar'
 import { TopBar } from '@/components/shell/TopBar'
 import { useAppStore } from '@/lib/stores/useAppStore'
@@ -25,9 +27,9 @@ export default function Home() {
         {sidebarOpen && <Sidebar />}
       </aside>
       <main className="overflow-hidden relative bg-neutral-50">
-        <div className="h-full flex items-center justify-center text-neutral-400 text-sm">
-          Canvas coming in Task 6
-        </div>
+        <ReactFlowProvider>
+          <OrgCanvas />
+        </ReactFlowProvider>
       </main>
       <aside className="border-l border-neutral-200 bg-white overflow-hidden">
         {drawerOpen && (
