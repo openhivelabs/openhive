@@ -1,0 +1,127 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e4]:
+      - generic [ref=e5]:
+        - button "Toggle sidebar" [ref=e6]:
+          - img [ref=e7]
+        - generic [ref=e10]:
+          - img "OpenHive" [ref=e11]
+          - generic [ref=e12]: OpenHive
+        - generic [ref=e14]:
+          - generic [ref=e15]: Company
+          - combobox [ref=e16]:
+            - option "Acme Corp"
+            - option "R&D Lab" [selected]
+          - img
+        - generic [ref=e17]:
+          - generic [ref=e18]: Team
+          - combobox [ref=e19]:
+            - option "Semiconductor Research" [selected]
+          - img
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - button "Design" [ref=e22]
+          - button "Run" [ref=e23]
+        - button "Toggle drawer" [ref=e24]:
+          - img [ref=e25]
+    - complementary [ref=e28]:
+      - generic [ref=e29]:
+        - generic [ref=e30]:
+          - generic [ref=e31]: Organizations
+          - button "Add company" [ref=e32]:
+            - img [ref=e33]
+        - generic [ref=e34]:
+          - generic [ref=e35]:
+            - button "Acme Corp" [ref=e36]:
+              - img [ref=e37]
+              - img [ref=e39]
+              - generic [ref=e43]: Acme Corp
+            - generic [ref=e44]:
+              - button "Report Team 3" [ref=e45]:
+                - img [ref=e46]
+                - generic [ref=e51]: Report Team
+                - generic [ref=e52]: "3"
+              - button "New team" [ref=e53]:
+                - img [ref=e54]
+                - text: New team
+          - generic [ref=e55]:
+            - button "R&D Lab" [ref=e56]:
+              - img [ref=e57]
+              - img [ref=e59]
+              - generic [ref=e63]: R&D Lab
+            - generic [ref=e64]:
+              - button "Semiconductor Research 6" [active] [ref=e65]:
+                - img [ref=e66]
+                - generic [ref=e71]: Semiconductor Research
+                - generic [ref=e72]: "6"
+              - button "New team" [ref=e73]:
+                - img [ref=e74]
+                - text: New team
+    - main [ref=e75]:
+      - application [ref=e76]:
+        - generic [ref=e78]:
+          - generic:
+            - generic:
+              - img:
+                - group "Edge from b1 to b2" [ref=e153] [cursor=pointer]
+              - img:
+                - group "Edge from b1 to b3"
+              - img:
+                - group "Edge from b1 to b4" [ref=e156] [cursor=pointer]
+              - img:
+                - group "Edge from b3 to b5" [ref=e159] [cursor=pointer]
+              - img:
+                - group "Edge from b3 to b6" [ref=e162] [cursor=pointer]
+            - generic:
+              - group [ref=e165]:
+                - generic [ref=e167]:
+                  - img [ref=e169]
+                  - generic [ref=e171]:
+                    - generic [ref=e172]: CEO
+                    - generic [ref=e175]: Claude
+              - group [ref=e178]:
+                - generic [ref=e180]:
+                  - img [ref=e182]
+                  - generic [ref=e185]:
+                    - generic [ref=e186]: CMO
+                    - generic [ref=e189]: OpenClaw
+              - group [ref=e192]:
+                - generic [ref=e193]:
+                  - generic [ref=e194]: Active
+                  - generic [ref=e195]:
+                    - img [ref=e197]
+                    - generic [ref=e201]:
+                      - generic [ref=e202]: CTO
+                      - generic [ref=e205]: Cursor
+              - group [ref=e208]:
+                - generic [ref=e210]:
+                  - img [ref=e212]
+                  - generic [ref=e215]:
+                    - generic [ref=e216]: COO
+                    - generic [ref=e219]: Claude
+              - group [ref=e222]:
+                - generic [ref=e224]:
+                  - img [ref=e226]
+                  - generic [ref=e230]:
+                    - generic [ref=e231]: Engineer
+                    - generic [ref=e234]: Codex
+              - group [ref=e237]:
+                - generic [ref=e239]:
+                  - img [ref=e241]
+                  - generic [ref=e245]:
+                    - generic [ref=e246]: Engineer
+                    - generic [ref=e249]: Claude
+        - img
+        - generic "Control Panel" [ref=e79]:
+          - button "Zoom In" [ref=e80] [cursor=pointer]:
+            - img [ref=e81]
+          - button "Zoom Out" [ref=e83] [cursor=pointer]:
+            - img [ref=e84]
+          - button "Fit View" [ref=e86] [cursor=pointer]:
+            - img [ref=e87]
+        - img "Mini Map" [ref=e90]
+    - complementary [ref=e92]:
+      - generic [ref=e93]: Drawer coming in Task 9
+  - button "Open Next.js Dev Tools" [ref=e99] [cursor=pointer]:
+    - img [ref=e100]
+  - alert [ref=e103]
