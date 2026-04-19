@@ -14,6 +14,7 @@ interface DrawerState {
   setTab: (tab: DrawerTab) => void
   setSelectedAgent: (id: string | null) => void
   addMessage: (m: Message) => void
+  updateMessage: (id: string, patch: Partial<Message>) => void
   addTrigger: (t: Trigger) => void
   removeTrigger: (id: string) => void
   toggleTrigger: (id: string) => void
@@ -29,6 +30,10 @@ export const useDrawerStore = create<DrawerState>((set) => ({
   setTab: (tab) => set({ tab }),
   setSelectedAgent: (id) => set({ selectedAgentId: id }),
   addMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
+  updateMessage: (id, patch) =>
+    set((s) => ({
+      messages: s.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+    })),
   addTrigger: (t) => set((s) => ({ triggers: [...s.triggers, t] })),
   removeTrigger: (id) => set((s) => ({ triggers: s.triggers.filter((t) => t.id !== id) })),
   toggleTrigger: (id) =>
