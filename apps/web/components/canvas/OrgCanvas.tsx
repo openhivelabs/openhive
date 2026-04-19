@@ -18,6 +18,7 @@ import { NodeEditor } from '@/components/modals/NodeEditor'
 import { mockProviders } from '@/lib/mock/companies'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
 import { useCanvasStore } from '@/lib/stores/useCanvasStore'
+import { useRunSimulator } from '@/lib/stores/useRunSimulator'
 import type { Agent } from '@/lib/types'
 import { AgentNode, type AgentFlowNode } from './AgentNode'
 import { NodePalette } from './NodePalette'
@@ -45,6 +46,8 @@ export function OrgCanvas() {
   const { moveAgent, addAgent, addEdge, removeAgent, removeEdge } = useCanvasStore()
   const { screenToFlowPosition } = useReactFlow()
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
+
+  useRunSimulator()
 
   const nodes: AgentFlowNode[] = useMemo(() => {
     if (!team) return []
