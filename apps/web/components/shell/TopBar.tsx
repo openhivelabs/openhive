@@ -1,6 +1,8 @@
 'use client'
 
-import { SidebarSimple } from '@phosphor-icons/react'
+import { GearSix, SidebarSimple } from '@phosphor-icons/react'
+import { useState } from 'react'
+import { SettingsModal } from '@/components/modals/SettingsModal'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { Button } from '../ui/Button'
 import { Segmented } from '../ui/Segmented'
@@ -18,6 +20,7 @@ export function TopBar() {
     toggleSidebar,
     toggleDrawer,
   } = useAppStore()
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const currentCompany = companies.find((c) => c.id === currentCompanyId)
 
@@ -62,10 +65,19 @@ export function TopBar() {
             { value: 'run', label: 'Run' },
           ]}
         />
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setSettingsOpen(true)}
+          aria-label="Settings"
+        >
+          <GearSix className="w-4 h-4" />
+        </Button>
         <Button variant="ghost" size="sm" onClick={toggleDrawer} aria-label="Toggle drawer">
           <SidebarSimple className="w-4 h-4 scale-x-[-1]" />
         </Button>
       </div>
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </header>
   )
 }
