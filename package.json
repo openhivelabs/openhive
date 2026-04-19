@@ -3,13 +3,16 @@
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "dev": "pnpm --filter @openhive/web dev",
+    "dev": "concurrently -n web,server -c cyan,magenta \"pnpm --filter @openhive/web dev\" \"pnpm dev:server\"",
+    "dev:web": "pnpm --filter @openhive/web dev",
+    "dev:server": "cd apps/server && .venv/bin/uvicorn openhive.main:app --port 4484 --reload",
     "build": "pnpm --filter @openhive/web build",
     "lint": "biome check .",
     "format": "biome format --write ."
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
+    "concurrently": "^9.1.0",
     "typescript": "^5.7.2"
   }
 }

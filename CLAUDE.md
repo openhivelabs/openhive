@@ -15,9 +15,11 @@ Design philosophy: local-first, self-hosted, single-user. Headless core + swappa
 Backend:
 - Python 3.14.3
 - FastAPI 0.136.0
-- LangGraph 1.1.6 (orchestration engine, SqliteCheckpointer for persistence)
-- LangChain (model adapters — Anthropic, OpenAI, Ollama, custom OAuth proxies)
-- SQLite (runtime state, checkpoints, messages, usage, OAuth tokens)
+- httpx (every LLM call goes through it — no adapter library)
+- pydantic 2.9+ (request/response models, event schema, tool schemas)
+- cryptography / Fernet (encrypted OAuth tokens at rest)
+- SQLite (runtime state, checkpoints, messages, events, usage, OAuth tokens)
+- Custom async engine (`apps/server/openhive/engine/`) — no LangChain, no LangGraph
 
 Frontend:
 - Node.js 24.15.0 LTS
@@ -31,30 +33,42 @@ Skill runtime:
 - Python subprocesses for file generation (python-pptx, python-docx, reportlab, pypdf, weasyprint, pandoc)
 - Node subprocesses allowed for skills that need them
 
-Security-sensitive dependencies (Next.js, FastAPI/Starlette, LangGraph/LangChain, OAuth libs) track `latest` via Renovate/Dependabot.
+Security-sensitive dependencies (Next.js, FastAPI/Starlette, httpx, cryptography, OAuth libs) track `latest` via Renovate/Dependabot.
+
+**Explicitly rejected:** LangChain and LangGraph. See `docs/superpowers/specs/2026-04-19-openhive-mvp-design.md` §15 for the custom engine design that replaces them. OAuth-subscription providers (Claude Code, Codex, Copilot) don't fit LangChain's ChatModel abstraction, and our delegation semantics are runtime-dynamic rather than graph-compile-time, so LangGraph is a poor fit. Do not reintroduce either.
 
 ## Architecture
 
 ```
 Web UI (Next.js/React)  ← browser
-        │ HTTP + WebSocket
+        │ HTTP + SSE/WebSocket
 Server (Python/FastAPI)
- ├─ LangGraph engine — agents as nodes, reporting lines as edges
- ├─ Provider plugin layer
- │   ├─ OAuth providers (Claude Code, Codex, Copilot, Gemini CLI) — proxy subscription tokens
+ ├─ Engine (custom async orchestrator) — Lead's LLM calls `delegate_to(...)`
+ │  tool at run time to invoke subordinates. Org chart constrains the
+ │  `assignee` enum; actual routing is a runtime LLM decision, not a
+ │  precompiled graph.
+ ├─ Tool layer
+ │   ├─ Delegation tools (built-in, injected per node from edges)
+ │   ├─ Skill tools (subprocess, permission-gated)
+ │   ├─ MCP tools (remote MCP servers, Phase 2)
+ │   └─ Per-provider format translation (OpenAI vs Anthropic tool shapes)
+ ├─ Provider layer (direct httpx per provider)
+ │   ├─ OAuth providers (Claude Code, Codex, Copilot, Gemini CLI) — token dance lives in each module
  │   ├─ API key providers (Anthropic, OpenAI, Gemini, etc.)
  │   └─ Local providers (Ollama, LM Studio)
  ├─ Skill registry — loads Claude-format skills from ~/.openhive/skills/
  ├─ Trigger manager — chat, cron, webhook, file watch, manual
- └─ WebSocket broadcaster — streams LangGraph events to UI in real time
+ └─ Event bus — typed events → run_events SQLite + SSE/WebSocket fan-out
         │ subprocess
 Skill runtime (Python/Node scripts, sandboxed via subprocess + permission prompts)
 ```
 
 Key architectural rules:
-- Org chart shape (nodes + reporting edges) maps 1:1 to a LangGraph graph. UI canvas state serializes to YAML; YAML materializes into a LangGraph graph at run time.
-- Per-node provider + model — each agent picks its own LLM. The LangChain adapter abstracts provider differences; OAuth providers are served through a local proxy route on the same FastAPI server.
-- LangGraph checkpoints enable resume-after-failure and time-travel debugging — never bypass the checkpointer.
+- UI canvas state serializes to YAML. At run time the engine reads the YAML to decide which `delegate_to` targets each node exposes — the org chart is a **constraint on delegation**, not a precompiled computation graph.
+- Per-node provider + model — each agent picks its own LLM. No shared ChatModel abstraction; each provider module handles its own wire protocol and quirks directly via httpx.
+- Multi-agent coordination = LLM tool calling. Delegation is a tool the Lead's LLM invokes at run time. Do not reintroduce a static-graph orchestrator.
+- Engine checkpoints are plain JSON-serialized `RunState` rows in SQLite — resume = load latest + re-enter event loop. Never bypass the checkpointer.
+- Every agent step and tool call emits a typed Event. The Run-mode canvas and Timeline tab both read from the same event stream; no side channels.
 - Frontend never talks to LLMs directly. All model calls go through the backend so OAuth tokens, keys, and usage tracking stay server-side.
 
 ## Persistence Layout
