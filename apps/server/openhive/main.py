@@ -6,7 +6,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from openhive.api import health, providers, test_chat
+from openhive.api import health, providers, runs, test_chat
 from openhive.config import get_settings
 from openhive.persistence.db import init_db
 
@@ -35,6 +35,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(providers.router)
+app.include_router(runs.router)
 app.include_router(test_chat.router)
 
 
