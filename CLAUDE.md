@@ -107,6 +107,16 @@ Commands will be added here once the initial scaffolding lands. Placeholder targ
 
 Default: no auth, bound to `localhost` only. When started with `--host 0.0.0.0`, a password is required (enforced by the server — do not weaken this). Multi-user support is explicitly out of MVP scope.
 
+## Runtime Topology & Port
+
+Default port: **`4483`** (HIVE on a phone keypad).
+
+Production mode (`openhive serve`): **one process, one port.** FastAPI serves both the Next.js prebuilt static bundle and the API/WS routes from `:4483`. No Node.js runtime required on the user's machine — the web bundle is built upstream and packaged with the Python distribution.
+
+Development mode (`openhive serve --dev`): two processes. Next.js dev server on `:4483` (developer entry point) proxies `/api` and `/ws` to FastAPI on `:4484`. Do not change this split — hot reload depends on it.
+
+Distribution: install script is primary, Docker image is optional. Never require Docker. Native binaries/installers are v2+.
+
 ## Out of MVP Scope
 
 Do not implement these without an explicit request — they are deferred to v2+:

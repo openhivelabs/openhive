@@ -187,6 +187,41 @@ Three-tier provider plugin layer, all unified through LangChain's chat model ada
 - **Remote mode:** starting with `--host 0.0.0.0` (or non-loopback bind) requires a password set via `openhive set-password`. The server refuses to start in remote mode without one.
 - **Multi-user / RBAC:** explicitly out of MVP scope.
 
+## 10a. Deployment & Runtime Topology
+
+**Default port: `4483`** (HIVE on a phone keypad: H=4, I=4, V=8, E=3). Chosen to avoid conflicts with Next.js dev (3000), FastAPI default (8000), Paperclip (3100), and OpenClaw (18789).
+
+**Production (user) runtime — single process, single port:**
+
+```
+http://localhost:4483
+       │
+       ▼
+FastAPI process (one process, serves everything)
+ ├─ GET /             → Next.js prebuilt static bundle (UI)
+ ├─ GET /_next/*      → JS/CSS static assets
+ ├─ /api/*            → REST API
+ └─ /ws               → WebSocket event stream
+```
+
+The Next.js frontend is built at package time (`next build` → static export) and bundled into the Python package. At runtime, only a single Python process runs. No Node.js process is required on the user's machine at runtime.
+
+**Development runtime — two processes, hot reload:**
+
+```
+http://localhost:4483  ← Next.js dev server (developer entry point)
+       │
+       └─ /api, /ws requests proxied to →  http://localhost:4484 (FastAPI)
+```
+
+Developers still open `localhost:4483`; the Next.js dev server proxies API/WS traffic to FastAPI on 4484 transparently. `openhive serve --dev` starts both; `openhive serve` starts production mode.
+
+**Distribution plan (MVP):**
+
+- **Primary:** install script (`curl install.sh | sh`) — sets up Python venv, installs the `openhive` CLI, downloads the prebuilt static web bundle. Users need Python 3.14 on their machine; Node.js is NOT required at runtime (only at build time, which is handled upstream).
+- **Secondary:** optional Docker image for users who prefer container isolation or team-server deployment (`docker run -p 4483:4483 -v ~/.openhive:/data openhive/openhive`). Docker is never required.
+- **Out of MVP scope:** single-file native binary (PyInstaller) and native installers (.app/.exe/AppImage) — deferred to v2+ once real users validate the setup flow.
+
 ## 11. Tech Stack (summary)
 
 See Architecture Overview section 2 for full version table. All versions are the latest stable as of 2026-04-19 and security-critical packages track `latest` via automated PRs.
