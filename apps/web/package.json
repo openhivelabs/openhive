@@ -1,0 +1,35 @@
+{
+  "name": "@openhive/web",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 4483",
+    "build": "next build",
+    "start": "next start -p 4483",
+    "lint": "next lint",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "next": "^16.2.4",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "@xyflow/react": "^12.10.2",
+    "zustand": "^5.0.2",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.544.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tailwindcss": "^4.2.2",
+    "@tailwindcss/postcss": "^4.2.2",
+    "postcss": "^8.4.49",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "jsdom": "^25.0.1"
+  }
+}
