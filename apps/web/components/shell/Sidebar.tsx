@@ -3,6 +3,7 @@
 import { clsx } from 'clsx'
 import { Building2, ChevronRight, Plus, Users } from 'lucide-react'
 import { useState } from 'react'
+import { NewTeamModal } from '@/components/modals/NewTeamModal'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { Button } from '../ui/Button'
 
@@ -11,6 +12,7 @@ export function Sidebar() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(companies.map((c) => [c.id, true])),
   )
+  const [newTeamCompanyId, setNewTeamCompanyId] = useState<string | null>(null)
 
   return (
     <div className="h-full flex flex-col">
@@ -73,6 +75,7 @@ export function Sidebar() {
                 ))}
                 <button
                   type="button"
+                  onClick={() => setNewTeamCompanyId(company.id)}
                   className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-neutral-400 hover:text-neutral-600 hover:bg-neutral-50"
                 >
                   <Plus className="w-3 h-3" /> New team
@@ -82,6 +85,12 @@ export function Sidebar() {
           </div>
         ))}
       </div>
+
+      <NewTeamModal
+        open={!!newTeamCompanyId}
+        companyId={newTeamCompanyId}
+        onClose={() => setNewTeamCompanyId(null)}
+      />
     </div>
   )
 }
