@@ -19,8 +19,8 @@ Two options:
 
 | # | File | Shareable link | What it shows |
 |---|---|---|---|
-| 01 | [`01-system-architecture.excalidraw`](./01-system-architecture.excalidraw) | [view](https://excalidraw.com/#json=wOESFSnsafWgjgVG2PPNC,XdBUYOWJJ6oGtH_3mNEtIw) | The layered stack — Browser → Proxy → FastAPI server (Engine / Tools / Providers / Event bus) → Local storage |
-| 02 | [`02-delegation-sequence.excalidraw`](./02-delegation-sequence.excalidraw) | [view](https://excalidraw.com/#json=llWPxGWTEUM0b4IBFDJWF,7vznCHsO2xpF569f1E7rLA) | UML sequence — how "get fibonacci and summarize" becomes tokens, tool calls, and bubbles |
+| 01 | [`01-system-architecture.excalidraw`](./01-system-architecture.excalidraw) | [열기](https://excalidraw.com/#json=AxwD9iKKHvLI0C_py_RMr,hSplyi_jkUaRdX7lO1mLSA) | 전체 계층 — 브라우저 → 프록시 → FastAPI 서버 (엔진 / 툴 / 프로바이더 / 이벤트 버스) → 로컬 스토리지 |
+| 02 | [`02-delegation-sequence.excalidraw`](./02-delegation-sequence.excalidraw) | [열기](https://excalidraw.com/#json=YxEorp2_B8CMIrtpLYTLg,HtcjXuTBVMaIpqpb7QtiHA) | 시퀀스 — "피보나치 받아와서 정리해"가 토큰·툴콜·버블로 바뀌는 흐름 |
 
 ## Future diagrams
 

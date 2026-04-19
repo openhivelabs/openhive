@@ -3,11 +3,11 @@
   "version": 2,
   "source": "https://excalidraw.com",
   "elements": [
-    {"type":"text","id":"t1","x":185,"y":25,"width":430,"height":36,"text":"OpenHive Architecture","fontSize":28,"strokeColor":"#1e1e1e","textAlign":"left","verticalAlign":"top"},
-    {"type":"text","id":"t2","x":210,"y":65,"width":380,"height":20,"text":"user message → AI response","fontSize":16,"strokeColor":"#757575","textAlign":"left","verticalAlign":"top"},
+    {"type":"text","id":"t1","x":230,"y":25,"width":400,"height":36,"text":"OpenHive 아키텍처","fontSize":28,"strokeColor":"#1e1e1e","textAlign":"left","verticalAlign":"top"},
+    {"type":"text","id":"t2","x":280,"y":65,"width":320,"height":20,"text":"사용자 메시지 → AI 응답","fontSize":16,"strokeColor":"#757575","textAlign":"left","verticalAlign":"top"},
 
     {"type":"rectangle","id":"browser","x":100,"y":110,"width":600,"height":60,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","strokeColor":"#2563eb","strokeWidth":2,"boundElements":[{"type":"text","id":"browser_t"}]},
-    {"type":"text","id":"browser_t","x":100,"y":110,"width":600,"height":60,"text":"WEB UI — React + Next.js + React Flow","fontSize":18,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"browser"},
+    {"type":"text","id":"browser_t","x":100,"y":110,"width":600,"height":60,"text":"웹 UI — React + Next.js + React Flow","fontSize":18,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"browser"},
 
     {"type":"arrow","id":"a1","x":400,"y":170,"width":0,"height":40,"points":[[0,0],[0,40]],"strokeColor":"#1e1e1e","strokeWidth":2,"endArrowhead":"arrow","boundElements":[{"type":"text","id":"a1_t"}]},
     {"type":"text","id":"a1_t","x":400,"y":170,"width":120,"height":20,"text":"HTTP + SSE","fontSize":14,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"a1"},
@@ -18,34 +18,34 @@
     {"type":"arrow","id":"a2","x":400,"y":250,"width":0,"height":22,"points":[[0,0],[0,22]],"strokeColor":"#1e1e1e","strokeWidth":2,"endArrowhead":"arrow"},
 
     {"type":"rectangle","id":"svrzone","x":60,"y":272,"width":680,"height":210,"roundness":{"type":3},"backgroundColor":"#e5dbff","fillStyle":"solid","strokeColor":"#8b5cf6","strokeWidth":1,"opacity":35},
-    {"type":"text","id":"svrh","x":80,"y":282,"width":380,"height":22,"text":"FASTAPI SERVER  (Python 3.14)","fontSize":16,"strokeColor":"#6d28d9","textAlign":"left","verticalAlign":"top"},
+    {"type":"text","id":"svrh","x":80,"y":282,"width":400,"height":22,"text":"FASTAPI 서버  (Python 3.14)","fontSize":16,"strokeColor":"#6d28d9","textAlign":"left","verticalAlign":"top"},
 
     {"type":"rectangle","id":"engine","x":80,"y":312,"width":210,"height":100,"roundness":{"type":3},"backgroundColor":"#b2f2bb","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":2,"boundElements":[{"type":"text","id":"engine_t"}]},
-    {"type":"text","id":"engine_t","x":80,"y":312,"width":210,"height":100,"text":"ENGINE\nrun_team\nrecursive delegation\ncheckpoints","fontSize":14,"strokeColor":"#15803d","textAlign":"center","verticalAlign":"middle","containerId":"engine"},
+    {"type":"text","id":"engine_t","x":80,"y":312,"width":210,"height":100,"text":"엔진\nrun_team\n재귀 델리게이션\n체크포인트","fontSize":14,"strokeColor":"#15803d","textAlign":"center","verticalAlign":"middle","containerId":"engine"},
 
     {"type":"rectangle","id":"tools","x":300,"y":312,"width":200,"height":100,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","strokeColor":"#2563eb","strokeWidth":2,"boundElements":[{"type":"text","id":"tools_t"}]},
-    {"type":"text","id":"tools_t","x":300,"y":312,"width":200,"height":100,"text":"TOOL LAYER\ndelegate_to\nskills\nMCP","fontSize":14,"strokeColor":"#2563eb","textAlign":"center","verticalAlign":"middle","containerId":"tools"},
+    {"type":"text","id":"tools_t","x":300,"y":312,"width":200,"height":100,"text":"툴 레이어\ndelegate_to\n스킬\nMCP","fontSize":14,"strokeColor":"#2563eb","textAlign":"center","verticalAlign":"middle","containerId":"tools"},
 
     {"type":"rectangle","id":"providers","x":510,"y":312,"width":220,"height":100,"roundness":{"type":3},"backgroundColor":"#ffd8a8","fillStyle":"solid","strokeColor":"#c2410c","strokeWidth":2,"boundElements":[{"type":"text","id":"providers_t"}]},
-    {"type":"text","id":"providers_t","x":510,"y":312,"width":220,"height":100,"text":"PROVIDERS  (httpx)\nClaude Code · Codex\nCopilot · API keys","fontSize":14,"strokeColor":"#c2410c","textAlign":"center","verticalAlign":"middle","containerId":"providers"},
+    {"type":"text","id":"providers_t","x":510,"y":312,"width":220,"height":100,"text":"프로바이더 (httpx 직결)\nClaude Code · Codex\nCopilot · API keys","fontSize":14,"strokeColor":"#c2410c","textAlign":"center","verticalAlign":"middle","containerId":"providers"},
 
     {"type":"arrow","id":"a3","x":290,"y":362,"width":10,"height":0,"points":[[0,0],[10,0]],"strokeColor":"#1e1e1e","strokeWidth":2,"endArrowhead":"arrow","startBinding":{"elementId":"engine","focus":0,"gap":1},"endBinding":{"elementId":"tools","focus":0,"gap":1}},
     {"type":"arrow","id":"a4","x":500,"y":362,"width":10,"height":0,"points":[[0,0],[10,0]],"strokeColor":"#1e1e1e","strokeWidth":2,"endArrowhead":"arrow","startBinding":{"elementId":"tools","focus":0,"gap":1},"endBinding":{"elementId":"providers","focus":0,"gap":1}},
 
     {"type":"rectangle","id":"eventbus","x":80,"y":425,"width":650,"height":48,"roundness":{"type":3},"backgroundColor":"#eebefa","fillStyle":"solid","strokeColor":"#be185d","strokeWidth":2,"boundElements":[{"type":"text","id":"eventbus_t"}]},
-    {"type":"text","id":"eventbus_t","x":80,"y":425,"width":650,"height":48,"text":"EVENT BUS — typed SSE events (run · node · token · tool · delegation)","fontSize":14,"strokeColor":"#be185d","textAlign":"center","verticalAlign":"middle","containerId":"eventbus"},
+    {"type":"text","id":"eventbus_t","x":80,"y":425,"width":650,"height":48,"text":"이벤트 버스 — 타입드 SSE 이벤트 (run · node · token · tool · delegation)","fontSize":14,"strokeColor":"#be185d","textAlign":"center","verticalAlign":"middle","containerId":"eventbus"},
 
     {"type":"arrow","id":"a5","x":400,"y":484,"width":0,"height":20,"points":[[0,0],[0,20]],"strokeColor":"#1e1e1e","strokeWidth":2,"endArrowhead":"arrow","boundElements":[{"type":"text","id":"a5_t"}]},
-    {"type":"text","id":"a5_t","x":400,"y":484,"width":80,"height":20,"text":"persist","fontSize":14,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"a5"},
+    {"type":"text","id":"a5_t","x":400,"y":484,"width":80,"height":20,"text":"저장","fontSize":14,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"a5"},
 
     {"type":"rectangle","id":"stgzone","x":60,"y":504,"width":680,"height":95,"roundness":{"type":3},"backgroundColor":"#c3fae8","fillStyle":"solid","strokeColor":"#0f766e","strokeWidth":1,"opacity":30},
-    {"type":"text","id":"stgh","x":80,"y":512,"width":360,"height":22,"text":"LOCAL STORAGE  ~/.openhive/","fontSize":14,"strokeColor":"#0f766e","textAlign":"left","verticalAlign":"top"},
+    {"type":"text","id":"stgh","x":80,"y":512,"width":400,"height":22,"text":"로컬 스토리지  ~/.openhive/","fontSize":14,"strokeColor":"#0f766e","textAlign":"left","verticalAlign":"top"},
 
     {"type":"rectangle","id":"sqlite","x":80,"y":535,"width":210,"height":56,"roundness":{"type":3},"backgroundColor":"#ffffff","fillStyle":"solid","strokeColor":"#0f766e","strokeWidth":2,"boundElements":[{"type":"text","id":"sqlite_t"}]},
-    {"type":"text","id":"sqlite_t","x":80,"y":535,"width":210,"height":56,"text":"openhive.db (SQLite)\ntokens · events · runs","fontSize":13,"strokeColor":"#0f766e","textAlign":"center","verticalAlign":"middle","containerId":"sqlite"},
+    {"type":"text","id":"sqlite_t","x":80,"y":535,"width":210,"height":56,"text":"openhive.db (SQLite)\n토큰 · 이벤트 · 실행","fontSize":13,"strokeColor":"#0f766e","textAlign":"center","verticalAlign":"middle","containerId":"sqlite"},
 
     {"type":"rectangle","id":"yaml","x":300,"y":535,"width":200,"height":56,"roundness":{"type":3},"backgroundColor":"#ffffff","fillStyle":"solid","strokeColor":"#0f766e","strokeWidth":2,"boundElements":[{"type":"text","id":"yaml_t"}]},
-    {"type":"text","id":"yaml_t","x":300,"y":535,"width":200,"height":56,"text":"companies/ (YAML)\nteams · presets","fontSize":13,"strokeColor":"#0f766e","textAlign":"center","verticalAlign":"middle","containerId":"yaml"},
+    {"type":"text","id":"yaml_t","x":300,"y":535,"width":200,"height":56,"text":"companies/ (YAML)\n팀 · 프리셋","fontSize":13,"strokeColor":"#0f766e","textAlign":"center","verticalAlign":"middle","containerId":"yaml"},
 
     {"type":"rectangle","id":"artifacts","x":510,"y":535,"width":220,"height":56,"roundness":{"type":3},"backgroundColor":"#ffffff","fillStyle":"solid","strokeColor":"#0f766e","strokeWidth":2,"boundElements":[{"type":"text","id":"artifacts_t"}]},
     {"type":"text","id":"artifacts_t","x":510,"y":535,"width":220,"height":56,"text":"artifacts/\n*.pptx · *.docx · *.pdf","fontSize":13,"strokeColor":"#0f766e","textAlign":"center","verticalAlign":"middle","containerId":"artifacts"}
