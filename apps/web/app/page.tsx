@@ -3,6 +3,7 @@
 import { ReactFlowProvider } from '@xyflow/react'
 import { clsx } from 'clsx'
 import { OrgCanvas } from '@/components/canvas/OrgCanvas'
+import { RightDrawer } from '@/components/drawer/RightDrawer'
 import { Sidebar } from '@/components/shell/Sidebar'
 import { TopBar } from '@/components/shell/TopBar'
 import { useAppStore } from '@/lib/stores/useAppStore'
@@ -32,11 +33,7 @@ export default function Home() {
         </ReactFlowProvider>
       </main>
       <aside className="border-l border-neutral-200 bg-white overflow-hidden">
-        {drawerOpen && (
-          <div className="h-full flex items-center justify-center text-neutral-400 text-sm">
-            Drawer coming in Task 9
-          </div>
-        )}
+        {drawerOpen && <RightDrawer />}
       </aside>
     </div>
   )
