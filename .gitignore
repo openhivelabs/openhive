@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Next.js
+.next/
+out/
+
+# Build outputs
+dist/
+build/
+
+# Misc
+.DS_Store
+*.log
+.env
+.env.local
+.env*.local
+
+# Editor
+.idea/
+.vscode/*
+!.vscode/settings.json
+
+# OpenHive local data
+.openhive/

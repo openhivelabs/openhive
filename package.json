@@ -1,0 +1,15 @@
+{
+  "name": "openhive",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "pnpm --filter @openhive/web dev",
+    "build": "pnpm --filter @openhive/web build",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "typescript": "^5.7.2"
+  }
+}
