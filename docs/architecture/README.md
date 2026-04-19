@@ -1,50 +1,38 @@
-# OpenHive Architecture Diagrams
+# OpenHive 아키텍처 다이어그램
 
-Living visual documentation of how OpenHive works. Updated alongside code changes so
-the diagrams never drift from reality.
+코드와 함께 살아있는 시각 문서. 구현이 바뀌면 이 다이어그램도 업데이트.
 
-## How to view
+## 보는 법
 
-Two options:
+1. **공유 링크 클릭** — 아래 표의 링크 → excalidraw.com 에서 열림. 팬·줌·편집 가능. 계정 필요 없음.
+2. **로컬 파일** — `.excalidraw` 파일을 https://excalidraw.com 에 드래그. 오프라인에서도 작동.
 
-1. **Open the shareable link** (fastest) — click any link in the table below, the diagram
-   opens in excalidraw.com. No account needed. You can pan, zoom, and edit. To save edits
-   back into the repo, copy the JSON from File → Save as... and replace the corresponding
-   `.excalidraw` file.
+## 다이어그램 (중요도 순)
 
-2. **Open the local file** — drag any `.excalidraw` file from this directory into
-   https://excalidraw.com to view or edit locally. Works offline.
-
-## Diagrams
-
-| # | File | Shareable link | What it shows |
+| # | 파일 | 열기 | 내용 |
 |---|---|---|---|
-| 01 | [`01-system-architecture.excalidraw`](./01-system-architecture.excalidraw) | [열기](https://excalidraw.com/#json=AxwD9iKKHvLI0C_py_RMr,hSplyi_jkUaRdX7lO1mLSA) | 전체 계층 — 브라우저 → 프록시 → FastAPI 서버 (엔진 / 툴 / 프로바이더 / 이벤트 버스) → 로컬 스토리지 |
-| 02 | [`02-delegation-sequence.excalidraw`](./02-delegation-sequence.excalidraw) | [열기](https://excalidraw.com/#json=YxEorp2_B8CMIrtpLYTLg,HtcjXuTBVMaIpqpb7QtiHA) | 시퀀스 — "피보나치 받아와서 정리해"가 토큰·툴콜·버블로 바뀌는 흐름 |
+| **03** ⭐ | [`03-agent-flow.excalidraw`](./03-agent-flow.excalidraw) | [열기](https://excalidraw.com/#json=s3GY0eAMSKLWiPmXUckSY,qz9ZCTibfHsKMxh_itPFdg) | **AI 에이전트 동작 과정** — 한 요청이 들어오면 CEO가 어떻게 계획 세우고, 프롬프트 다듬어서 subordinate에게 위임하고, 결과를 합성해서 스트리밍으로 돌려주는지. 턴 내부의 LLM 입력/출력 구조까지 포함. **여기가 메인.** |
+| 01 | [`01-system-architecture.excalidraw`](./01-system-architecture.excalidraw) | [열기](https://excalidraw.com/#json=AxwD9iKKHvLI0C_py_RMr,hSplyi_jkUaRdX7lO1mLSA) | 전체 계층 (참고용) — 브라우저·FastAPI·스토리지 배치도 |
+| 02 | [`02-delegation-sequence.excalidraw`](./02-delegation-sequence.excalidraw) | [열기](https://excalidraw.com/#json=YxEorp2_B8CMIrtpLYTLg,HtcjXuTBVMaIpqpb7QtiHA) | UML 시퀀스 (참고용) — 이벤트 메시지 흐름 |
 
-## Future diagrams
+## 업데이트 워크플로우
 
-Planned — add to the list as we draw them:
+아키텍처가 바뀔 때:
 
-- `03-engine-call-tree.excalidraw` — `run_team → _run_node → _stream_turn → _run_delegation` recursive structure
-- `04-event-to-ui-mapping.excalidraw` — which engine event updates which UI element
-- `05-oauth-token-dance.excalidraw` — Copilot 2-stage token flow (GitHub OAuth → copilot_internal → API call)
-- `06-provider-comparison.excalidraw` — side-by-side auth flows for Claude Code / Codex / Copilot
-- `07-file-system-layout.excalidraw` — `~/.openhive/` directory tree
+1. `.excalidraw` 파일 수정 (excalidraw.com에 드래그 → 수정 → Save as... 로 덮어쓰기) **또는** Claude에게 재생성 요청 (Excalidraw MCP 사용)
+2. `export_to_excalidraw` 툴로 새 공유 링크 생성
+3. 이 README의 링크 교체
+4. `.excalidraw` 파일 + README 같이 커밋
 
-## Update workflow
+## 그릴 예정 (상세가 필요해질 때)
 
-When architecture changes:
+- `04-turn-cycle.excalidraw` — 한 에이전트의 턴이 LLM ↔ 툴 호출을 어떻게 반복하는지 (루프 상세)
+- `05-parallel-execution.excalidraw` — 병렬 fan-out 구현 시 모습 (현재 diff)
+- `06-skill-tool-flow.excalidraw` — 스킬이 툴로 노출되어 PPTX 생성하는 흐름 (Phase 1 구현 시)
 
-1. Edit the `.excalidraw` file directly (drag into excalidraw.com, make changes,
-   Save as... → overwrite file) **OR** ask Claude to regenerate via the Excalidraw MCP.
-2. Re-upload to get a fresh shareable link (`export_to_excalidraw` tool).
-3. Update the link in this README.
-4. Commit the `.excalidraw` file and this README together.
+## Excalidraw 선택 이유
 
-## Why Excalidraw
-
-- Files are plain JSON — diffable, Git-friendly, no binary lock-in
-- Hand-drawn aesthetic matches the "real company" vibe of OpenHive
-- Free forever for our use (no paid plan needed)
-- Export to PNG/SVG works if we ever need to embed in slides/posts
+- 파일이 순수 JSON → diff 가능, Git 친화적
+- 손그림 느낌이 "진짜 회사" 바이브에 잘 맞음
+- 영원히 무료 (유료 플랜 안 씀)
+- PNG/SVG로 내보내기 가능 — 나중에 슬라이드·블로그에 필요하면
