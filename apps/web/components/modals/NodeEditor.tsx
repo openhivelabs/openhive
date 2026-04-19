@@ -1,6 +1,6 @@
 'use client'
 
-import { X } from 'lucide-react'
+import { X } from '@phosphor-icons/react'
 import { useEffect, useState } from 'react'
 import { mockProviders } from '@/lib/mock/companies'
 import { useCanvasStore } from '@/lib/stores/useCanvasStore'

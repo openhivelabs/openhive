@@ -3,16 +3,16 @@
 import { clsx } from 'clsx'
 import {
   Briefcase,
-  Code2,
+  Code,
   Compass,
   Crown,
   Hammer,
+  MagnifyingGlass,
   Microscope,
-  PenTool,
-  Search,
+  PenNib,
   ShieldCheck,
   Users,
-} from 'lucide-react'
+} from '@phosphor-icons/react'
 import type { ComponentType, DragEvent } from 'react'
 
 interface PaletteItem {
@@ -22,13 +22,13 @@ interface PaletteItem {
 
 const ITEMS: PaletteItem[] = [
   { role: 'CEO', icon: Crown },
-  { role: 'CTO', icon: Code2 },
+  { role: 'CTO', icon: Code },
   { role: 'CMO', icon: Compass },
   { role: 'COO', icon: Briefcase },
   { role: 'Manager', icon: Users },
   { role: 'Engineer', icon: Hammer },
-  { role: 'Researcher', icon: Search },
-  { role: 'Writer', icon: PenTool },
+  { role: 'Researcher', icon: MagnifyingGlass },
+  { role: 'Writer', icon: PenNib },
   { role: 'Reviewer', icon: ShieldCheck },
   { role: 'Analyst', icon: Microscope },
 ]

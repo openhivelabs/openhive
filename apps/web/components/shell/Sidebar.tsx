@@ -1,7 +1,7 @@
 'use client'
 
 import { clsx } from 'clsx'
-import { Building2, ChevronRight, Plus, Users } from 'lucide-react'
+import { Buildings, CaretRight, Plus, Users } from '@phosphor-icons/react'
 import { useState } from 'react'
 import { NewTeamModal } from '@/components/modals/NewTeamModal'
 import { useAppStore } from '@/lib/stores/useAppStore'
@@ -41,13 +41,13 @@ export function Sidebar() {
                   : 'text-neutral-700 hover:bg-neutral-50',
               )}
             >
-              <ChevronRight
+              <CaretRight
                 className={clsx(
                   'w-3.5 h-3.5 transition-transform text-neutral-400',
                   expanded[company.id] && 'rotate-90',
                 )}
               />
-              <Building2 className="w-4 h-4 text-neutral-500" />
+              <Buildings className="w-4 h-4 text-neutral-500" />
               <span className="flex-1 truncate">{company.name}</span>
             </button>
 

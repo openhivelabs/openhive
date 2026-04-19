@@ -4,18 +4,18 @@ import { Handle, type Node, type NodeProps, Position } from '@xyflow/react'
 import { clsx } from 'clsx'
 import {
   Briefcase,
-  Code2,
+  Code,
   Compass,
   Crown,
   FileText,
-  FlaskConical,
+  Flask,
   Hammer,
+  MagnifyingGlass,
   Microscope,
-  PenTool,
-  Search,
+  PenNib,
   ShieldCheck,
   Users,
-} from 'lucide-react'
+} from '@phosphor-icons/react'
 import type { ComponentType } from 'react'
 
 export type AgentNodeData = {
@@ -30,14 +30,14 @@ export type AgentFlowNode = Node<AgentNodeData, 'agent'>
 const ROLE_ICON: Record<string, ComponentType<{ className?: string }>> = {
   CEO: Crown,
   CMO: Compass,
-  CTO: Code2,
+  CTO: Code,
   COO: Briefcase,
   Engineer: Hammer,
-  Researcher: Search,
-  Writer: PenTool,
+  Researcher: MagnifyingGlass,
+  Writer: PenNib,
   Reviewer: ShieldCheck,
   Analyst: Microscope,
-  Scientist: FlaskConical,
+  Scientist: Flask,
   Manager: Users,
   Worker: FileText,
 }

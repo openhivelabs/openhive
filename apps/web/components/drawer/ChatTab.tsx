@@ -1,6 +1,6 @@
 'use client'
 
-import { Send } from 'lucide-react'
+import { PaperPlaneRight } from '@phosphor-icons/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
 import { useDrawerStore } from '@/lib/stores/useDrawerStore'
@@ -118,7 +118,7 @@ export function ChatTab() {
             aria-label="Send"
             className="w-9 h-9 rounded-lg bg-neutral-900 text-white flex items-center justify-center hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <Send className="w-4 h-4" />
+            <PaperPlaneRight className="w-4 h-4" />
           </button>
         </div>
       </div>

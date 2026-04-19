@@ -8,9 +8,11 @@ import { Sidebar } from '@/components/shell/Sidebar'
 import { Timeline } from '@/components/shell/Timeline'
 import { TopBar } from '@/components/shell/TopBar'
 import { useAppStore } from '@/lib/stores/useAppStore'
+import { useKeyboardShortcuts } from '@/lib/stores/useKeyboardShortcuts'
 
 export default function Home() {
   const { sidebarOpen, drawerOpen } = useAppStore()
+  useKeyboardShortcuts()
 
   return (
     <div

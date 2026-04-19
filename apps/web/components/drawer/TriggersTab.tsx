@@ -2,14 +2,14 @@
 
 import { clsx } from 'clsx'
 import {
+  ChatCircleText,
   Clock,
+  CursorClick,
   FolderOpen,
-  MessagesSquare,
-  MousePointer,
   Plus,
-  Trash2,
-  Webhook,
-} from 'lucide-react'
+  Trash,
+  PlugsConnected,
+} from '@phosphor-icons/react'
 import { useMemo, useState } from 'react'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { useDrawerStore } from '@/lib/stores/useDrawerStore'
@@ -17,11 +17,11 @@ import type { Trigger, TriggerKind } from '@/lib/types'
 import { Button } from '../ui/Button'
 
 const KIND_META: Record<TriggerKind, { icon: typeof Clock; label: string }> = {
-  chat: { icon: MessagesSquare, label: 'Chat' },
+  chat: { icon: ChatCircleText, label: 'Chat' },
   cron: { icon: Clock, label: 'Cron' },
-  webhook: { icon: Webhook, label: 'Webhook' },
+  webhook: { icon: PlugsConnected, label: 'PlugsConnected' },
   file_watch: { icon: FolderOpen, label: 'File watch' },
-  manual: { icon: MousePointer, label: 'Manual' },
+  manual: { icon: CursorClick, label: 'Manual' },
 }
 
 function makeId() {
@@ -182,7 +182,7 @@ export function TriggersTab() {
                   aria-label="Remove trigger"
                   className="p-1 rounded-md text-neutral-400 hover:text-red-600 hover:bg-red-50"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <Trash className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>

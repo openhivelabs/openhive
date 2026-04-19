@@ -1,17 +1,17 @@
 'use client'
 
+import { CalendarBlank, ChatCircleText, Files } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
-import { Calendar, FileBox, MessagesSquare } from 'lucide-react'
 import type { DrawerTab } from '@/lib/types'
 import { useDrawerStore } from '@/lib/stores/useDrawerStore'
 import { ArtifactsTab } from './ArtifactsTab'
 import { ChatTab } from './ChatTab'
 import { TriggersTab } from './TriggersTab'
 
-const TABS: { value: DrawerTab; label: string; icon: typeof MessagesSquare }[] = [
-  { value: 'chat', label: 'Chat', icon: MessagesSquare },
-  { value: 'triggers', label: 'Triggers', icon: Calendar },
-  { value: 'artifacts', label: 'Artifacts', icon: FileBox },
+const TABS: { value: DrawerTab; label: string; icon: typeof ChatCircleText }[] = [
+  { value: 'chat', label: 'Chat', icon: ChatCircleText },
+  { value: 'triggers', label: 'Triggers', icon: CalendarBlank },
+  { value: 'artifacts', label: 'Artifacts', icon: Files },
 ]
 
 export function RightDrawer() {

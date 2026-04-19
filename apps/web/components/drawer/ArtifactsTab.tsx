@@ -1,16 +1,23 @@
 'use client'
 
-import { FileArchive, FileCode, FileImage, FileSpreadsheet, FileText, FileType } from 'lucide-react'
+import {
+  FileArchive,
+  FileCode,
+  FileDoc,
+  FilePdf,
+  FilePpt,
+  FileXls,
+} from '@phosphor-icons/react'
 import { useMemo } from 'react'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { useDrawerStore } from '@/lib/stores/useDrawerStore'
 import type { Artifact } from '@/lib/types'
 
 function iconFor(mime: string) {
-  if (mime.includes('pdf')) return FileText
-  if (mime.includes('presentation') || mime.includes('powerpoint')) return FileImage
-  if (mime.includes('word') || mime.includes('officedocument.wordprocessing')) return FileType
-  if (mime.includes('sheet') || mime.includes('excel')) return FileSpreadsheet
+  if (mime.includes('pdf')) return FilePdf
+  if (mime.includes('presentation') || mime.includes('powerpoint')) return FilePpt
+  if (mime.includes('word') || mime.includes('officedocument.wordprocessing')) return FileDoc
+  if (mime.includes('sheet') || mime.includes('excel')) return FileXls
   if (mime.includes('markdown') || mime.includes('text/')) return FileCode
   return FileArchive
 }

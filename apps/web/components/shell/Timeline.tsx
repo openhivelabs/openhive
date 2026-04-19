@@ -1,7 +1,7 @@
 'use client'
 
 import { clsx } from 'clsx'
-import { ChevronDown, ChevronUp, Clock } from 'lucide-react'
+import { CaretDown, CaretUp, Clock } from '@phosphor-icons/react'
 import { useState } from 'react'
 import { useCurrentTeam } from '@/lib/stores/useAppStore'
 
@@ -44,9 +44,9 @@ export function Timeline() {
           <span className="text-neutral-400">· {bars.length} tasks · last run 2m ago</span>
         </div>
         {open ? (
-          <ChevronDown className="w-3.5 h-3.5 text-neutral-400" />
+          <CaretDown className="w-3.5 h-3.5 text-neutral-400" />
         ) : (
-          <ChevronUp className="w-3.5 h-3.5 text-neutral-400" />
+          <CaretUp className="w-3.5 h-3.5 text-neutral-400" />
         )}
       </button>
 

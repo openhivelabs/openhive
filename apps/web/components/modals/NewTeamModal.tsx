@@ -1,6 +1,6 @@
 'use client'
 
-import { Loader2, Sparkles, X } from 'lucide-react'
+import { CircleNotch, Sparkle, X } from '@phosphor-icons/react'
 import { useState } from 'react'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { PRESETS, type PresetDef, buildTeamFromNaturalLanguage } from '@/lib/presets'
@@ -119,7 +119,7 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
         {mode === 'nl' && (
           <div className="px-5 py-4 space-y-3">
             <div className="flex items-start gap-2 text-xs text-neutral-500 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
-              <Sparkles className="w-3.5 h-3.5 mt-0.5 text-amber-600 shrink-0" />
+              <Sparkle className="w-3.5 h-3.5 mt-0.5 text-amber-600 shrink-0" />
               <div>
                 Stubbed — returns a best-fit preset in this build. Real meta-agent lands in
                 Phase 7.
@@ -137,7 +137,7 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
                 Cancel
               </Button>
               <Button variant="primary" onClick={applyNl} disabled={loading || !nlInput.trim()}>
-                {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {loading && <CircleNotch className="w-3.5 h-3.5 animate-spin" />}
                 {loading ? 'Generating…' : 'Generate'}
               </Button>
             </div>

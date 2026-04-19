@@ -1,5 +1,5 @@
+import { CaretDown } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
-import { ChevronDown } from 'lucide-react'
 import type { SelectHTMLAttributes } from 'react'
 
 interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
@@ -19,7 +19,7 @@ export function Select({ label, className, children, ...rest }: SelectProps) {
       >
         {children}
       </select>
-      <ChevronDown className="pointer-events-none absolute right-2 w-3.5 h-3.5 text-neutral-500" />
+      <CaretDown className="pointer-events-none absolute right-2 w-3.5 h-3.5 text-neutral-500" />
     </div>
   )
 }

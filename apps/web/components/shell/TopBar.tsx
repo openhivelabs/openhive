@@ -1,6 +1,6 @@
 'use client'
 
-import { PanelLeftClose, PanelRightClose } from 'lucide-react'
+import { SidebarSimple } from '@phosphor-icons/react'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { Button } from '../ui/Button'
 import { Segmented } from '../ui/Segmented'
@@ -25,7 +25,7 @@ export function TopBar() {
     <header className="h-full flex items-center justify-between px-4 bg-white">
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" onClick={toggleSidebar} aria-label="Toggle sidebar">
-          <PanelLeftClose className="w-4 h-4" />
+          <SidebarSimple className="w-4 h-4" />
         </Button>
         <div className="flex items-center gap-2">
           {/* biome-ignore lint/performance/noImgElement: next/image incompatible with static export */}
@@ -63,7 +63,7 @@ export function TopBar() {
           ]}
         />
         <Button variant="ghost" size="sm" onClick={toggleDrawer} aria-label="Toggle drawer">
-          <PanelRightClose className="w-4 h-4" />
+          <SidebarSimple className="w-4 h-4 scale-x-[-1]" />
         </Button>
       </div>
     </header>
