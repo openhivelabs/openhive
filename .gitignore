@@ -24,3 +24,9 @@ build/
 
 # OpenHive local data
 .openhive/
+
+# Playwright MCP scratch output (snapshots, screenshots)
+.playwright-mcp/
+phase-*.png
+test-*.png
+screenshot-*.png
