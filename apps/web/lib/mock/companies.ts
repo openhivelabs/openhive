@@ -1,11 +1,13 @@
 import type { Company, Provider } from '../types'
 
+/**
+ * These IDs match the OAuth provider IDs used by the backend
+ * (`apps/server/openhive/auth/providers.py`).
+ */
 export const mockProviders: Provider[] = [
-  { id: 'p-claude', kind: 'api_key', label: 'Claude', connected: true },
-  { id: 'p-openai', kind: 'api_key', label: 'OpenAI', connected: true },
-  { id: 'p-cursor', kind: 'oauth', label: 'Cursor', connected: false },
-  { id: 'p-codex', kind: 'oauth', label: 'Codex', connected: false },
-  { id: 'p-ollama', kind: 'local', label: 'Ollama', connected: false },
+  { id: 'claude-code', kind: 'oauth', label: 'Claude Code', connected: false },
+  { id: 'codex', kind: 'oauth', label: 'Codex', connected: false },
+  { id: 'copilot', kind: 'oauth', label: 'Copilot', connected: false },
 ]
 
 export const mockCompanies: Company[] = [
@@ -22,9 +24,9 @@ export const mockCompanies: Company[] = [
           {
             id: 'a1',
             role: 'CEO',
-            label: 'Claude',
-            providerId: 'p-claude',
-            model: 'claude-opus-4-5',
+            label: 'Copilot',
+            providerId: 'copilot',
+            model: 'gpt-5-mini',
             systemPrompt: 'You are the CEO. Delegate and synthesize reports.',
             skills: [],
             position: { x: 400, y: 40 },
@@ -32,9 +34,9 @@ export const mockCompanies: Company[] = [
           {
             id: 'a2',
             role: 'Researcher',
-            label: 'Claude',
-            providerId: 'p-claude',
-            model: 'claude-sonnet-4-6',
+            label: 'Copilot',
+            providerId: 'copilot',
+            model: 'gpt-5-mini',
             systemPrompt: 'You research topics thoroughly.',
             skills: ['web-research'],
             position: { x: 200, y: 240 },
@@ -42,9 +44,9 @@ export const mockCompanies: Company[] = [
           {
             id: 'a3',
             role: 'Writer',
-            label: 'Claude',
-            providerId: 'p-claude',
-            model: 'claude-sonnet-4-6',
+            label: 'Copilot',
+            providerId: 'copilot',
+            model: 'gpt-5-mini',
             systemPrompt: 'You write polished final documents.',
             skills: ['docx-writer'],
             position: { x: 600, y: 240 },
@@ -70,9 +72,9 @@ export const mockCompanies: Company[] = [
           {
             id: 'b1',
             role: 'CEO',
-            label: 'Claude',
-            providerId: 'p-claude',
-            model: 'claude-opus-4-5',
+            label: 'Claude Code',
+            providerId: 'claude-code',
+            model: 'claude-opus-4-7',
             systemPrompt: 'You direct the R&D organization.',
             skills: [],
             position: { x: 400, y: 40 },
@@ -80,9 +82,9 @@ export const mockCompanies: Company[] = [
           {
             id: 'b2',
             role: 'CMO',
-            label: 'OpenClaw',
-            providerId: 'p-openai',
-            model: 'gpt-5',
+            label: 'Codex',
+            providerId: 'codex',
+            model: 'gpt-5.4-mini',
             systemPrompt: 'Marketing lead.',
             skills: [],
             position: { x: 100, y: 220 },
@@ -90,9 +92,9 @@ export const mockCompanies: Company[] = [
           {
             id: 'b3',
             role: 'CTO',
-            label: 'Cursor',
-            providerId: 'p-cursor',
-            model: 'gpt-5',
+            label: 'Codex',
+            providerId: 'codex',
+            model: 'gpt-5.4',
             systemPrompt: 'Technical lead.',
             skills: [],
             position: { x: 400, y: 220 },
@@ -101,8 +103,8 @@ export const mockCompanies: Company[] = [
           {
             id: 'b4',
             role: 'COO',
-            label: 'Claude',
-            providerId: 'p-claude',
+            label: 'Claude Code',
+            providerId: 'claude-code',
             model: 'claude-sonnet-4-6',
             systemPrompt: 'Operations lead.',
             skills: [],
@@ -111,9 +113,9 @@ export const mockCompanies: Company[] = [
           {
             id: 'b5',
             role: 'Engineer',
-            label: 'Codex',
-            providerId: 'p-codex',
-            model: 'gpt-5',
+            label: 'Copilot',
+            providerId: 'copilot',
+            model: 'gpt-5-mini',
             systemPrompt: 'Implementation.',
             skills: ['python-runner'],
             position: { x: 260, y: 420 },
@@ -121,9 +123,9 @@ export const mockCompanies: Company[] = [
           {
             id: 'b6',
             role: 'Engineer',
-            label: 'Claude',
-            providerId: 'p-claude',
-            model: 'claude-sonnet-4-6',
+            label: 'Copilot',
+            providerId: 'copilot',
+            model: 'gpt-5-mini',
             systemPrompt: 'Implementation.',
             skills: ['python-runner'],
             position: { x: 540, y: 420 },

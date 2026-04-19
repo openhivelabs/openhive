@@ -1,7 +1,8 @@
 'use client'
 
-import { X } from '@phosphor-icons/react'
+import { CircleNotch, X } from '@phosphor-icons/react'
 import { useEffect, useState } from 'react'
+import { type ModelInfo, listModels } from '@/lib/api/models'
 import { mockProviders } from '@/lib/mock/companies'
 import { useCanvasStore } from '@/lib/stores/useCanvasStore'
 import type { Agent } from '@/lib/types'
@@ -12,23 +13,70 @@ interface NodeEditorProps {
   onClose: () => void
 }
 
+// Simple in-memory cache so switching providers in the dropdown feels instant on retry.
+const modelCache: Record<string, ModelInfo[]> = {}
+
 export function NodeEditor({ agent, onClose }: NodeEditorProps) {
   const updateAgent = useCanvasStore((s) => s.updateAgent)
   const removeAgent = useCanvasStore((s) => s.removeAgent)
 
   const [draft, setDraft] = useState<Agent | null>(agent)
+  const [models, setModels] = useState<ModelInfo[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelsError, setModelsError] = useState<string | null>(null)
 
   useEffect(() => {
     setDraft(agent)
   }, [agent])
 
+  useEffect(() => {
+    if (!draft) return
+    const providerId = draft.providerId
+    const cached = modelCache[providerId]
+    if (cached) {
+      setModels(cached)
+      setModelsError(null)
+      return
+    }
+    setLoadingModels(true)
+    setModelsError(null)
+    listModels(providerId)
+      .then((list) => {
+        modelCache[providerId] = list
+        setModels(list)
+        // If the current model isn't offered by the newly-selected provider, snap to its default.
+        setDraft((prev) => {
+          if (!prev || prev.providerId !== providerId) return prev
+          if (list.some((m) => m.id === prev.model)) return prev
+          const fallback = list.find((m) => m.default)?.id ?? list[0]?.id
+          return fallback ? { ...prev, model: fallback } : prev
+        })
+      })
+      .catch((e) => setModelsError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoadingModels(false))
+  }, [draft?.providerId])
+
   if (!agent || !draft) return null
 
+  const onChangeProvider = (providerId: string) => {
+    const provider = mockProviders.find((p) => p.id === providerId)
+    // When provider changes, reset model to the provider's default (or first of list)
+    const cached = modelCache[providerId]
+    const nextModel = cached?.find((m) => m.default)?.id ?? cached?.[0]?.id ?? draft.model
+    setDraft({
+      ...draft,
+      providerId,
+      label: provider?.label ?? draft.label,
+      model: nextModel,
+    })
+  }
+
   const save = () => {
+    const provider = mockProviders.find((p) => p.id === draft.providerId)
     updateAgent(agent.id, {
       role: draft.role,
       providerId: draft.providerId,
-      label: mockProviders.find((p) => p.id === draft.providerId)?.label ?? draft.label,
+      label: provider?.label ?? draft.label,
       model: draft.model,
       systemPrompt: draft.systemPrompt,
     })
@@ -75,7 +123,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
             <Field label="Provider">
               <select
                 value={draft.providerId}
-                onChange={(e) => setDraft({ ...draft, providerId: e.target.value })}
+                onChange={(e) => onChangeProvider(e.target.value)}
                 className="input"
               >
                 {mockProviders.map((p) => (
@@ -86,12 +134,40 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
               </select>
             </Field>
             <Field label="Model">
-              <input
-                value={draft.model}
-                onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-                className="input"
-                placeholder="claude-opus-4-5"
-              />
+              {loadingModels ? (
+                <div className="input flex items-center gap-2 text-neutral-500">
+                  <CircleNotch className="w-3.5 h-3.5 animate-spin" />
+                  Loading…
+                </div>
+              ) : modelsError ? (
+                <input
+                  value={draft.model}
+                  onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                  className="input"
+                  placeholder="model id"
+                />
+              ) : (
+                <select
+                  value={models.some((m) => m.id === draft.model) ? draft.model : ''}
+                  onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                  className="input"
+                >
+                  {!models.some((m) => m.id === draft.model) && draft.model && (
+                    <option value="">{draft.model} (not in list)</option>
+                  )}
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                      {m.default ? ' · default' : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {modelsError && (
+                <div className="mt-1 text-[11px] text-amber-700">
+                  Couldn't load models ({modelsError}). Type a model id manually.
+                </div>
+              )}
             </Field>
           </div>
 

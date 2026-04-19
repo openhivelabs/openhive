@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from openhive.auth import claude, codex, copilot, flows, pkce
 from openhive.auth.providers import PROVIDERS, get as get_provider
 from openhive.persistence import tokens
+from openhive.providers import models as provider_models
 
 router = APIRouter(prefix="/api/providers", tags=["providers"])
 
@@ -80,6 +81,13 @@ async def list_providers() -> list[ProviderStatus]:
         )
         for p in PROVIDERS
     ]
+
+
+@router.get("/{provider_id}/models")
+async def list_models(provider_id: str) -> list[dict]:
+    if not get_provider(provider_id):
+        raise HTTPException(status_code=404, detail="unknown provider")
+    return await provider_models.list_for(provider_id)
 
 
 @router.delete("/{provider_id}")

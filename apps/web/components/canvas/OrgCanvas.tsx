@@ -28,12 +28,9 @@ const nodeTypes = { agent: AgentNode }
 const edgeTypes = { reporting: ReportingEdge }
 
 const PROVIDER_COLORS: Record<string, string> = {
-  Claude: '#f59e0b',
-  OpenAI: '#10a37f',
-  Cursor: '#6366f1',
-  Codex: '#a855f7',
-  Ollama: '#64748b',
-  OpenClaw: '#ef4444',
+  'Claude Code': '#f59e0b',
+  Codex: '#10a37f',
+  Copilot: '#6366f1',
 }
 
 function rid(prefix: string) {
@@ -124,13 +121,13 @@ export function OrgCanvas() {
       if (!role) return
       ev.preventDefault()
       const position = screenToFlowPosition({ x: ev.clientX, y: ev.clientY })
-      const defaultProvider = mockProviders[0]!
+      const defaultProvider = mockProviders.find((p) => p.id === 'copilot') ?? mockProviders[0]!
       addAgent({
         id: rid('a'),
         role,
         label: defaultProvider.label,
         providerId: defaultProvider.id,
-        model: 'claude-sonnet-4-6',
+        model: 'gpt-5-mini',
         systemPrompt: `You are a ${role}.`,
         skills: [],
         position,
