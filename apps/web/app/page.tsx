@@ -5,6 +5,7 @@ import { clsx } from 'clsx'
 import { OrgCanvas } from '@/components/canvas/OrgCanvas'
 import { RightDrawer } from '@/components/drawer/RightDrawer'
 import { Sidebar } from '@/components/shell/Sidebar'
+import { Timeline } from '@/components/shell/Timeline'
 import { TopBar } from '@/components/shell/TopBar'
 import { useAppStore } from '@/lib/stores/useAppStore'
 
@@ -15,7 +16,7 @@ export default function Home() {
     <div
       className={clsx(
         'h-screen grid transition-[grid-template-columns] duration-200',
-        'grid-rows-[52px_1fr]',
+        'grid-rows-[52px_1fr_auto]',
       )}
       style={{
         gridTemplateColumns: `${sidebarOpen ? '240px' : '0px'} 1fr ${drawerOpen ? '360px' : '0px'}`,
@@ -35,6 +36,9 @@ export default function Home() {
       <aside className="border-l border-neutral-200 bg-white overflow-hidden">
         {drawerOpen && <RightDrawer />}
       </aside>
+      <div className="col-span-3">
+        <Timeline />
+      </div>
     </div>
   )
 }
