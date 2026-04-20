@@ -100,29 +100,47 @@ Isolated provider adapters. Each lives in `apps/web/lib/server/providers/<id>.ts
 - [ ] OAuth providers: `claude_code`, `codex`, `copilot`, `gemini_cli`
 - [ ] `/api/providers/*` route handlers
 
-### Phase 4 — Engine
+### Phase 4 — Engine ✅
 
-The hardest. ~2.5K LOC of orchestration state machine.
+- [x] `lib/server/events/schema.ts`, `engine/team.ts`, `engine/errors.ts`,
+      `engine/preflight.ts`, `engine/askuser.ts`
+- [x] `engine/providers.ts` — StreamDelta normaliser for Claude / Codex / Copilot
+- [x] `lib/server/providers/{claude,codex,copilot,types}.ts` — native clients
+- [x] `lib/server/agents/{loader,runtime}.ts` — persona system
+- [x] `lib/server/skills/{loader,runner,which}.ts` — skill discovery + subprocess
+- [x] `lib/server/tools/base.ts` — Tool + toolsToOpenAI()
+- [x] `lib/server/runs-store.ts` — runs + run_events persistence
+- [x] `lib/server/engine/run.ts` — 1,400-LOC async-generator run loop
+- [x] `lib/server/engine/run-registry.ts` — live-run SSE broadcaster
+- [x] `/api/runs/*` — start, stream, stop, list, events, answer
 
-- [ ] `lib/server/events/schema.ts` — typed event schema (port of `events/schema.py`)
-- [ ] `lib/server/engine/team.ts` — TeamSpec, AgentSpec, edge parsing
-- [ ] `lib/server/engine/run.ts` — the run loop (tool calling, delegation, streaming)
-- [ ] `lib/server/engine/providers.ts` — provider dispatch layer
-- [ ] `lib/server/engine/preflight.ts`, `errors.ts`, `askuser.ts`
-- [ ] `lib/server/engine/run_registry.ts` — active-run state (on `globalThis`)
-- [ ] SSE stream handlers at `/api/runs/*`
+End-to-end verified: Copilot-backed Lead streamed tokens through the TS
+engine, events persisted to `run_events`.
 
-### Phase 5 — MCP + Panels + Scheduler
+### Phase 5 — MCP + Panels + Scheduler ✅
 
-- [ ] MCP manager using `@modelcontextprotocol/sdk`
-- [ ] Panel mapper (JSONPath via `jsonpath-plus`), sources, templates, cache, refresher
-- [ ] Cron scheduler (using `node-cron` or plain `setInterval` driven by saved cron strings)
+- [x] MCP manager via `@modelcontextprotocol/sdk` — stdio subprocesses,
+      session cache, restart/shutdown/test, wired directly into engine/run
+- [x] Panel mapper (jsonpath-plus), sources, templates, cache, refresher
+- [x] Scheduler via `cron-parser`, booted by Next.js `instrumentation.ts`
+- [x] `/api/mcp/**`, `/api/panels/**`, `/api/panel-templates/**`
 
-### Phase 6 — Skill runtime shrink
+### Phase 6 — Skill runtime shrink ✅
 
-- [ ] New `packages/skill-runner/` package (Python). Takes SKILL.md path + args on stdin, invokes the skill script, streams stdout back.
-- [ ] `lib/server/skills/` in TS — discovers skills from `~/.openhive/skills/` and `packages/skills/`, spawns `skill-runner` per call.
-- [ ] Delete `apps/server/openhive/skills/` (both `loader.py` and `runner.py`).
+**Decision: the originally-planned `packages/skill-runner/` wrapper turned
+out unnecessary.** `lib/server/skills/runner.ts` already spawns
+`python3 <entrypoint>` (or `node`) per call directly. Python only shows up
+as a subprocess invoked by the bundled PDF/PPTX/DOCX skills — exactly the
+"narrow subprocess layer" the migration aimed for. Adding a Python
+middleman would cost latency without buying anything.
+
+- [x] `lib/server/skills/runner.ts` — direct subprocess.spawn per call,
+      120s timeout, stdout cap, artifact snapshot
+- [x] AI generators ported: `/api/agents/generate`, `/api/teams/generate`
+      (Copilot-backed JSON synthesis via `chatCompletion`)
+- [x] `packages/skills/` stays as-is; skill scripts unchanged
+- [ ] `packages/skill-runner/` — **not creating**; direct spawn is the
+      intended narrow-Python surface
 
 ### Phase 7 — Teardown
 
