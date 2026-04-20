@@ -4,84 +4,83 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project: OpenHive
 
-Open-source AI agent orchestration platform. Users design "companies" — hierarchical org charts of AI agents with reporting lines — and assign them work through multiple trigger types (chat, cron, webhook, file watch). Agents coordinate via LangGraph workflows and produce artifacts (PPTX, DOCX, PDF, etc.) through a Claude-compatible skill system.
+Open-source AI agent orchestration platform. Users design "companies" — hierarchical org charts of AI agents with reporting lines — and assign them work through multiple trigger types (chat, cron, webhook, file watch). Agents coordinate via a custom async engine (LangGraph was explicitly rejected) and produce artifacts (PPTX, DOCX, PDF, etc.) through a Claude-compatible skill system.
 
 Target use cases: report generation, R&D (e.g., semiconductor research), any domain where layered delegation + document output matters.
 
 Design philosophy: local-first, self-hosted, single-user. Headless core + swappable clients (web UI is the primary client, CLI/TUI/mobile possible later). The canvas where users design the org is the same canvas where they watch it execute — Design/Run mode toggle over one view.
 
-## Tech Stack (pinned to latest stable as of 2026-04-19)
+## Tech Stack
 
-> ⚠️ **MIGRATION IN PROGRESS (2026-04-21 →).** All non-skill backend code is
-> moving from Python (FastAPI) to TypeScript (Next.js route handlers). See
-> `docs/superpowers/specs/2026-04-21-python-to-ts-migration.md`. During the
-> migration:
->
-> - **No new Python code outside `packages/skills/`.** Every new endpoint,
->   persistence module, engine feature, provider adapter, or MCP integration
->   goes in `apps/web/app/api/**` or `apps/web/lib/server/**`.
-> - Python stays for existing endpoints until their phase migrates; after
->   Phase 7 only `packages/skills/` + a thin `packages/skill-runner/` remain.
-> - Both runtimes read/write the same `~/.openhive/openhive.db` and
->   `~/.openhive/encryption.key` during transition — schemas and key format
->   MUST NOT drift.
+Single Node process. No Python server. Python only appears as a subprocess
+when a skill needs it (PPTX/DOCX/PDF generation, web-fetch, etc.).
 
-Backend (post-migration target):
+Runtime:
 - Node.js 24.15.0 LTS
 - Next.js 16.2.4 (App Router, Node runtime for `/api/**` route handlers)
-- `better-sqlite3` (runtime state, checkpoints, messages, events, usage, OAuth tokens)
-- `fernet` npm package (Fernet-compatible token encryption — key file shared with legacy Python)
-- Native `fetch` / `undici` for LLM calls (replaces httpx)
-- Custom async engine in `apps/web/lib/server/engine/` — no LangChain, no LangGraph
-
-Backend (legacy, being removed):
-- Python 3.14.3 + FastAPI 0.136.0 at `apps/server/` — do not extend
+- `better-sqlite3` — runtime state, checkpoints, messages, events, usage,
+  OAuth tokens. Same schema lives at `~/.openhive/openhive.db`.
+- `fernet` npm package — Fernet-compatible token encryption. Key file at
+  `~/.openhive/encryption.key`.
+- `@modelcontextprotocol/sdk` — MCP stdio client (long-lived subprocesses).
+- `cron-parser` + `setInterval` — scheduler in `lib/server/scheduler`,
+  booted from `apps/web/instrumentation.ts`.
+- `jsonpath-plus` — panel mapper row extraction.
+- Native `fetch` for LLM calls. Each provider module in
+  `lib/server/providers/` speaks its own wire protocol directly.
+- Custom async engine in `apps/web/lib/server/engine/` — no LangChain, no
+  LangGraph.
 
 Frontend:
-- Node.js 24.15.0 LTS
-- Next.js 16.2.4 (App Router)
-- React 19.2.5
-- @xyflow/react 12.10.2 (org chart canvas)
-- Tailwind CSS 4.2.2
-- TypeScript latest 5.x
+- React 19.2.5, @xyflow/react 12.10.2, Tailwind CSS 4.2.2, TypeScript 5.x.
 
 Skill runtime:
-- Python subprocesses for file generation (python-pptx, python-docx, reportlab, pypdf, weasyprint, pandoc)
-- Node subprocesses allowed for skills that need them
+- Python or Node scripts under `packages/skills/<name>/` + `~/.openhive/skills/`.
+- `lib/server/skills/runner.ts` spawns them per call with `OPENHIVE_OUTPUT_DIR`
+  set; generated files are snapshotted and registered as artifacts.
+- **No long-lived Python process.**
 
-Security-sensitive dependencies (Next.js, FastAPI/Starlette, httpx, cryptography, OAuth libs) track `latest` via Renovate/Dependabot.
+**Explicitly rejected:** LangChain and LangGraph. See
+`docs/superpowers/specs/2026-04-19-openhive-mvp-design.md` §15 for the
+custom engine design that replaces them. OAuth-subscription providers
+(Claude Code, Codex, Copilot) don't fit LangChain's ChatModel abstraction,
+and our delegation semantics are runtime-dynamic rather than graph-compile
+-time, so LangGraph is a poor fit. Do not reintroduce either.
 
-**Explicitly rejected:** LangChain and LangGraph. See `docs/superpowers/specs/2026-04-19-openhive-mvp-design.md` §15 for the custom engine design that replaces them. OAuth-subscription providers (Claude Code, Codex, Copilot) don't fit LangChain's ChatModel abstraction, and our delegation semantics are runtime-dynamic rather than graph-compile-time, so LangGraph is a poor fit. Do not reintroduce either.
+**Migration history:** backend ported from Python (FastAPI) to TS between
+2026-04-21 and 2026-04-21. See `docs/superpowers/specs/2026-04-21-python-to-
+ts-migration.md`. Do not reintroduce Python outside `packages/skills/`.
 
 ## Architecture
 
 ```
-Web UI (Next.js/React)  ← browser
-        │ HTTP + SSE/WebSocket
-Server (Python/FastAPI)
- ├─ Engine (custom async orchestrator) — Lead's LLM calls `delegate_to(...)`
- │  tool at run time to invoke subordinates. Org chart constrains the
- │  `assignee` enum; actual routing is a runtime LLM decision, not a
- │  precompiled graph.
- ├─ Tool layer
- │   ├─ Delegation tools (built-in, injected per node from edges)
- │   ├─ Skill tools (subprocess, permission-gated)
- │   ├─ MCP tools (remote MCP servers, Phase 2)
- │   └─ Per-provider format translation (OpenAI vs Anthropic tool shapes)
- ├─ Provider layer (direct httpx per provider)
- │   ├─ OAuth providers (Claude Code, Codex, Copilot, Gemini CLI) — token dance lives in each module
- │   ├─ API key providers (Anthropic, OpenAI, Gemini, etc.)
- │   └─ Local providers (Ollama, LM Studio)
- ├─ Skill registry — loads Claude-format skills from ~/.openhive/skills/
- ├─ Trigger manager — chat, cron, webhook, file watch, manual
- └─ Event bus — typed events → run_events SQLite + SSE/WebSocket fan-out
+Web UI (Next.js / React)  ← browser
+        │ HTTP + SSE
+Next.js server (Node, single process, :4483)
+ ├─ app/api/**/route.ts              HTTP + SSE route handlers
+ ├─ lib/server/engine/               custom async orchestrator. Lead's LLM
+ │                                   calls `delegate_to(...)` at run time;
+ │                                   org chart constrains the `assignee`
+ │                                   enum, routing is a runtime LLM
+ │                                   decision, not a precompiled graph.
+ ├─ lib/server/tools/                Tool abstraction + OpenAI tool format
+ ├─ lib/server/providers/            Claude Code / Codex / Copilot native
+ │                                   streaming clients + shape translation
+ ├─ lib/server/auth/                 OAuth (PKCE + device-code) + token
+ │                                   refresh
+ ├─ lib/server/mcp/                  stdio MCP manager (@modelcontextprotocol/sdk)
+ ├─ lib/server/skills/               SKILL.md discovery + subprocess runner
+ ├─ lib/server/agents/               persona loader + runtime composition
+ ├─ lib/server/panels/               mapper / sources / cache / refresher
+ ├─ lib/server/scheduler/            cron loop (booted via instrumentation.ts)
+ └─ lib/server/runs-store.ts         typed events → run_events SQLite + SSE fan-out
         │ subprocess
-Skill runtime (Python/Node scripts, sandboxed via subprocess + permission prompts)
+Skill runtime (Python/Node scripts, spawned per call with OPENHIVE_OUTPUT_DIR)
 ```
 
 Key architectural rules:
 - UI canvas state serializes to YAML. At run time the engine reads the YAML to decide which `delegate_to` targets each node exposes — the org chart is a **constraint on delegation**, not a precompiled computation graph.
-- Per-node provider + model — each agent picks its own LLM. No shared ChatModel abstraction; each provider module handles its own wire protocol and quirks directly via httpx.
+- Per-node provider + model — each agent picks its own LLM. No shared ChatModel abstraction; each provider module handles its own wire protocol and quirks directly via `fetch`.
 - Multi-agent coordination = LLM tool calling. Delegation is a tool the Lead's LLM invokes at run time. Do not reintroduce a static-graph orchestrator.
 - Engine checkpoints are plain JSON-serialized `RunState` rows in SQLite — resume = load latest + re-enter event loop. Never bypass the checkpointer.
 - Every agent step and tool call emits a typed Event. The Run-mode canvas and Timeline tab both read from the same event stream; no side channels.
@@ -116,30 +115,40 @@ Rules:
 - Artifacts live on disk; SQLite stores only path + metadata references.
 - **Team data DB uses SQLite + JSON1 hybrid**: template-defined typed columns + a `data` JSON column for AI-driven extension fields. Runtime DDL (`CREATE TABLE`, `ALTER TABLE`) is allowed for AI, gated by team permission. Every schema change is logged in a `schema_migrations` table so it can be traced/rolled back.
 
-## Repository Layout (planned)
+## Repository Layout
 
 ```
 openhive/
 ├── apps/
-│   ├── server/            FastAPI backend (Python)
-│   └── web/               Next.js frontend (TypeScript)
+│   └── web/                      Next.js app — frontend AND backend
+│       ├── app/
+│       │   ├── api/**/route.ts   HTTP + SSE endpoints
+│       │   └── <page routes>
+│       ├── lib/
+│       │   ├── server/           backend modules (engine, providers,
+│       │   │                     mcp, panels, skills, scheduler, auth…)
+│       │   └── api/              frontend API clients
+│       └── instrumentation.ts    runs once at server boot — starts
+│                                 scheduler + cleans orphan runs
 ├── packages/
-│   ├── skills/            Curated skill library (ships with OpenHive)
-│   └── presets/           Built-in company/team presets
+│   ├── agents/                   bundled personas (AGENT.md + tools.yaml)
+│   ├── skills/                   Claude-format skills (SKILL.md + scripts/)
+│   ├── frames/                   shareable team frames
+│   ├── mcp-presets/              MCP server gallery
+│   ├── panel-templates/          dashboard block templates
+│   └── templates/                team data DB schema templates
 ├── docs/
-│   └── superpowers/specs/ Design specs and implementation plans
-└── scripts/               CLI entry (`openhive serve`, etc.)
+│   └── superpowers/specs/        design specs + migration notes
+└── scripts/                      (future CLI entry points)
 ```
 
 ## Common Commands
 
-Commands will be added here once the initial scaffolding lands. Placeholder targets:
-
-- `openhive serve` — start the local server (FastAPI + Next.js dev mode or prebuilt)
-- `pytest` / `uv run pytest` — backend tests
-- `pnpm test` / `pnpm dev` — frontend dev and tests
-- `ruff check` + `mypy` — Python lint/type
-- `biome check` — frontend lint/format
+- `pnpm dev` — start Next.js dev server (:4483) with scheduler + engine
+- `pnpm build` — production Next.js build (used by prod `pnpm start`)
+- `pnpm start` — production server on :4483
+- `pnpm --filter @openhive/web test` — vitest suite
+- `biome check` — lint/format
 
 ## Authentication
 
@@ -149,11 +158,13 @@ Default: no auth, bound to `localhost` only. When started with `--host 0.0.0.0`,
 
 Default port: **`4483`** (HIVE on a phone keypad).
 
-Production mode (`openhive serve`): **one process, one port.** FastAPI serves both the Next.js prebuilt static bundle and the API/WS routes from `:4483`. No Node.js runtime required on the user's machine — the web bundle is built upstream and packaged with the Python distribution.
+One Next.js process, one port. The Node runtime serves both the UI and
+every `/api/**` route handler. Long-lived state (MCP manager, engine run
+registry, scheduler, DB connection) lives on `globalThis` so Next dev-mode
+HMR doesn't leak subprocesses or duplicate singletons.
 
-Development mode (`openhive serve --dev`): two processes. Next.js dev server on `:4483` (developer entry point) proxies `/api` and `/ws` to FastAPI on `:4484`. Do not change this split — hot reload depends on it.
-
-Distribution: install script is primary, Docker image is optional. Never require Docker. Native binaries/installers are v2+.
+Distribution: install script is primary, Docker image is optional. Never
+require Docker. Native binaries/installers are v2+.
 
 ## Out of MVP Scope
 
