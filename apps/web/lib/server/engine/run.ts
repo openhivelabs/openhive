@@ -132,27 +132,14 @@ export function activeRunCapacity(): { inUse: number; total: number } {
   return { inUse: sem.inUse(), total: sem.total() }
 }
 
-// -------- MCP stub --------
+// -------- MCP bridge --------
 
-interface McpManager {
-  getTools(server: string): Promise<Record<string, unknown>[]>
-  callTool(server: string, tool: string, args: Record<string, unknown>): Promise<string>
-}
+import * as mcpManagerImpl from '../mcp/manager'
 
-/** Read the MCP manager from globalThis if Phase 5 has registered one.
- *  Until then return a no-op stub so engine runs don't explode on MCP-less
- *  deployments (common during the migration). */
-function mcpManager(): McpManager {
-  const g = globalThis as unknown as { __openhive_mcp_manager?: McpManager }
-  if (g.__openhive_mcp_manager) return g.__openhive_mcp_manager
-  return {
-    async getTools() {
-      return []
-    },
-    async callTool() {
-      throw new Error('MCP manager not available on this server')
-    },
-  }
+/** Thin indirection so tests / alternate deployments can swap in a different
+ *  MCP backend without rewiring the engine. Default = real stdio manager. */
+function mcpManager() {
+  return mcpManagerImpl
 }
 
 // -------- top-level run_team generator --------
