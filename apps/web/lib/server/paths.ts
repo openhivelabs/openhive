@@ -30,6 +30,18 @@ export function companyDir(slug: string): string {
   return path.join(companiesRoot(), slug)
 }
 
+/**
+ * Team config YAML (companies/{c}/teams/{slug}.yaml). Flat file — siblings
+ * coexist with the per-team directory below.
+ */
+export function teamYamlPath(companySlug: string, teamSlug: string): string {
+  return path.join(companyDir(companySlug), 'teams', `${teamSlug}.yaml`)
+}
+
+/**
+ * Per-team directory (companies/{c}/teams/{slug}/). Holds `dashboard.yaml`,
+ * `data.db`, persona bundles, etc. Distinct from the sibling team YAML file.
+ */
 export function teamDir(companySlug: string, teamSlug: string): string {
   return path.join(companyDir(companySlug), 'teams', teamSlug)
 }
