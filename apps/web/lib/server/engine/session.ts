@@ -263,6 +263,7 @@ export function activeRunCapacity(): { inUse: number; total: number } {
 import * as mcpManagerImpl from '../mcp/manager'
 import type { getTools as getMcpTools } from '../mcp/manager'
 import { getTeamMcpTools } from './mcp-tools-cache'
+import { compactHistory } from './history-window'
 
 type ToolInfo = Awaited<ReturnType<typeof getMcpTools>>[number]
 
@@ -460,10 +461,25 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   const history: ChatMessage[] = []
   history.push({ role: 'user', content: task })
 
+  // History sliding-window: Infinity keeps the feature inert by default so
+  // existing sessions see byte-identical prompts. Nodes can opt in later by
+  // surfacing a finite window via persona config.
+  const historyWindow = Number.POSITIVE_INFINITY
+  const summariseHistory = async (_msgs: ChatMessage[]): Promise<string> => ''
+
   let rounds = 0
   while (true) {
     rounds += 1
     if (rounds > maxRounds) break
+
+    // Only pays when the node has opted into a finite window.
+    if (Number.isFinite(historyWindow)) {
+      const next = await compactHistory(history, historyWindow, summariseHistory)
+      if (next !== history) {
+        history.length = 0
+        history.push(...next)
+      }
+    }
 
     let turnDone = false
     for await (const ev of streamTurn({
