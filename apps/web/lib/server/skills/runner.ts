@@ -130,6 +130,15 @@ function filesFromEnvelope(
   return out.length > 0 ? out : undefined
 }
 
+/** Cold-start flags for Python scripts. `frozen_modules=on` lets Python
+ *  serve stdlib imports from the precompiled frozen set (3.11+), shaving
+ *  tens of ms off every spawn. Added unconditionally — Python ignores the
+ *  flag on versions that don't support it. */
+export const PYTHON_COLD_START_FLAGS: readonly string[] = [
+  '-X',
+  'frozen_modules=on',
+]
+
 function interpreter(runtime: 'python' | 'node'): string {
   if (runtime === 'python') {
     // Prefer python3 from PATH; python2 is long dead.
@@ -306,8 +315,9 @@ export async function runSkill(
     OPENHIVE_OUTPUT_DIR: outputDir,
     OPENHIVE_SKILL_NAME: skill.name,
   }
+  const pyFlags = skill.runtime === 'python' ? PYTHON_COLD_START_FLAGS : []
   const result = await runSubprocess({
-    cmd: [bin, skill.entrypoint],
+    cmd: [bin, ...pyFlags, skill.entrypoint],
     // cwd = outputDir so relative --out paths land in the artifact directory
     // and the before/after snapshot can actually register new files. Scripts
     // that need skill resources use OPENHIVE_SKILL_DIR or __file__-based
@@ -378,8 +388,9 @@ export async function runSkillScript(
     OPENHIVE_SKILL_NAME: skill.name,
     OPENHIVE_SKILL_DIR: skill.skillDir,
   }
+  const pyFlags = runtime === 'python' ? PYTHON_COLD_START_FLAGS : []
   const result = await runSubprocess({
-    cmd: [bin, resolved, ...(opts.args ?? [])],
+    cmd: [bin, ...pyFlags, resolved, ...(opts.args ?? [])],
     // cwd = outputDir: relative --out paths land in artifacts, snapshot works.
     cwd: outputDir,
     env,
