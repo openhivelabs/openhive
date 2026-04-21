@@ -7,8 +7,11 @@
  * accepts the engine's canonical messages verbatim.
  */
 
+import { NoopCachingStrategy } from './caching'
 import { EDITOR_HEADERS, getCopilotSession } from './copilot-session'
 import type { ChatMessage, ToolSpec } from './types'
+
+const cachingStrategy = new NoopCachingStrategy()
 
 async function* sseEvents(
   body: ReadableStream<Uint8Array>,
@@ -51,16 +54,12 @@ export async function* streamChat(
   const providerId = opts.providerId ?? 'copilot'
   const session = await getCopilotSession(providerId)
   const api = session.endpoints.api ?? 'https://api.githubcopilot.com'
-  const payload: Record<string, unknown> = {
+  const payload = cachingStrategy.applyToRequest({
     model: opts.model,
     messages: opts.messages,
+    tools: opts.tools && opts.tools.length > 0 ? opts.tools : null,
     temperature: opts.temperature ?? 0.7,
-    stream: true,
-  }
-  if (opts.tools && opts.tools.length > 0) {
-    payload.tools = opts.tools
-    payload.tool_choice = 'auto'
-  }
+  })
   const resp = await fetch(`${api}/chat/completions`, {
     method: 'POST',
     headers: {
