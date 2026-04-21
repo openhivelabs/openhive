@@ -30,7 +30,10 @@ function makeId() {
 
 export function TriggersTab() {
   const currentTeamId = useAppStore((s) => s.currentTeamId)
-  const { triggers, addTrigger, removeTrigger, toggleTrigger } = useDrawerStore()
+  const triggers = useDrawerStore((s) => s.triggers)
+  const addTrigger = useDrawerStore((s) => s.addTrigger)
+  const removeTrigger = useDrawerStore((s) => s.removeTrigger)
+  const toggleTrigger = useDrawerStore((s) => s.toggleTrigger)
   const [showForm, setShowForm] = useState(false)
   const [formKind, setFormKind] = useState<TriggerKind>('cron')
   const [formLabel, setFormLabel] = useState('')
@@ -68,7 +71,7 @@ export function TriggersTab() {
   return (
     <div className="h-full flex flex-col">
       <div className="px-4 py-2.5 border-b border-neutral-200 flex items-center justify-between">
-        <span className="text-xs text-neutral-500">
+        <span className="text-[15px] text-neutral-500">
           {teamTriggers.length} trigger{teamTriggers.length === 1 ? '' : 's'}
         </span>
         <Button size="sm" variant="outline" onClick={() => setShowForm((v) => !v)}>
@@ -79,12 +82,12 @@ export function TriggersTab() {
 
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
         {showForm && (
-          <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 space-y-2">
-            <div className="text-xs font-medium text-neutral-500">New trigger</div>
+          <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3 space-y-2">
+            <div className="text-[15px] font-medium text-neutral-500">New trigger</div>
             <select
               value={formKind}
               onChange={(e) => setFormKind(e.target.value as TriggerKind)}
-              className="w-full px-2.5 py-1.5 text-sm rounded-md border border-neutral-300 bg-white"
+              className="w-full px-2.5 py-1.5 text-[15px] rounded-sm border border-neutral-300 bg-white"
             >
               {(Object.entries(KIND_META) as [TriggerKind, (typeof KIND_META)[TriggerKind]][]).map(
                 ([k, v]) => (
@@ -98,7 +101,7 @@ export function TriggersTab() {
               value={formLabel}
               onChange={(e) => setFormLabel(e.target.value)}
               placeholder="Label (e.g. Weekly market report)"
-              className="w-full px-2.5 py-1.5 text-sm rounded-md border border-neutral-300 bg-white"
+              className="w-full px-2.5 py-1.5 text-[15px] rounded-sm border border-neutral-300 bg-white"
             />
             <input
               value={formConfig}
@@ -112,7 +115,7 @@ export function TriggersTab() {
                       ? '~/inbox'
                       : 'value'
               }
-              className="w-full px-2.5 py-1.5 text-sm font-mono rounded-md border border-neutral-300 bg-white"
+              className="w-full px-2.5 py-1.5 text-[15px] font-mono rounded-sm border border-neutral-300 bg-white"
             />
             <div className="flex justify-end gap-2 pt-1">
               <Button size="sm" variant="ghost" onClick={() => setShowForm(false)}>
@@ -126,7 +129,7 @@ export function TriggersTab() {
         )}
 
         {teamTriggers.length === 0 && !showForm && (
-          <div className="text-sm text-neutral-400 text-center py-10">
+          <div className="text-[15px] text-neutral-400 text-center py-10">
             No triggers for this team yet.
           </div>
         )}
@@ -141,21 +144,21 @@ export function TriggersTab() {
             <div
               key={t.id}
               className={clsx(
-                'rounded-xl border bg-white px-3 py-2.5 flex items-start gap-2.5',
+                'rounded-md border bg-white px-3 py-2.5 flex items-start gap-2.5',
                 t.enabled ? 'border-neutral-200' : 'border-neutral-200 opacity-60',
               )}
             >
-              <div className="mt-0.5 w-7 h-7 rounded-md bg-neutral-100 flex items-center justify-center">
+              <div className="mt-0.5 w-7 h-7 rounded-sm bg-neutral-100 flex items-center justify-center">
                 <Icon className="w-3.5 h-3.5 text-neutral-600" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-neutral-900 truncate">{t.label}</span>
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
+                  <span className="text-[15px] font-medium text-neutral-900 truncate">{t.label}</span>
+                  <span className="text-[14px] font-semibold uppercase tracking-wide text-neutral-400">
                     {label}
                   </span>
                 </div>
-                <div className="text-xs text-neutral-500 font-mono truncate mt-0.5">
+                <div className="text-[15px] text-neutral-500 font-mono truncate mt-0.5">
                   {configStr}
                 </div>
               </div>
@@ -180,7 +183,7 @@ export function TriggersTab() {
                   type="button"
                   onClick={() => removeTrigger(t.id)}
                   aria-label="Remove trigger"
-                  className="p-1 rounded-md text-neutral-400 hover:text-red-600 hover:bg-red-50"
+                  className="p-1 rounded-sm text-neutral-400 hover:text-red-600 hover:bg-red-50"
                 >
                   <Trash className="w-3.5 h-3.5" />
                 </button>

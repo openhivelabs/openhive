@@ -331,8 +331,11 @@ export function TasksTab() {
           </div>
 
           {!hasAnyTemplate ? (
-            <div className="flex-1 flex flex-col items-center justify-center gap-2 text-neutral-400 text-[13px]">
-              <div>{t('tasks.empty')}</div>
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
+              <FileText className="w-6 h-6 text-neutral-300" weight="light" />
+              <div className="text-[12.5px] text-neutral-400 leading-snug">
+                {t('tasks.empty')}
+              </div>
               <Button size="sm" variant="outline" onClick={() => setShowNew(true)}>
                 <Plus className="w-3.5 h-3.5" />
                 {t('tasks.new')}
