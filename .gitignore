@@ -25,6 +25,10 @@ build/
 # OpenHive local data
 .openhive/
 
+# Python bytecode (bundled skills)
+__pycache__/
+*.pyc
+
 # Playwright MCP scratch output (snapshots, screenshots)
 .playwright-mcp/
 phase-*.png
