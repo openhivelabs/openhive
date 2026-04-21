@@ -1,0 +1,68 @@
+export interface ColumnInfo {
+  name: string
+  type: string
+  notnull: boolean
+  pk: boolean
+}
+
+export interface TableInfo {
+  name: string
+  columns: ColumnInfo[]
+  row_count: number
+}
+
+export interface MigrationRow {
+  id: number
+  applied_at: number
+  source: string
+  sql: string
+  note: string | null
+}
+
+export interface SchemaResponse {
+  tables: TableInfo[]
+  recent_migrations: MigrationRow[]
+}
+
+export interface QueryResult {
+  columns: string[]
+  rows: Record<string, unknown>[]
+}
+
+export async function fetchSchema(teamId: string): Promise<SchemaResponse> {
+  const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}/schema`)
+  if (!res.ok) throw new Error(`GET schema ${res.status}`)
+  return (await res.json()) as SchemaResponse
+}
+
+export async function fetchTableRows(teamId: string, table: string, limit = 200): Promise<QueryResult> {
+  const res = await fetch(
+    `/api/teams/${encodeURIComponent(teamId)}/table/${encodeURIComponent(table)}?limit=${limit}`,
+  )
+  if (!res.ok) throw new Error(`GET rows ${res.status}`)
+  return (await res.json()) as QueryResult
+}
+
+export async function installTemplate(teamId: string, template: string): Promise<void> {
+  const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}/templates/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ template }),
+  })
+  if (!res.ok) {
+    const t = await res.text()
+    throw new Error(`install failed (${res.status}): ${t}`)
+  }
+}
+
+export async function runExec(teamId: string, sql: string): Promise<void> {
+  const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}/exec`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sql }),
+  })
+  if (!res.ok) {
+    const t = await res.text()
+    throw new Error(`exec failed (${res.status}): ${t}`)
+  }
+}

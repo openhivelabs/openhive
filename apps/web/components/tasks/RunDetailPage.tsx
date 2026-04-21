@@ -1,14 +1,28 @@
 'use client'
 
-import { ArrowLeft, FileText, Warning } from '@phosphor-icons/react'
+import {
+  ArrowLeft,
+  ArrowUp,
+  CaretDown,
+  Coins,
+  DownloadSimple,
+  FileText,
+  Paperclip,
+  Plus,
+  Sparkle,
+  Warning,
+  Wrench,
+  X,
+} from '@phosphor-icons/react'
 import { useParams, useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { AskUserModal } from '@/components/modals/AskUserModal'
 import { useT } from '@/lib/i18n'
 import { postAnswer, type AskUserQuestion } from '@/lib/api/sessions'
 import { useCurrentTeam } from '@/lib/stores/useAppStore'
 import { useTasksStore } from '@/lib/stores/useTasksStore'
-import { formatDuration, runElapsedMs } from './shared'
 
 interface SessionArtifact {
   id: string
@@ -50,64 +64,17 @@ interface SessionSummary {
   artifacts: SessionArtifact[]
   transcript: TranscriptEntry[]
   usage: SessionUsage | null
+  pending_ask: {
+    toolCallId: string
+    questions: unknown[]
+    agentRole?: string
+  } | null
 }
 
 function fmtK(n: number): string {
   if (n < 1000) return String(n)
   if (n < 10_000) return `${(n / 1000).toFixed(1)}k`
   return `${Math.round(n / 1000)}k`
-}
-
-function agentLabel(
-  team: ReturnType<typeof useCurrentTeam>,
-  nodeId: string | undefined,
-): string {
-  if (!nodeId) return 'agent'
-  const a = team?.agents.find((x) => x.id === nodeId)
-  return a?.role ?? a?.label ?? nodeId
-}
-
-function renderTranscriptEntry(
-  e: TranscriptEntry,
-  team: ReturnType<typeof useCurrentTeam>,
-): string {
-  switch (e.kind) {
-    case 'goal':
-      return `목표: ${String(e.text ?? '').slice(0, 240)}`
-    case 'ask_user':
-      return `${e.agent_role ?? 'lead'} → 유저에게 질문`
-    case 'user_answer': {
-      const r = typeof e.result === 'string' ? e.result : JSON.stringify(e.result ?? '')
-      return `유저 응답: ${r.slice(0, 200)}`
-    }
-    case 'tool_call': {
-      const who = agentLabel(team, e.node_id)
-      const tool = e.tool ?? 'tool'
-      if (tool === 'delegate_to') {
-        const assignee = e.args?.assignee as string | undefined
-        return `${who} → ${assignee ?? '?'} 위임`
-      }
-      if (tool === 'run_skill_script') {
-        const skill = e.args?.skill as string | undefined
-        const script = e.args?.script as string | undefined
-        return `${who} → 스킬 실행 ${skill ?? ''}${script ? '/' + String(script) : ''}`
-      }
-      if (tool === 'activate_skill') {
-        return `${who} → 스킬 활성화 (${e.args?.name ?? '?'})`
-      }
-      if (tool === 'read_skill_file') {
-        return `${who} → 파일 읽기 (${e.args?.path ?? '?'})`
-      }
-      return `${who} → ${tool}`
-    }
-    case 'agent_message': {
-      const who = agentLabel(team, e.node_id)
-      const txt = String(e.text ?? '')
-      return `${who}: ${txt}`
-    }
-    default:
-      return e.kind
-  }
 }
 
 function fmtBytes(b: number | null): string {
@@ -117,10 +84,126 @@ function fmtBytes(b: number | null): string {
   return `${(b / (1024 * 1024)).toFixed(1)} MB`
 }
 
+function agentLabel(
+  team: ReturnType<typeof useCurrentTeam>,
+  nodeId: string | undefined,
+  fallback = 'agent',
+): string {
+  if (!nodeId) return fallback
+  const a = team?.agents.find((x) => x.id === nodeId)
+  return a?.role ?? a?.label ?? nodeId
+}
+
+type ChatItem =
+  | { kind: 'user'; id: string; text: string; pending?: boolean }
+  | {
+      kind: 'assistant'
+      id: string
+      author: string
+      text: string
+    }
+  | {
+      kind: 'tool'
+      id: string
+      author: string
+      summary: string
+    }
+  | { kind: 'error'; id: string; text: string }
+
+function summarizeTool(e: TranscriptEntry): string {
+  const tool = e.tool ?? 'tool'
+  if (tool === 'delegate_to') {
+    const assignee = e.args?.assignee as string | undefined
+    return `${assignee ?? '?'} 에게 위임`
+  }
+  if (tool === 'run_skill_script') {
+    const skill = e.args?.skill as string | undefined
+    const script = e.args?.script as string | undefined
+    return `스킬 실행 ${skill ?? ''}${script ? '/' + script : ''}`
+  }
+  if (tool === 'activate_skill') {
+    return `스킬 활성화 (${e.args?.name ?? '?'})`
+  }
+  if (tool === 'read_skill_file') {
+    return `파일 읽기 (${e.args?.path ?? '?'})`
+  }
+  return tool
+}
+
+function buildChat(
+  summary: SessionSummary,
+  team: ReturnType<typeof useCurrentTeam>,
+): ChatItem[] {
+  const out: ChatItem[] = []
+  if (summary.goal) {
+    out.push({ kind: 'user', id: 'goal', text: summary.goal })
+  }
+  summary.transcript.forEach((e, i) => {
+    const id = `t-${i}`
+    switch (e.kind) {
+      case 'goal':
+        // already rendered as the first user bubble
+        break
+      case 'agent_message': {
+        const txt = String(e.text ?? '').trim()
+        if (!txt) break
+        out.push({
+          kind: 'assistant',
+          id,
+          author: agentLabel(team, e.node_id, e.agent_role ?? 'agent'),
+          text: txt,
+        })
+        break
+      }
+      case 'tool_call':
+        out.push({
+          kind: 'tool',
+          id,
+          author: agentLabel(team, e.node_id, e.agent_role ?? 'agent'),
+          summary: summarizeTool(e),
+        })
+        break
+      case 'ask_user':
+        out.push({
+          kind: 'assistant',
+          id,
+          author: e.agent_role ?? 'lead',
+          text: '질문이 있습니다. 오른쪽에서 답변을 남겨주세요.',
+        })
+        break
+      case 'user_answer': {
+        const r =
+          typeof e.result === 'string' ? e.result : JSON.stringify(e.result ?? '')
+        out.push({ kind: 'user', id, text: r })
+        break
+      }
+      case 'user_message': {
+        // Follow-up user message in a continuous chat session.
+        const txt = String(e.text ?? '').trim()
+        if (txt) out.push({ kind: 'user', id, text: txt })
+        break
+      }
+      default:
+        break
+    }
+  })
+  if (summary.output) {
+    // The session's "output" is just the latest assistant message from the
+    // top-level agent — render it as a normal assistant bubble.
+    out.push({
+      kind: 'assistant',
+      id: 'final',
+      author: team?.agents[0]?.role ?? 'lead',
+      text: summary.output,
+    })
+  }
+  if (summary.error) {
+    out.push({ kind: 'error', id: 'error', text: summary.error })
+  }
+  return out
+}
+
 export function RunDetailPage() {
-  // The URL segment is the session UUID — the permanent, canonical id for a
-  // session. Everything on this page is keyed off it; the ephemeral client session id
-  // and backend session_id are internal concerns we don't surface here.
   const params = useParams<{
     companySlug: string
     teamSlug: string
@@ -136,6 +219,11 @@ export function RunDetailPage() {
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [showAsk, setShowAsk] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [pendingUserMessages, setPendingUserMessages] = useState<
+    { id: string; text: string }[]
+  >([])
+  const [sendError, setSendError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) {
@@ -170,29 +258,24 @@ export function RunDetailPage() {
     }
   }, [id])
 
-  // URL doesn't carry the task id any more — resolve the owning task by
-  // finding the session that points at this session's backend session_id. Task row
-  // is only used for the prompt/references header; we can live without it
-  // when a direct-link arrives before tasks hydrate.
   const task =
     (summary?.session_id
       ? tasks.find((x) => x.sessions.some((r) => r.id === summary.session_id))
       : null) ?? null
   const session =
     task?.sessions.find((r) => r.id === summary?.session_id) ?? null
-  const pendingAsk = session?.pendingAsk
+  const pendingAsk = session?.pendingAsk ?? summary?.pending_ask ?? null
 
-  // 답변 대기 세션에 들어오면 바로 답변 UI 를 띄운다. 사용자가 "답변" 버튼을
-  // 한 번 더 누르게 만들면 왜 페이지가 비어 보이는지 혼란스럽다.
   useEffect(() => {
     if (pendingAsk) setShowAsk(true)
   }, [pendingAsk?.toolCallId])
 
   const submitAnswers = async (answers: Record<string, string>) => {
-    if (!pendingAsk || !session || !task) return
+    if (!pendingAsk) return
     try {
       await postAnswer(pendingAsk.toolCallId, { answers })
-      updateRun(task.id, session.id, { pendingAsk: undefined })
+      if (task && session) updateRun(task.id, session.id, { pendingAsk: undefined })
+      setSummary((prev) => (prev ? { ...prev, pending_ask: null } : prev))
     } catch (e) {
       console.error(e)
     } finally {
@@ -201,10 +284,11 @@ export function RunDetailPage() {
   }
 
   const skipAsk = async () => {
-    if (!pendingAsk || !session || !task) return
+    if (!pendingAsk) return
     try {
       await postAnswer(pendingAsk.toolCallId, { skipped: true })
-      updateRun(task.id, session.id, { pendingAsk: undefined })
+      if (task && session) updateRun(task.id, session.id, { pendingAsk: undefined })
+      setSummary((prev) => (prev ? { ...prev, pending_ask: null } : prev))
     } catch (e) {
       console.error(e)
     } finally {
@@ -212,16 +296,64 @@ export function RunDetailPage() {
     }
   }
 
+  const chat = useMemo(() => {
+    if (!summary) return [] as ChatItem[]
+    const base = buildChat(summary, team)
+    // Optimistic append — keeps the user message visible while the server
+    // is still processing / before the transcript catches up.
+    for (const m of pendingUserMessages) {
+      base.push({ kind: 'user', id: m.id, text: m.text, pending: true })
+    }
+    return base
+  }, [summary, team, pendingUserMessages])
+
+  async function sendMessage(raw: string) {
+    const text = raw.trim()
+    if (!text || !id || sending) return
+    const localId = `pending-${Date.now()}`
+    setPendingUserMessages((prev) => [...prev, { id: localId, text }])
+    setSending(true)
+    setSendError(null)
+    try {
+      const res = await fetch(
+        `/api/sessions/${encodeURIComponent(id)}/messages`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text }),
+        },
+      )
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      // Re-fetch summary so the pending message is replaced by the real
+      // transcript entry, and any new agent reply shows up.
+      const refreshed = await fetch(
+        `/api/sessions/${encodeURIComponent(id)}`,
+      )
+      if (refreshed.ok) {
+        const data = (await refreshed.json()) as SessionSummary
+        setSummary(data)
+      }
+      setPendingUserMessages((prev) => prev.filter((m) => m.id !== localId))
+    } catch (e) {
+      setSendError(e instanceof Error ? e.message : 'send failed')
+      // Keep the optimistic bubble so the user can see what they tried to send.
+    } finally {
+      setSending(false)
+    }
+  }
+
+  // Auto-scroll chat to bottom whenever new items arrive
+  const chatEndRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+  }, [chat.length])
+
   const backHref = params
     ? `/${params.companySlug}/${params.teamSlug}/tasks`
     : '/'
 
   if (loading && !summary) {
-    return (
-      <div className="h-full w-full flex items-center justify-center text-neutral-400 text-[14px]">
-        로딩 중…
-      </div>
-    )
+    return <div className="h-full w-full bg-neutral-50 dark:bg-neutral-950" />
   }
 
   if (notFound || !summary) {
@@ -239,220 +371,173 @@ export function RunDetailPage() {
     )
   }
 
-  const failed = summary.status === 'error'
-  const durationMs = summary.finished_at
-    ? summary.finished_at - summary.started_at
-    : session
-    ? runElapsedMs(session, Date.now())
-    : 0
+  const running = summary.status === 'running'
   const title = task?.title ?? summary.goal.split('\n')[0]?.slice(0, 80) ?? 'Session'
-  const prompt = task?.prompt ?? summary.goal
   const references = task?.references ?? []
-  const startedAtIso = new Date(summary.started_at).toISOString()
-  const finishedAtIso = summary.finished_at ? new Date(summary.finished_at).toISOString() : null
 
   return (
-    <div className="h-full w-full overflow-y-auto bg-neutral-50 dark:bg-neutral-950">
-      <div className="max-w-[960px] mx-auto px-6 py-6 space-y-6">
-        {/* Top nav */}
-        <div className="flex items-center justify-between">
+    <div className="h-full w-full flex flex-col bg-neutral-50 dark:bg-neutral-950">
+      {/* Top bar */}
+      <div className="flex items-center justify-between px-4 h-12 shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
           <button
             type="button"
             onClick={() => router.push(backHref)}
-            className="inline-flex items-center gap-1.5 text-[13px] text-neutral-500 hover:text-neutral-900"
+            aria-label={t('tasks.backToList')}
+            title={t('tasks.backToList')}
+            className="inline-flex items-center justify-center w-7 h-7 rounded text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800"
           >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            {t('tasks.backToList') || '태스크 목록'}
+            <ArrowLeft className="w-4 h-4" />
           </button>
-          <div className="text-[11px] font-mono text-neutral-400">{summary.id}</div>
-        </div>
-
-        {/* Header */}
-        <header className="space-y-2">
-          <h1 className="text-[22px] font-semibold text-neutral-900 dark:text-neutral-100 leading-tight">
+          <h1 className="text-[14px] font-semibold text-neutral-900 dark:text-neutral-100 truncate">
             {title}
           </h1>
-          <div className="flex items-center gap-3 text-[13px] text-neutral-500 flex-wrap">
-            <span className="inline-flex items-center gap-1.5">
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  failed ? 'bg-red-500' : 'bg-neutral-400'
-                }`}
-              />
-              {summary.status || (failed ? 'failed' : 'done')}
-            </span>
-            <span className="font-mono">⏱ {formatDuration(durationMs)}</span>
-            <span
-              className="font-mono text-neutral-400"
-              suppressHydrationWarning
-            >
-              {finishedAtIso
-                ? `${startedAtIso} → ${finishedAtIso}`
-                : `started ${startedAtIso}`}
-            </span>
-          </div>
-        </header>
+        </div>
+      </div>
 
-        {/* Failure banner */}
-        {failed && summary.error && (
-          <div className="rounded bg-red-50 border border-red-200 text-red-700 text-[14px] px-3 py-2 flex items-start gap-2">
-            <Warning className="w-4 h-4 shrink-0 mt-0.5" />
-            <div className="whitespace-pre-wrap">{summary.error}</div>
+      {/* Pending ask banner */}
+      {pendingAsk && !showAsk && (
+        <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
+          <div className="text-[13px] text-amber-800">
+            {t('session.waitingForInput')} ({pendingAsk.questions.length})
           </div>
-        )}
+          <button
+            type="button"
+            onClick={() => setShowAsk(true)}
+            className="text-[12px] bg-amber-600 text-white px-2.5 py-1 rounded hover:bg-amber-700"
+          >
+            {t('session.answerCta')}
+          </button>
+        </div>
+      )}
 
-        {/* Prompt */}
-        <section className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900">
-          <div className="px-4 py-2.5 border-b border-neutral-100 dark:border-neutral-800 text-[12px] font-semibold uppercase tracking-wide text-neutral-500">
-            {t('tasks.fieldPrompt')}
-          </div>
-          <div className="px-4 py-3 text-[14px] text-neutral-900 dark:text-neutral-100 whitespace-pre-wrap leading-relaxed">
-            {prompt}
-          </div>
-        </section>
-
-        {/* References */}
-        {references.length > 0 && (
-          <section className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900">
-            <div className="px-4 py-2.5 border-b border-neutral-100 dark:border-neutral-800 text-[12px] font-semibold uppercase tracking-wide text-neutral-500">
-              {t('tasks.fieldReferences')}
-              <span className="ml-1 font-mono text-neutral-400">
-                ({references.length})
-              </span>
-            </div>
-            <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
-              {references.map((ref) => (
-                <li key={ref.id} className="px-4 py-2.5 text-[13px]">
-                  <div className="flex items-center gap-2">
-                    <FileText className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
-                    <span className="flex-1 truncate font-mono">{ref.name}</span>
-                    <span className="text-[11px] text-neutral-400 font-mono">
-                      {fmtBytes(ref.size)}
-                    </span>
-                  </div>
-                  {ref.note && (
-                    <div className="mt-1 ml-5 text-[12.5px] text-neutral-500 italic">
-                      {ref.note}
-                    </div>
-                  )}
-                </li>
+      {/* Split: chat | artifacts */}
+      <div className="flex-1 min-h-0 flex">
+        {/* Chat column — scroll area + composer are regular flex children so
+         *  the scrollbar never sits behind the input. */}
+        <div className="flex-1 min-w-0 flex flex-col">
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-quiet">
+            <div className="max-w-[760px] mx-auto px-6 pt-6 pb-4 space-y-4">
+              {chat.map((item) => (
+                <ChatBubble key={item.id} item={item} />
               ))}
-            </ul>
-          </section>
-        )}
-
-        {/* Token usage */}
-        {summary.usage && summary.usage.n > 0 && (
-          <section className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900">
-            <div className="px-4 py-2.5 border-b border-neutral-100 dark:border-neutral-800 text-[12px] font-semibold uppercase tracking-wide text-neutral-500">
-              {t('tasks.usageHeader') || '사용 토큰'}
-            </div>
-            <div className="px-4 py-3 grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3 text-[13px] font-mono text-neutral-800 dark:text-neutral-200">
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-neutral-400 mb-0.5">input</div>
-                <div>{fmtK(summary.usage.input_tokens)}</div>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-neutral-400 mb-0.5">output</div>
-                <div>{fmtK(summary.usage.output_tokens)}</div>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-neutral-400 mb-0.5">cache read</div>
-                <div>{fmtK(summary.usage.cache_read)}</div>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-neutral-400 mb-0.5">cache write</div>
-                <div>{fmtK(summary.usage.cache_write)}</div>
-              </div>
-              {summary.usage.cost_cents > 0 && (
-                <div className="col-span-2 md:col-span-4 pt-2 border-t border-neutral-100 dark:border-neutral-800 flex justify-between">
-                  <span className="text-[11px] uppercase tracking-wide text-neutral-400">cost</span>
-                  <span>${(summary.usage.cost_cents / 100).toFixed(4)}</span>
+              {running && (
+                <div className="flex items-center gap-2 text-[12px] text-neutral-400 px-1">
+                  <Sparkle className="w-3.5 h-3.5 animate-pulse" />
+                  <span>진행 중…</span>
                 </div>
               )}
+              <div ref={chatEndRef} />
             </div>
-          </section>
-        )}
+          </div>
+          <div className="shrink-0 px-6 pb-4">
+            <div className="max-w-[760px] mx-auto">
+              {sendError && (
+                <div className="mb-2 text-[12px] text-red-600">
+                  메시지 전송 실패: {sendError}
+                </div>
+              )}
+              <Composer sending={sending} onSend={sendMessage} />
+            </div>
+          </div>
+        </div>
 
-        {/* Artifacts */}
-        {summary.artifacts.length > 0 && (
-          <section className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900">
-            <div className="px-4 py-2.5 border-b border-neutral-100 dark:border-neutral-800 text-[12px] font-semibold uppercase tracking-wide text-neutral-500">
-              {t('tasks.artifactsHeader') || '생성된 파일'}
-              <span className="ml-1 font-mono text-neutral-400">
-                ({summary.artifacts.length})
-              </span>
-            </div>
-            <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
-              {summary.artifacts.map((a) => (
-                <li key={a.id}>
-                  <a
-                    href={`/api/artifacts/${encodeURIComponent(a.id)}/download`}
-                    className="flex items-center gap-3 px-4 py-2.5 text-[13px] text-neutral-800 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-800/40"
-                    download
-                  >
-                    <FileText className="w-4 h-4 text-neutral-500 shrink-0" />
-                    <span className="flex-1 truncate">{a.filename}</span>
-                    {a.size != null && (
-                      <span className="text-[11px] font-mono text-neutral-400">
-                        {fmtBytes(a.size)}
-                      </span>
-                    )}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {/* Final output */}
-        {summary.output && (
-          <section className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900">
-            <div className="px-4 py-2.5 border-b border-neutral-100 dark:border-neutral-800 text-[12px] font-semibold uppercase tracking-wide text-neutral-500">
-              {t('tasks.finalOutputHeader') || '최종 결과'}
-            </div>
-            <div className="px-4 py-3 text-[14px] text-neutral-800 dark:text-neutral-200 whitespace-pre-wrap leading-relaxed">
-              {summary.output}
-            </div>
-          </section>
-        )}
-
-        {/* Session trace */}
-        {summary.transcript.length > 0 && (
-          <section className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900">
-            <div className="px-4 py-2.5 border-b border-neutral-100 dark:border-neutral-800 text-[12px] font-semibold uppercase tracking-wide text-neutral-500">
-              {t('tasks.runTraceHeader') || '수행 과정'}
-            </div>
-            <ol className="divide-y divide-neutral-100 dark:divide-neutral-800 text-[12.5px] font-mono text-neutral-700 dark:text-neutral-300">
-              {summary.transcript.map((e, i) => (
-                <li key={i} className="px-4 py-2 flex gap-3">
-                  <span className="text-neutral-400 shrink-0 w-6 text-right">
-                    {i + 1}.
-                  </span>
-                  <span className="flex-1 whitespace-pre-wrap break-words">
-                    {renderTranscriptEntry(e, team)}
-                  </span>
-                </li>
-              ))}
-            </ol>
-          </section>
-        )}
-
-        {/* 답변 대기 배너 — AskUserModal 을 닫았을 때도 재진입 가능하게 */}
-        {pendingAsk && !showAsk && (
-          <section className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 flex items-center justify-between">
-            <div className="text-[13px] text-amber-800">
-              {t('tasks.answer') || '답변이 필요합니다'} ({pendingAsk.questions.length})
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowAsk(true)}
-              className="text-[13px] bg-amber-600 text-white px-3 py-1.5 rounded hover:bg-amber-700"
+        {/* Artifacts column */}
+        <aside className="w-[272px] shrink-0 flex flex-col min-h-0">
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-quiet px-3 py-4 space-y-3">
+            {/* Artifacts */}
+            <SidePanel
+              icon={<FileText className="w-4 h-4" />}
+              title={t('session.artifactsTitle')}
+              count={summary.artifacts.length}
             >
-              {t('tasks.answer') || '답변하기'}
-            </button>
-          </section>
-        )}
+              {summary.artifacts.length === 0 ? (
+                <EmptyNote>{t('session.artifactsEmpty')}</EmptyNote>
+              ) : (
+                <ul className="space-y-0.5">
+                  {summary.artifacts.map((a) => (
+                    <li key={a.id}>
+                      <a
+                        href={`/api/artifacts/${encodeURIComponent(a.id)}/download`}
+                        download
+                        className="group flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800/60"
+                      >
+                        <FileText className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+                        <span className="flex-1 truncate">{a.filename}</span>
+                        <span className="text-[11px] font-mono text-neutral-400 shrink-0">
+                          {fmtBytes(a.size)}
+                        </span>
+                        <DownloadSimple className="w-3.5 h-3.5 text-neutral-400 opacity-0 group-hover:opacity-100 shrink-0" />
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </SidePanel>
+
+            {/* References */}
+            <SidePanel
+              icon={<Paperclip className="w-4 h-4" />}
+              title={t('session.referencesTitle')}
+              count={references.length}
+            >
+              {references.length === 0 ? (
+                <EmptyNote>{t('session.referencesEmpty')}</EmptyNote>
+              ) : (
+                <ul className="space-y-0.5">
+                  {references.map((ref) => (
+                    <li
+                      key={ref.id}
+                      className="px-2 py-1.5 rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-800/60"
+                    >
+                      <div className="flex items-center gap-2 text-[13px] text-neutral-700 dark:text-neutral-300">
+                        <FileText className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+                        <span className="flex-1 truncate">{ref.name}</span>
+                        <span className="text-[11px] text-neutral-400 font-mono shrink-0">
+                          {fmtBytes(ref.size)}
+                        </span>
+                      </div>
+                      {ref.note && (
+                        <div className="mt-0.5 ml-5 text-[11.5px] text-neutral-500 italic leading-snug">
+                          {ref.note}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </SidePanel>
+
+            {/* Usage */}
+            <SidePanel
+              icon={<Coins className="w-4 h-4" />}
+              title={t('session.usageTitle')}
+            >
+              {!summary.usage || summary.usage.n === 0 ? (
+                <EmptyNote>{t('session.usageEmpty')}</EmptyNote>
+              ) : (
+                <div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                    <TokenStat label="in" value={fmtK(summary.usage.input_tokens)} />
+                    <TokenStat label="out" value={fmtK(summary.usage.output_tokens)} />
+                    <TokenStat label="cache read" value={fmtK(summary.usage.cache_read)} />
+                    <TokenStat label="cache write" value={fmtK(summary.usage.cache_write)} />
+                  </div>
+                  {summary.usage.cost_cents > 0 && (
+                    <div className="mt-3 pt-3 border-t border-neutral-200/70 dark:border-neutral-800/70 flex items-baseline justify-between">
+                      <span className="text-[12px] text-neutral-500">
+                        {t('session.costLabel')}
+                      </span>
+                      <span className="text-[13.5px] font-semibold text-neutral-900 dark:text-neutral-100 font-mono">
+                        ${(summary.usage.cost_cents / 100).toFixed(4)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </SidePanel>
+          </div>
+        </aside>
       </div>
 
       <AskUserModal
@@ -462,6 +547,396 @@ export function RunDetailPage() {
         onSubmit={submitAnswers}
         onSkip={skipAsk}
       />
+    </div>
+  )
+}
+
+function SidePanel({
+  icon,
+  title,
+  count,
+  collapsible = true,
+  defaultOpen = true,
+  children,
+}: {
+  icon: ReactNode
+  title: string
+  count?: number
+  collapsible?: boolean
+  defaultOpen?: boolean
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  const expanded = collapsible ? open : true
+  return (
+    <section className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white/60 dark:bg-neutral-900/50 px-3.5 py-3">
+      <header
+        className={`flex items-center gap-2 ${expanded ? 'mb-2.5' : ''} ${
+          collapsible ? 'cursor-pointer select-none' : ''
+        }`}
+        onClick={collapsible ? () => setOpen((v) => !v) : undefined}
+        role={collapsible ? 'button' : undefined}
+        aria-expanded={collapsible ? expanded : undefined}
+        tabIndex={collapsible ? 0 : undefined}
+        onKeyDown={
+          collapsible
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setOpen((v) => !v)
+                }
+              }
+            : undefined
+        }
+      >
+        <span className="text-neutral-500 dark:text-neutral-400">{icon}</span>
+        <span className="text-[13px] font-semibold text-neutral-800 dark:text-neutral-200">
+          {title}
+        </span>
+        {typeof count === 'number' && count > 0 && (
+          <span className="text-[11px] font-mono text-neutral-400 tabular-nums">
+            {count}
+          </span>
+        )}
+        {collapsible && (
+          <CaretDown
+            className={`ml-auto w-3.5 h-3.5 text-neutral-400 transition-transform ${
+              expanded ? '' : '-rotate-90'
+            }`}
+          />
+        )}
+      </header>
+      {expanded && (
+        <div className="max-h-[320px] overflow-y-auto scrollbar-quiet">
+          {children}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function EmptyNote({ children }: { children: ReactNode }) {
+  return (
+    <div className="text-[12.5px] text-neutral-400 leading-relaxed">
+      {children}
+    </div>
+  )
+}
+
+function TokenStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className="text-[11.5px] text-neutral-500 dark:text-neutral-400">
+        {label}
+      </span>
+      <span className="text-[13px] font-mono tabular-nums text-neutral-900 dark:text-neutral-100">
+        {value}
+      </span>
+    </div>
+  )
+}
+
+interface Attachment {
+  id: string
+  file: File
+}
+
+function readFileAsText(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const r = reader.result
+      resolve(typeof r === 'string' ? r : null)
+    }
+    reader.onerror = () => resolve(null)
+    reader.readAsText(file)
+  })
+}
+
+function isLikelyText(file: File): boolean {
+  if (file.type.startsWith('text/')) return true
+  const textishExt = /\.(md|txt|csv|tsv|json|ya?ml|toml|ini|log|xml|html?|css|js|tsx?|jsx?|py|rb|go|rs|java|sh|sql)$/i
+  return textishExt.test(file.name)
+}
+
+function fmtFileSize(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** Isolated composer — holds its own text state so typing doesn't re-render
+ *  the whole chat (markdown rendering on every keystroke was the source of
+ *  the "text appears half a beat late" feel). */
+const Composer = memo(function Composer({
+  sending,
+  onSend,
+}: {
+  sending: boolean
+  onSend: (text: string) => void
+}) {
+  const [text, setText] = useState('')
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const disabled = sending || (!text.trim() && attachments.length === 0)
+
+  const addFiles = (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    const next: Attachment[] = []
+    for (const f of Array.from(files)) {
+      next.push({ id: `${f.name}-${f.size}-${Date.now()}-${Math.random()}`, file: f })
+    }
+    setAttachments((prev) => [...prev, ...next])
+  }
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id))
+  }
+
+  const submit = async () => {
+    const body = text.trim()
+    if (sending) return
+    if (!body && attachments.length === 0) return
+
+    // Inline attachments into the message so the backend POST stays simple —
+    // text files get their content, binaries get a short marker.
+    const parts: string[] = []
+    if (body) parts.push(body)
+    for (const a of attachments) {
+      if (isLikelyText(a.file)) {
+        const content = await readFileAsText(a.file)
+        parts.push(
+          `--- 첨부파일: ${a.file.name} (${fmtFileSize(a.file.size)}) ---\n${content ?? ''}`,
+        )
+      } else {
+        parts.push(
+          `--- 첨부파일: ${a.file.name} (${fmtFileSize(a.file.size)}, 바이너리) ---`,
+        )
+      }
+    }
+    const combined = parts.join('\n\n')
+    if (!combined.trim()) return
+
+    onSend(combined)
+    setText('')
+    setAttachments([])
+  }
+
+  return (
+    <div className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3 pt-2.5 pb-2 focus-within:border-neutral-400 dark:focus-within:border-neutral-600">
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {attachments.map((a) => (
+            <div
+              key={a.id}
+              className="inline-flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-full bg-neutral-100 dark:bg-neutral-800 text-[12px] text-neutral-700 dark:text-neutral-300"
+            >
+              <FileText className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
+              <span className="max-w-[180px] truncate">{a.file.name}</span>
+              <span className="text-[10.5px] font-mono text-neutral-400 shrink-0">
+                {fmtFileSize(a.file.size)}
+              </span>
+              <button
+                type="button"
+                onClick={() => removeAttachment(a.id)}
+                aria-label="첨부 제거"
+                className="shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault()
+            void submit()
+          }
+        }}
+        placeholder="메시지를 입력하세요…"
+        rows={1}
+        className="w-full resize-none bg-transparent text-[15.5px] text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 outline-none max-h-60 py-0.5 leading-relaxed"
+      />
+
+      <div className="flex items-center justify-between pt-1">
+        <div className="flex items-center gap-1">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              addFiles(e.target.files)
+              e.target.value = ''
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="파일 첨부"
+            title="파일 첨부"
+            className="w-8 h-8 rounded-full flex items-center justify-center text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          >
+            <Plus className="w-[18px] h-[18px]" />
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={disabled}
+          className="shrink-0 w-8 h-8 rounded-full bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-800 dark:hover:bg-neutral-200"
+          aria-label="전송"
+        >
+          <ArrowUp className="w-[18px] h-[18px]" />
+        </button>
+      </div>
+    </div>
+  )
+})
+
+function Markdown({ text }: { text: string }) {
+  // Terse chat-friendly prose styling. Headings are dialed down (h1/h2 look
+  // oversized in a bubble), lists keep their markers, code blocks get a
+  // subtle surface, links are underlined on hover.
+  return (
+    <div className="space-y-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: ({ children }) => (
+            <h1 className="text-[19px] font-semibold mt-3 mb-2">{children}</h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className="text-[17.5px] font-semibold mt-3 mb-2">{children}</h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className="text-[16px] font-semibold mt-2.5 mb-1.5">{children}</h3>
+          ),
+          h4: ({ children }) => (
+            <h4 className="text-[15.5px] font-semibold mt-2 mb-1">{children}</h4>
+          ),
+          p: ({ children }) => (
+            <p className="text-[15.5px] leading-relaxed">{children}</p>
+          ),
+          ul: ({ children }) => (
+            <ul className="list-disc pl-5 space-y-1 text-[15.5px]">{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="list-decimal pl-5 space-y-1 text-[15.5px]">{children}</ol>
+          ),
+          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+          strong: ({ children }) => (
+            <strong className="font-semibold">{children}</strong>
+          ),
+          em: ({ children }) => <em className="italic">{children}</em>,
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2 hover:text-blue-600"
+            >
+              {children}
+            </a>
+          ),
+          code: ({ className, children, ...props }) => {
+            const isBlock = (props as { node?: { tagName?: string } }).node?.tagName
+            void isBlock
+            const inline = !className
+            if (inline) {
+              return (
+                <code className="px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 font-mono text-[14px]">
+                  {children}
+                </code>
+              )
+            }
+            return (
+              <code className={`font-mono text-[14px] ${className ?? ''}`}>
+                {children}
+              </code>
+            )
+          },
+          pre: ({ children }) => (
+            <pre className="overflow-x-auto rounded-md bg-neutral-100 dark:bg-neutral-800 p-3.5 text-[14px] font-mono leading-relaxed">
+              {children}
+            </pre>
+          ),
+          blockquote: ({ children }) => (
+            <blockquote className="border-l-2 border-neutral-300 dark:border-neutral-700 pl-3 text-neutral-600 dark:text-neutral-400">
+              {children}
+            </blockquote>
+          ),
+          hr: () => <hr className="border-neutral-200 dark:border-neutral-800 my-3" />,
+          table: ({ children }) => (
+            <div className="overflow-x-auto">
+              <table className="text-[14.5px] border-collapse">{children}</table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className="border border-neutral-200 dark:border-neutral-800 px-2 py-1 text-left font-semibold">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="border border-neutral-200 dark:border-neutral-800 px-2 py-1">
+              {children}
+            </td>
+          ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+function ChatBubble({ item }: { item: ChatItem }) {
+  if (item.kind === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div
+          className={`max-w-[80%] rounded-2xl rounded-br-sm bg-neutral-900 text-neutral-50 dark:bg-neutral-100 dark:text-neutral-900 px-4 py-3 text-[15.5px] whitespace-pre-wrap leading-relaxed ${
+            item.pending ? 'opacity-60' : ''
+          }`}
+        >
+          {item.text}
+        </div>
+      </div>
+    )
+  }
+  if (item.kind === 'assistant') {
+    return (
+      <div className="px-4 py-3 text-[15.5px] text-neutral-900 dark:text-neutral-100 leading-relaxed">
+        <Markdown text={item.text} />
+      </div>
+    )
+  }
+  if (item.kind === 'tool') {
+    return (
+      <div className="px-4">
+        <div className="inline-flex items-center gap-2 rounded-full border border-neutral-200 dark:border-neutral-800 bg-neutral-100/60 dark:bg-neutral-900/60 px-2.5 py-1 text-[12px] text-neutral-500 font-mono">
+          <Wrench className="w-3 h-3" />
+          <span className="text-neutral-700 dark:text-neutral-300">
+            {item.summary}
+          </span>
+        </div>
+      </div>
+    )
+  }
+  // error
+  return (
+    <div className="flex gap-2.5">
+      <div className="w-7 h-7 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+        <Warning className="w-3.5 h-3.5 text-red-600" />
+      </div>
+      <div className="flex-1 min-w-0 rounded-2xl rounded-tl-sm bg-red-50 border border-red-200 text-red-700 px-3.5 py-2.5 text-[13px] whitespace-pre-wrap leading-relaxed">
+        {item.text}
+      </div>
     </div>
   )
 }

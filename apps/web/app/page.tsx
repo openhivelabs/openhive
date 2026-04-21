@@ -1,44 +1,38 @@
 'use client'
 
-import { ReactFlowProvider } from '@xyflow/react'
-import { clsx } from 'clsx'
-import { OrgCanvas } from '@/components/canvas/OrgCanvas'
-import { RightDrawer } from '@/components/drawer/RightDrawer'
-import { Sidebar } from '@/components/shell/Sidebar'
-import { Timeline } from '@/components/shell/Timeline'
-import { TopBar } from '@/components/shell/TopBar'
-import { useAppStore } from '@/lib/stores/useAppStore'
+import { useRouter } from 'next/navigation'
+import { useEffect } from 'react'
+import { hydrateLocaleFromStorage, useAppStore } from '@/lib/stores/useAppStore'
 
 export default function Home() {
-  const { sidebarOpen, drawerOpen } = useAppStore()
+  const router = useRouter()
+  const { companies, currentCompanyId, currentTeamId, hydrate, hydrated } = useAppStore()
+
+  useEffect(() => {
+    hydrateLocaleFromStorage()
+    void hydrate()
+  }, [hydrate])
+
+  useEffect(() => {
+    if (!hydrated) return
+    // Empty workspace → onboarding. First-run users land here, and onboarding
+    // blocks until at least one AI provider is connected.
+    if (companies.length === 0) {
+      router.replace('/onboarding')
+      return
+    }
+    const company =
+      companies.find((c) => c.id === currentCompanyId) ?? companies[0]
+    const team =
+      company?.teams.find((t) => t.id === currentTeamId) ?? company?.teams[0]
+    if (company && team) {
+      router.replace(`/${company.slug}/${team.slug}/dashboard`)
+    }
+  }, [hydrated, currentCompanyId, currentTeamId, companies, router])
 
   return (
-    <div
-      className={clsx(
-        'h-screen grid transition-[grid-template-columns] duration-200',
-        'grid-rows-[52px_1fr_auto]',
-      )}
-      style={{
-        gridTemplateColumns: `${sidebarOpen ? '240px' : '0px'} 1fr ${drawerOpen ? '360px' : '0px'}`,
-      }}
-    >
-      <div className="col-span-3 border-b border-neutral-200 bg-white">
-        <TopBar />
-      </div>
-      <aside className="border-r border-neutral-200 bg-white overflow-hidden">
-        {sidebarOpen && <Sidebar />}
-      </aside>
-      <main className="overflow-hidden relative bg-neutral-50">
-        <ReactFlowProvider>
-          <OrgCanvas />
-        </ReactFlowProvider>
-      </main>
-      <aside className="border-l border-neutral-200 bg-white overflow-hidden">
-        {drawerOpen && <RightDrawer />}
-      </aside>
-      <div className="col-span-3">
-        <Timeline />
-      </div>
+    <div className="h-screen flex items-center justify-center text-[15px] text-neutral-400">
+      Loading…
     </div>
   )
 }

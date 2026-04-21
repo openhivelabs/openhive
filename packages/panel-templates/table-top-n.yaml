@@ -1,0 +1,22 @@
+id: table-top-n
+name: 상위 N 테이블
+description: 특정 수치 기준 상위 N개를 순위 표로 (예 매출 TOP 10 고객, 활동 가장 많은 에이전트).
+icon: "🏆"
+category: analytics
+block:
+  type: table
+  colSpan: 2
+  rowSpan: 2
+  props: {}
+binding_skeleton:
+  source:
+    kind: team_data
+    config:
+      sql: "SELECT name, value FROM customer ORDER BY value DESC LIMIT 10"
+  map:
+    rows: "$.rows[*]"
+    columns: ["name", "value"]
+  refresh_seconds: 120
+ai_prompts:
+  goal: "숫자 기준 상위 N개 (10이 기본). SQL 에 ORDER BY ... DESC LIMIT 사용."
+  requires: []

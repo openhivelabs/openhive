@@ -1,0 +1,7 @@
+skills: [web-fetch]          # enable web-fetch skill once it exists
+mcp: []
+team_data:
+  read: true
+  write: false
+knowledge_exposure: full
+notes: "Researcher. Gathers + cites; never fabricates."

@@ -22,6 +22,8 @@ export type EventKind =
   | 'checkpoint'
   | 'user_question'
   | 'user_answered'
+  | 'user_message'
+  | 'turn_finished'
   | 'todos_changed'
 
 export interface Event {

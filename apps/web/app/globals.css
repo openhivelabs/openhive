@@ -1,6 +1,8 @@
 @import 'tailwindcss';
 @import '@xyflow/react/dist/style.css';
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --bg: #fafafa;
   --surface: #ffffff;
@@ -9,9 +11,22 @@
   --muted: #737373;
 }
 
+.dark {
+  --bg: #0a0a0a;
+  --surface: #171717;
+  --border: #262626;
+  --muted: #a3a3a3;
+  color-scheme: dark;
+}
+
 html,
 body {
   height: 100%;
+}
+
+.dark body {
+  background: var(--bg);
+  color: #f5f5f5;
 }
 
 /* All non-disabled buttons are clickable → show a pointer */
@@ -36,6 +51,14 @@ body {
   background: var(--bg);
 }
 
+/* Suppress ReactFlow's default selection outline on agent nodes. */
+.react-flow__node.selected,
+.react-flow__node:focus,
+.react-flow__node:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 /* Active-edge pulse marker */
 @keyframes edgeFlow {
   0% { offset-distance: 0%; opacity: 0; }
@@ -46,4 +69,35 @@ body {
 
 .edge-pulse {
   animation: edgeFlow 1.8s linear infinite;
+}
+
+/* Overlay-style scrollbar — no visible track/gutter line, faint thumb that
+ *  lights up only on hover/scroll. Use on tall scroll containers where the
+ *  default Firefox/Chromium track would paint a distracting vertical line. */
+.scrollbar-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.scrollbar-quiet:hover {
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+.dark .scrollbar-quiet:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+.scrollbar-quiet::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scrollbar-quiet::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-quiet::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+}
+.scrollbar-quiet:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+}
+.dark .scrollbar-quiet:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
 }

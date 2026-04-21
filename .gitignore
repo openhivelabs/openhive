@@ -9,6 +9,7 @@ out/
 # Build outputs
 dist/
 build/
+*.tsbuildinfo
 
 # Misc
 .DS_Store
@@ -34,3 +35,16 @@ __pycache__/
 phase-*.png
 test-*.png
 screenshot-*.png
+
+# Skill artifacts (outputs from running bundled skills — belong in
+# ~/.openhive/artifacts, not the repo). Keep SKILL.md, scripts, lib,
+# helpers, reference, templates; ignore generated files at the skill root.
+packages/skills/*/*.pdf
+packages/skills/*/*.pdf.spec.json
+packages/skills/*/*.docx
+packages/skills/*/*.pptx
+packages/skills/**/__pycache__/
+packages/skills/**/*.pyc
+
+# Claude Code working state (worktrees, lock files) is per-machine
+.claude/

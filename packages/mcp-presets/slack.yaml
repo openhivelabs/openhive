@@ -1,0 +1,28 @@
+id: slack
+name: Slack
+icon: "💬"
+brand: slack
+icon_url: /brands/slack.webp
+description: Send and read Slack messages, search history, list channels. Great for team automation.
+command: npx
+args: ["-y", "@modelcontextprotocol/server-slack"]
+env_template:
+  SLACK_BOT_TOKEN: "{{bot_token}}"
+  SLACK_TEAM_ID: "{{team_id}}"
+inputs:
+  - key: bot_token
+    label: Slack Bot Token
+    type: secret
+    placeholder: xoxb-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx
+    help_text: |
+      Create a Slack app at https://api.slack.com/apps → "From scratch".
+      Add bot scopes: channels:history, channels:read, chat:write, users:read.
+      Install to workspace → copy the Bot User OAuth Token (starts with xoxb-).
+    required: true
+  - key: team_id
+    label: Slack Team / Workspace ID
+    type: text
+    placeholder: T01234567
+    help_text: |
+      Find at https://app.slack.com/client/<TEAM_ID>/...  (the T-prefixed string in the URL).
+    required: true

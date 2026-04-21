@@ -349,7 +349,7 @@ export function backfillTranscripts(): number {
 
 // ---------- transcript helper ----------
 
-function buildTranscript(
+export function buildTranscript(
   goal: string,
   startedAt: number,
   events: StoredEventRow[],
@@ -365,7 +365,12 @@ function buildTranscript(
       })
     } else if (ev.kind === 'user_answered') {
       lines.push({ kind: 'user_answer', ts: ev.ts, result: ev.data.result })
-    } else if (ev.kind === 'tool_called') {
+    } else if (ev.kind === 'user_message') {
+      // Follow-up user message in an ongoing chat session.
+      lines.push({ kind: 'user_message', ts: ev.ts, text: ev.data.text })
+    } else if (ev.kind === 'tool_called' && ev.depth === 0) {
+      // Only Lead-level tool calls make it into the chat. Sub-agent tool
+      // calls live in events.jsonl for the thinking-process view.
       lines.push({
         kind: 'tool_call',
         ts: ev.ts,
@@ -373,7 +378,10 @@ function buildTranscript(
         tool: ev.tool_name,
         args: ev.data.arguments,
       })
-    } else if (ev.kind === 'node_finished') {
+    } else if (ev.kind === 'node_finished' && ev.depth === 0) {
+      // Only Lead (depth=0) turns surface as assistant messages in the chat.
+      // Sub-agent node_finished events still live in events.jsonl and will be
+      // rendered as a separate "thinking process" view later.
       const output = ev.data.output
       if (typeof output === 'string' && output.trim()) {
         lines.push({

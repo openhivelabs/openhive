@@ -1,0 +1,18 @@
+# Skills this persona prefers to have. Must be on the team's allow list.
+skills: []
+
+# Which MCP servers this persona uses. Intersected with the team allow list.
+mcp: []
+
+# Team-data access defaults. Lead typically only needs aggregate reads.
+team_data:
+  read: true
+  write: false
+
+# How freely can this persona quote its own knowledge files back to the user?
+#   full     — may paste knowledge content verbatim (default)
+#   summary  — must summarise in its own words
+#   none     — may use knowledge to decide, but never surface it directly
+knowledge_exposure: summary
+
+notes: "Lead. Delegates execution; reviews synthesis."

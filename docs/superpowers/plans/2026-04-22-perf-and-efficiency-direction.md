@@ -1,20 +1,13 @@
-# OpenHive — 성능·효율·품질 개선 로드맵
+# OpenHive — 성능·효율 개선 방향성 + 로드맵
 
-생성일: 2026-04-22
-브랜치: `worktree-improve-performance`
-기준 세션: `docs/superpowers/plans/2026-04-21-token-and-reliability-roadmap.md`
-참조: `docs/superpowers/specs/2026-04-19-openhive-mvp-design.md`
+작성일: 2026-04-22
+성격: 방향성 문서 (구체 스펙은 각 항목별로 별도 `specs/` 로 쪼갤 것)
 
-## 배경
+## 한 줄 요약
 
-토큰 로드맵(Phase A~H)이 "정확성·토큰"에 집중한 반면, 이 로드맵은 **체감 속도·UX·품질**까지 커버한다. 유저 최종 목표는 "Claude Code / Codex 와 비교했을 때 뒤쳐지지 않는 에이전트 런타임". 체감 속도 저하의 제1원인은 **툴 루프 직렬화** + **MCP 결과 폭주**.
+**동시에 돌리고, 한 번 한 건 또 안 하고, 모든 프로바이더에서 캐싱한다.**
 
-## 원칙
-
-- 한 항목씩 착수한다. 여러 개 섞지 않는다.
-- 항목별 스펙(`docs/superpowers/specs/2026-04-22-<slug>.md`)을 먼저 써서 사용자 승인 후 구현.
-- 측정 가능한 항목은 **같은 프롬프트 3회 평균**으로 before/after 기록. 양식은 아래 벤치 표.
-- i18n · 다이어그램 · destructive 작업 규칙은 루트 CLAUDE.md 준수.
+---
 
 ## 진행 상태
 
@@ -30,52 +23,126 @@
 | 8 | 1 | MCP listTools 글로벌 캐시 | ✅ 2026-04-22 (86626e8 + a4489c9) |
 | 9 | 2 | 전 프로바이더 캐싱 인터페이스 (`CachingStrategy`) | ✅ 2026-04-22 (171848b) |
 | 10 | 2 | Python 스킬 cold start 최적화 (워커 풀 폐기) | ✅ 2026-04-22 (907feca) |
-| 11 | 3 | 히스토리 슬라이딩 윈도우 (20턴 초과 요약) | ✅ 2026-04-22 (ed1c13e) — 기본 비활성 |
+| 11 | 3 | 히스토리 슬라이딩 윈도우 | ✅ 2026-04-22 (ed1c13e) — 기본 비활성 |
 | 12 | 3 | Bundled Persona Gallery (`packages/agents/`) | ✅ 2026-04-22 (833b846) |
 | 13 | 3 | 웹페치 native tool | ✅ 2026-04-22 (8ac0d49) |
 | 14 | 3 | 웹검색 MCP preset | ✅ 2026-04-22 (443d3c7) |
 
-## Phase 1 — 속도·품질 즉시 개선
+---
 
-대부분 몇 시간~며칠 단위. ROI 큰 순서.
+## 현황 (2026-04-22 기준 코드 전수조사)
 
-**#1 MCP 결과 truncation** — `mcp/manager.ts:174` body 생성 직후 길이 cap. 초과분은 버리고 끝에 힌트 블록("[truncated: N chars 잘림. 더 좁은 쿼리로 재시도하거나 {paginate,limit} 파라미터를 사용하세요.]"). 엔진 쪽에는 원본을 `run_events` 에 보존(이미 `tool_result` 이벤트로 감). 체감 1차 원인: Notion/웹 MCP 가 수십 KB 반환하며 Writer input 폭발.
+### 속도
+- **멀티 delegation이 직렬로 돈다.** Lead 가 한 턴에 `delegate_to(A)` + `delegate_to(B)` 를 뱉어도 B 는 A 의 서브트리가 전부 끝나야 시작 (`apps/web/lib/server/engine/session.ts:648-768`, for-await 루프).
+- 진짜 병렬은 `delegate_parallel` 하나뿐인데, **같은 한 명의 부하에게 여러 작업을 쪼갤 때만** 동작 (`session.ts:1089-1119`, `Promise.all`).
+- → 이게 "왜 이리 느리지"의 **제1원인**.
 
-**#2 병렬 tool dispatch** — `session.ts:554` 툴 루프가 `for (tc of toolCallsForHistory)` 로 직렬. 같은 assistant turn 의 독립 tool_use 들은 `Promise.all` 가능. 단, `delegate_to` · `ask_user` 처럼 상태 변경 하는 툴은 직렬 유지(필요 시 옵트인). 이벤트 순서는 툴 시작 순으로 인터리빙 보존(각 sub-generator 결과를 Promise 로 받되 yield 순서는 시작순).
+### 토큰
+- **Claude 만 프롬프트 캐싱 제대로 구현**됨 (`providers/claude.ts:197, 259, 275` — tools / system / 마지막 메시지 3-breakpoint ephemeral cache). 입력 토큰 40-60% 절약 중.
+- **Codex, Copilot 은 캐싱 코드 0.** 매 턴 풀 재전송.
+- **MCP 툴 결과 길이 무제한** (`mcp/manager.ts:174`). 500KB JSON도 그대로 히스토리에 박혀 매 턴 재전송됨.
+- 히스토리 슬라이딩 윈도우 없음. 장기 대화에서 선형 증가.
 
-**#3 Lead 내장 Task List** — 현재 엔진엔 없음. Claude Code 의 TodoWrite 유사 기능. native tool 3종: `set_todos(items[])` / `complete_todo(id)` / `add_todo(text)`. 상태는 세션 파일 (`~/.openhive/sessions/<id>/todos.json`). Lead 시스템 프롬프트 상단에 현재 todos 상시 주입. UI 는 사이드 패널 또는 타임라인 탭에 표기.
+### 성능 낭비 (자잘)
+- **MCP `listTools()` 노드마다 재호출** — 팀·세션 캐시 없고 per-proc 캐시만 있음.
+- **Skill subprocess 매번 cold start** — Python 워커 풀 없음. 매번 200-1000ms 인터프리터 부팅.
+- **이벤트마다 `fs.appendFileSync` 동기 쓰기** (`sessions.ts:200`) — 턴당 30-50 이벤트 × 5-50ms = 스톨 150-500ms.
+- **시스템 프롬프트·툴 배열 노드마다 재계산** — 같은 팀·에이전트면 동일 결과인데 메모화 없음.
 
-**#4 세션 자동 제목 생성** — 지금은 session id 만 노출. 첫 user turn 이후 싼 모델(copilot/gpt-5-mini 또는 haiku)로 비동기 `summarizeToTitle(userMessage)` 호출. `sessions.ts` 의 세션 메타에 `title` 필드. UI 사이드바 노출.
-
-**#5 스킬 Auto-Hint** — 유저가 "PDF 만들어줘" 라고만 해도 Lead 가 pdf 스킬 존재를 모를 수 있음. `packages/skills/<name>/SKILL.md` frontmatter 에 `triggers: [regex|keyword]`. 엔진은 user turn 감지 시 rule 매칭 후 시스템 프롬프트 상단에 "힌트: 이 작업은 `pdf` 스킬이 있습니다" 주입.
-
-**#6 Verification 내장** — 스킬 스크립트 끝에 self-check 단계(파일 크기>임계, JSON valid, etc.) 표준 프로토콜. 실패 시 구조화된 에러 JSON. SKILL 작성 가이드에 추가.
-
-**#7 이벤트 쓰기 async 배치** — `sessions.ts:200` 부근 `appendFileSync` 매 이벤트마다 호출 중. 100ms/10건 기준 flush 하는 큐로 전환. SSE fan-out 은 즉시, 디스크는 배치.
-
-**#8 MCP listTools 글로벌 캐시** — `(team.id, allowed_mcp_servers)` 키로 메모. 현재 매 run 시작마다 listTools 호출.
-
-## Phase 2 — 구조적 이득
-
-**#9 전 프로바이더 캐싱 인터페이스** — 현재 Anthropic 만 `cache_control: ephemeral`. `providers/types.ts` 에 `CachingStrategy` 추상화. Claude/Copilot/Codex 각자 구현. Codex 는 Responses API `previous_response_id` 체이닝 또는 summary prefix.
-
-**#10 Python 스킬 cold start 최적화** — 구 "워커 풀" 은 폐기(CLAUDE.md "No long-lived Python process" 규칙 위반 + 복잡도 과다). 대신 subprocess 유지하면서 `-X frozen_modules=on`, lazy import, `.pyc` precompile 로 cold start 자체 축소. 자세히: `specs/2026-04-22-python-cold-start.md`.
-
-## Phase 3 — 개념 정리·기능 확장
-
-**#11 히스토리 슬라이딩 윈도우** — 20턴 초과 시 초기 N턴을 요약 블록(assistant role, 고정 label)으로 치환. `buildMessages` 전에 적용.
-
-**#12 Persona Gallery** — `packages/agents/` 에 code-reviewer / plan-reviewer / researcher / writer / editor AGENT.md + tools.yaml 템플릿 번들.
-
-**#13 웹페치 native tool** — Node `fetch` + `@mozilla/readability`. MCP 필요 없이 엔진 내장.
-
-**#14 웹검색 MCP preset** — Tavily 또는 Brave preset 을 `packages/mcp-presets/` 에 한 줄 추가.
+### 개념 과설계
+- **Agent-format skill 이 툴 3개**로 쪼개짐 (`activate_skill` + `read_skill_file` + `run_skill_script`). 확정 액션(PPTX/PDF 생성 등)엔 과함 → LLM 턴 3배 소모.
 
 ---
 
-## 벤치마크 표 양식
+## 방향성
 
-항목별 스펙 문서 하단에 다음 양식으로 before/after 기록. 원본 포맷은 `2026-04-21-token-and-reliability-roadmap.md:8-18` 과 동일.
+### 🎯 Direction 1 — 속도: 병렬 delegation
+팀원 여러 명한테 동시에 일 시키는 게 기본 케이스인데 현재 직렬. 한 턴에 온 tool_use 중 독립적인 것들(특히 복수 `delegate_to`)을 **`Promise.all` 로 묶어 실행**. 이벤트 순서는 toolCallId 로 묶어서 보존.
+
+- **기대 효과**: 3-way delegation 시 체감 2-3배.
+- **주의**: 이벤트 스트림 인터리빙 처리, 동일 에이전트 중복 delegation 가드 유지.
+
+### 🎯 Direction 2 — 토큰: **전 프로바이더 캐싱 통일**
+Claude 만 잘 돼있는 상태는 편향. 목표는 "어떤 프로바이더를 쓰든 캐싱 이득을 본다".
+
+- **Claude**: 이미 3-breakpoint ephemeral 캐시 — 유지.
+- **Copilot (GitHub Copilot API)**: Anthropic 호환 엔드포인트면 `cache_control` 그대로 적용 가능한지 확인. 불가 시 OpenAI auto-cache 를 최대한 활용하도록 **prefix 안정성 보장** (시스템/툴 순서 고정, nondeterministic 필드 제거).
+- **Codex (ChatGPT Responses API)**: 네이티브 prompt caching 미지원. 대안:
+  1. 같은 세션이면 `previous_response_id` 체이닝으로 서버 측 대화 상태 재사용 (이미 `codex.ts` 에 session cache 는 있으나 LLM 호출 체이닝엔 미활용 — 확인 필요).
+  2. 요약 prefix + 최근 N턴만 전송.
+- **공통 계층**: `providers/` 밑에 "캐싱 힌트" 인터페이스를 추상화 (`CachingStrategy`). 각 프로바이더가 자기 방식으로 구현. 엔진은 프로바이더에 무관하게 "이 블록은 재사용 가능" 이라고 선언만.
+
+### 🎯 Direction 3 — 토큰: 컨텍스트 다이어트
+- **MCP 결과 truncation**: 2-4KB 초과 시 자르고 `…[truncated, full in event log]` 힌트 (`mcp/manager.ts:174`). 당장 해결해야 할 무계 상태.
+- **히스토리 슬라이딩 윈도우**: 20턴 초과 시 초기 턴을 요약 블록으로 치환.
+- **시스템 프롬프트 내 파일 트리 상한**: 60개 초과 시 `…and N more`.
+
+### 🎯 Direction 4 — 성능: 재사용 전면화
+세 지점에서 "한 번 한 일 다시 안 하기":
+
+1. **Skill 워커 풀**: Python/Node 데몬 1-2개 상주, stdin RPC 로 재사용. cold start 제거.
+2. **MCP `listTools` 글로벌 캐시**: `(team.id, allowed_mcp_servers)` 키로 메모화. 서버 재시작 시에만 invalidate.
+3. **이벤트 쓰기 async 배치**: `appendFileSync` → 큐 + 100ms or 10건마다 flush. SSE fan-out 은 즉시 유지, 디스크 쓰기만 배치.
+
+### 🎯 Direction 5 — 개념 정리
+- **Agent-format skill 축소**: 확정 액션(PPTX/DOCX/PDF/엑셀 등)은 **typed skill 1툴**로 통일. Agent-format 은 "탐색·가이드가 필요한 복합 워크플로우"에만.
+- **웹검색 = MCP preset** (Tavily/Brave/SerpAPI 교체 가능하게).
+- **웹페치 = Native tool** (고정 동작, subprocess 불필요).
+- **(v2 후보) Knowledge 레이어**: 세션 간 기억. 팀별 RAG 테이블 or 에이전트별 `notes.md` append-only. MVP 밖이지만 "회사원 비유"를 살리려면 언젠가 필요.
+
+### 🎯 Direction 6 — 품질: 스킬 Auto-Hint
+현재 시스템 프롬프트가 스킬 이름+한줄 설명만 나열 (`session.ts:1443-1456`). LLM이 무시하는 경우 빈번. 해결:
+
+- `skill-rules.json` 같은 매칭 규칙 파일 지원: `keywords`, `intentPatterns`, `pathPatterns`.
+- 엔진이 **사용자 프롬프트 / 에이전트 persona 영역** 기반으로 결정론적 매칭 → 해당 스킬을 "우선 검토하라" 힌트로 시스템 프롬프트 상단에 주입.
+- **적용 레벨**: 번들 스킬은 `SKILL.md` frontmatter 에 `triggers:` 섹션 추가, 사용자 스킬은 optional.
+
+### 🎯 Direction 7 — 품질: Lead 내장 Task List
+- 새 native tool: `set_todos(items)`, `complete_todo(id)`, `add_todo(content)`.
+- Lead 시스템 프롬프트에 규칙: "복수 단계 작업이면 먼저 set_todos 로 선언, delegation 끝날 때마다 업데이트".
+- **핵심**: todos 는 히스토리가 압축돼도 **시스템 프롬프트 상단에 상시 유지** → 컨텍스트 긴 세션에서도 "잃어버림" 불가.
+- UI 에도 노출 → 사용자가 진행 상황 실시간 확인.
+
+### 🎯 Direction 8 — 품질: 스킬·툴 자체 Verification
+**각 스킬·툴이 실행 완료 직후 자체 sanity check 를 포함**:
+
+- PDF/PPTX/DOCX 스킬 → 리턴 시 파일 크기·페이지 수·열림 여부 체크, 리턴 payload 에 `verification: { ok, details }` 포함.
+- 웹페치 → 200 응답·non-empty 확인.
+- 실패 시 단순 실패가 아니라 **"무엇이 왜 실패" 를 LLM 에게 피드백** → 자율 재시도.
+- SKILL.md 작성 가이드에 "verification 단계 포함" 을 **의무 체크리스트** 로.
+
+### 🎯 Direction 9 — 경량: Bundled Persona Gallery 확충
+OpenHive persona 시스템에 번들 템플릿 추가:
+
+- `code-reviewer`, `plan-reviewer`, `researcher`, `writer`, `editor` 등 기본 persona.
+- 사용자가 첫 팀 짤 때 "템플릿에서 끌어오기" UX.
+- `packages/agents/` 확장 작업. 코드 변경 거의 없음, 주로 콘텐츠.
+
+### 🎯 Direction 10 — UX: 세션 자동 제목 생성
+- 세션 스토어에 `title: string | null` 필드 추가.
+- **첫 유저 메시지 or N회 교환 후** 비동기로 **싼 모델**(예: Haiku / Mini) 에 한 번 호출 → 5-8단어 제목 생성.
+- 생성은 **async fire-and-forget**, 세션 진행 블록 금지. 실패 시 fallback 으로 draft 이름.
+- 사용자 수동 rename 가능.
+- Sidebar 의 세션 리스트가 이 title 을 1차로 표시.
+
+---
+
+## 개념 재검토: Agent-format vs Typed Skill
+
+- **Progressive disclosure** (가벼운 main SKILL + on-demand 리소스 로드) 가 토큰 40-60% 절약시킴.
+- Agent-format 의 `activate → read → run` 3툴 분리는 **탐색·가이드 복잡 워크플로우** 에선 올바름.
+- 단 **확정 액션** (PDF/PPTX/DOCX 생성 등) 엔 typed 1툴이 여전히 더 나음 (3턴 낭비).
+
+**수정 규칙**:
+- Typed skill: 파라미터가 명확하고 1-shot 실행 가능한 확정 액션.
+- Agent-format skill: 다단계·조건 분기·여러 파일 참조가 필요한 복합 워크플로우.
+- SKILL 작성 가이드 문서에 판정 플로우차트 명기.
+
+---
+
+## 측정 방법
+
+각 phase 전후로 **동일 프롬프트 3회 평균**을 기록 (LLM 비결정성 때문에 단발 비교 금지). 포맷은 `2026-04-21-token-and-reliability-roadmap.md` 표 참고:
 
 | 지표 | Before (session_id / 3회 평균) | After (session_id / 3회 평균) | 델타 |
 |---|---:|---:|---:|
@@ -87,7 +154,7 @@
 | 성공 (0/1) | | | |
 | 최대 델리게이션 깊이 | | | |
 
-> 같은 프롬프트 3회, Lead 경로 다양성은 "delegation 트리" 로 별도 메모. 단일 run 비교 금지.
+---
 
 ## 공통 워크플로우 (각 항목)
 

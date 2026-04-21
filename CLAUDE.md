@@ -18,8 +18,11 @@ when a skill needs it (PPTX/DOCX/PDF generation, web-fetch, etc.).
 Runtime:
 - Node.js 24.15.0 LTS
 - Next.js 16.2.4 (App Router, Node runtime for `/api/**` route handlers)
-- `better-sqlite3` — runtime state, checkpoints, messages, events, usage,
-  OAuth tokens. Same schema lives at `~/.openhive/openhive.db`.
+- `better-sqlite3` — **per-team domain data only**
+  (`companies/{c}/teams/{t}/data.db`). System state is FS-only — there is
+  no system SQLite. A boot-time `legacy-db-migration` reads any pre-
+  existing `~/.openhive/openhive.db`, migrates its rows to FS stores, and
+  renames the file to `openhive.db.legacy-{ts}`.
 - `fernet` npm package — Fernet-compatible token encryption. Key file at
   `~/.openhive/encryption.key`.
 - `@modelcontextprotocol/sdk` — MCP stdio client (long-lived subprocesses).
@@ -73,7 +76,13 @@ Next.js server (Node, single process, :4483)
  ├─ lib/server/agents/               persona loader + runtime composition
  ├─ lib/server/panels/               mapper / sources / cache / refresher
  ├─ lib/server/scheduler/            cron loop (booted via instrumentation.ts)
- └─ lib/server/runs-store.ts         typed events → run_events SQLite + SSE fan-out
+ ├─ lib/server/sessions.ts           FS-only session store (meta.json +
+ │                                   append-only events.jsonl + transcript
+ │                                   + usage + artifacts per session)
+ └─ lib/server/engine/session-registry.ts
+                                     in-memory session handles on globalThis
+                                     + SSE fan-out; replays events.jsonl on
+                                     reconnect
         │ subprocess
 Skill runtime (Python/Node scripts, spawned per call with OPENHIVE_OUTPUT_DIR)
 ```
@@ -82,37 +91,48 @@ Key architectural rules:
 - UI canvas state serializes to YAML. At run time the engine reads the YAML to decide which `delegate_to` targets each node exposes — the org chart is a **constraint on delegation**, not a precompiled computation graph.
 - Per-node provider + model — each agent picks its own LLM. No shared ChatModel abstraction; each provider module handles its own wire protocol and quirks directly via `fetch`.
 - Multi-agent coordination = LLM tool calling. Delegation is a tool the Lead's LLM invokes at run time. Do not reintroduce a static-graph orchestrator.
-- Engine checkpoints are plain JSON-serialized `RunState` rows in SQLite — resume = load latest + re-enter event loop. Never bypass the checkpointer.
-- Every agent step and tool call emits a typed Event. The Run-mode canvas and Timeline tab both read from the same event stream; no side channels.
+- Engine state is FS-only: `meta.json` + append-only `events.jsonl` per session under `~/.openhive/sessions/{id}/`. There is no DB checkpointer. Resume / reconnect = replay `events.jsonl`. On boot, sessions still marked `running` are swept to `interrupted` by `markOrphanedSessionsInterrupted` and transcripts are backfilled by `backfillTranscripts`.
+- Every agent step and tool call emits a typed Event to `events.jsonl`. The Run-mode canvas and Timeline tab both read from the same event stream; no side channels.
 - Frontend never talks to LLMs directly. All model calls go through the backend so OAuth tokens, keys, and usage tracking stay server-side.
 
 ## Persistence Layout
 
 ```
 ~/.openhive/
-├── openhive.db            SQLite — SYSTEM DB: runtime only (execution_runs,
-│                          checkpoints, messages, usage_logs, oauth_tokens).
-│                          AI never touches this directly.
-├── companies/             Per-company data (mostly YAML, plus per-team SQLite).
+├── sessions/              Per-session engine state (FS-only, no DB).
+│   └── {session-id}/
+│       ├── meta.json              session metadata (id, task_id, team_id,
+│       │                          goal, status, started_at, finished_at,
+│       │                          artifact_count)
+│       ├── events.jsonl           append-only engine event stream
+│       ├── transcript.jsonl       human-readable transcript (written on
+│       │                          finalize; also backfilled on boot)
+│       ├── artifacts.json         artifact metadata index
+│       ├── artifacts/             generated files (PPTX, DOCX, PDF, etc.)
+│       └── usage.json             token usage for this session
+├── companies/             Per-company design data + per-team storage.
 │   └── {company-slug}/
-│       ├── company.yaml                   org chart
-│       ├── teams/
-│       │   └── {team-slug}/
-│       │       ├── team.yaml              team config (schemas, permissions)
-│       │       ├── data.db                TEAM DATA DB — SQLite + JSON1 hybrid
-│       │       │                          (domain tables, populated/edited by AI)
-│       │       └── dashboard.yaml         UI layout (v2 template system)
-│       └── presets/
-├── skills/                Claude skill format (SKILL.md + scripts/ + reference/)
-├── artifacts/             Generated files — {company}/{team}/{run_id}/*
+│       ├── company.yaml                    org chart
+│       └── teams/
+│           ├── {team-slug}.yaml            team config (sibling YAML file)
+│           └── {team-slug}/                team storage directory
+│               ├── data.db                 TEAM DATA DB — SQLite + JSON1
+│               │                           hybrid (domain tables, edited
+│               │                           by AI)
+│               ├── chat.jsonl              team chat messages (append-only)
+│               └── dashboard.yaml          UI layout (v2 template system)
+├── skills/                User-installed skills (SKILL.md + scripts/ + reference/)
+├── oauth.enc.json         Fernet-encrypted OAuth token map (all providers,
+│                          single file; shard later if it grows)
+├── encryption.key         Fernet key for oauth.enc.json
 └── config.yaml            Global config (provider keys, server settings)
 ```
 
 Rules:
-- **System DB vs team data DB are strictly separated.** `openhive.db` = engine runtime; `data.db` = user domain data. Do not store domain data in the system DB, and do not put engine state in team DBs. Backup/portability works one team at a time (`cp -r teams/{team}`).
+- **System state is FS, user domain data is per-team SQLite.** `~/.openhive/sessions/` = engine runtime (JSON + JSONL files). `companies/{c}/teams/{t}/data.db` = user domain data. Do not put domain data in session files, and do not put engine state in team DBs. Backup/portability works per-team (`cp -r teams/{team}`) or per-session (`cp -r sessions/{id}`).
 - Design data (companies/, skills/) is static, Git-versionable, user-shareable.
-- Runtime data (openhive.db, artifacts/) is local, private, not committed.
-- Artifacts live on disk; SQLite stores only path + metadata references.
+- Runtime data (sessions/, companies/{}/teams/{}/data.db, oauth.enc.json) is local, private, not committed.
+- Artifacts live on disk inside the owning session; `artifacts.json` stores only path + metadata references.
 - **Team data DB uses SQLite + JSON1 hybrid**: template-defined typed columns + a `data` JSON column for AI-driven extension fields. Runtime DDL (`CREATE TABLE`, `ALTER TABLE`) is allowed for AI, gated by team permission. Every schema change is logged in a `schema_migrations` table so it can be traced/rolled back.
 
 ## Repository Layout
@@ -128,8 +148,13 @@ openhive/
 │       │   ├── server/           backend modules (engine, providers,
 │       │   │                     mcp, panels, skills, scheduler, auth…)
 │       │   └── api/              frontend API clients
-│       └── instrumentation.ts    runs once at server boot — starts
-│                                 scheduler + cleans orphan runs
+│       └── instrumentation.ts    runs once at server boot — runs legacy
+│                                 DB → FS migration (if openhive.db still
+│                                 present), sweeps orphaned running
+│                                 sessions to `interrupted`, backfills
+│                                 transcripts from events.jsonl, prunes
+│                                 legacy artifacts root, migrates task
+│                                 YAMLs (runs→sessions), starts scheduler
 ├── packages/
 │   ├── agents/                   bundled personas (AGENT.md + tools.yaml)
 │   ├── skills/                   Claude-format skills (SKILL.md + scripts/)

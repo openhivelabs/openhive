@@ -1,0 +1,21 @@
+id: hubspot
+name: HubSpot
+icon: "🧲"
+brand: hubspot
+icon_url: /brands/hubspot.webp
+description: Read and write CRM records — contacts, deals, companies, pipelines, tickets. SMB sales workflow staple.
+command: npx
+args: ["-y", "@hubspot/mcp-server"]
+env_template:
+  PRIVATE_APP_ACCESS_TOKEN: "{{access_token}}"
+inputs:
+  - key: access_token
+    label: Private App Access Token
+    type: secret
+    placeholder: pat-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    help_text: |
+      In HubSpot: Settings → Integrations → Private Apps → Create.
+      Grant scopes: crm.objects.contacts.read/write, crm.objects.deals.read/write,
+      crm.objects.companies.read/write (plus any others you need).
+      Copy the access token after creating.
+    required: true

@@ -11,7 +11,7 @@
  */
 
 import * as sessionsStore from '../sessions'
-import { runTeam } from './session'
+import { closeUserInbox, runTeam } from './session'
 import { generateTitle } from '../sessions/title'
 import type { Event } from '../events/schema'
 import type { TeamSpec } from './team'
@@ -95,6 +95,9 @@ export async function stop(sessionId: string): Promise<boolean> {
   const h = getHandle(sessionId)
   if (!h || h.finished) return false
   h.abort.abort()
+  // The chat loop may be parked on the user-message inbox — wake it so the
+  // generator observes the abort and exits.
+  closeUserInbox(sessionId)
   return true
 }
 

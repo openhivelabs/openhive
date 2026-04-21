@@ -1,0 +1,22 @@
+<!-- A <p:graphicFrame> that references a chart part via rId. Place inside <p:spTree>.
+     The rId must be defined in the slide's rels file pointing to a chart part.
+-->
+<p:graphicFrame xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+                xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:nvGraphicFramePr>
+    <p:cNvPr id="{SHAPE_ID}" name="Chart {N}"/>
+    <p:cNvGraphicFramePr/>
+    <p:nvPr/>
+  </p:nvGraphicFramePr>
+  <p:xfrm>
+    <a:off x="{X_EMU}" y="{Y_EMU}"/>
+    <a:ext cx="{W_EMU}" cy="{H_EMU}"/>
+  </p:xfrm>
+  <a:graphic>
+    <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+      <c:chart r:id="{CHART_RID}"/>
+    </a:graphicData>
+  </a:graphic>
+</p:graphicFrame>

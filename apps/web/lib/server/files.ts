@@ -68,6 +68,9 @@ export function listFiles(teamId: string, rel: string): ListResult {
     return { path: '', entries: [] }
   }
   const target = rel ? safeResolve(root, rel) : root
+  if (!fs.existsSync(target)) {
+    throw new FilesError(404, 'path not found')
+  }
   if (!fs.statSync(target).isDirectory()) {
     throw new FilesError(400, 'not a directory')
   }

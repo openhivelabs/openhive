@@ -3,8 +3,11 @@
 import { CircleNotch, X } from '@phosphor-icons/react'
 import { useEffect, useState } from 'react'
 import { type ModelInfo, listModels } from '@/lib/api/models'
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
+import { useT } from '@/lib/i18n'
 import { mockProviders } from '@/lib/mock/companies'
 import { useCanvasStore } from '@/lib/stores/useCanvasStore'
+import { useCurrentTeam } from '@/lib/stores/useAppStore'
 import type { Agent } from '@/lib/types'
 import { Button } from '../ui/Button'
 
@@ -13,12 +16,19 @@ interface NodeEditorProps {
   onClose: () => void
 }
 
+const HARD_MAX_PARALLEL = 100
+
 // Simple in-memory cache so switching providers in the dropdown feels instant on retry.
 const modelCache: Record<string, ModelInfo[]> = {}
 
 export function NodeEditor({ agent, onClose }: NodeEditorProps) {
+  const t = useT()
   const updateAgent = useCanvasStore((s) => s.updateAgent)
   const removeAgent = useCanvasStore((s) => s.removeAgent)
+  const team = useCurrentTeam()
+  // Lead = agent with no incoming edges. Parallel setting is meaningless on Lead.
+  const incomingIds = new Set(team?.edges.map((e) => e.target) ?? [])
+  const isLead = agent ? !incomingIds.has(agent.id) : false
 
   const [draft, setDraft] = useState<Agent | null>(agent)
   const [models, setModels] = useState<ModelInfo[]>([])
@@ -28,6 +38,8 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
   useEffect(() => {
     setDraft(agent)
   }, [agent])
+
+  useEscapeClose(agent, onClose)
 
   useEffect(() => {
     if (!draft) return
@@ -73,12 +85,16 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
 
   const save = () => {
     const provider = mockProviders.find((p) => p.id === draft.providerId)
+    const clampedParallel = isLead
+      ? 1
+      : Math.max(1, Math.min(HARD_MAX_PARALLEL, Number(draft.maxParallel ?? 1) || 1))
     updateAgent(agent.id, {
       role: draft.role,
       providerId: draft.providerId,
       label: provider?.label ?? draft.label,
       model: draft.model,
       systemPrompt: draft.systemPrompt,
+      maxParallel: clampedParallel,
     })
     onClose()
   }
@@ -93,7 +109,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
       onKeyDown={(e) => e.key === 'Escape' && onClose()}
     >
       <div
-        className="w-[480px] max-w-[92vw] rounded-2xl bg-white shadow-xl border border-neutral-200"
+        className="w-[480px] max-w-[92vw] rounded-md bg-white shadow-xl border border-neutral-200"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       >
@@ -103,7 +119,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="p-1 rounded-md hover:bg-neutral-100"
+            className="p-1 rounded-sm hover:bg-neutral-100"
           >
             <X className="w-4 h-4 text-neutral-500" />
           </button>
@@ -115,7 +131,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
               value={draft.role}
               onChange={(e) => setDraft({ ...draft, role: e.target.value })}
               className="input"
-              placeholder="e.g. CEO, Researcher, Writer"
+              placeholder="e.g. Lead, Researcher, Writer"
             />
           </Field>
 
@@ -164,7 +180,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
                 </select>
               )}
               {modelsError && (
-                <div className="mt-1 text-[11px] text-amber-700">
+                <div className="mt-1 text-[14px] text-amber-700">
                   Couldn't load models ({modelsError}). Type a model id manually.
                 </div>
               )}
@@ -176,22 +192,52 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
               value={draft.systemPrompt}
               onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })}
               rows={5}
-              className="input font-mono text-xs"
+              className="input font-mono text-[15px]"
             />
+          </Field>
+
+          <Field label={t('nodeEditor.maxParallel')}>
+            {isLead ? (
+              <div className="text-[14px] text-neutral-500 py-1">
+                {t('nodeEditor.maxParallelLead')}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={HARD_MAX_PARALLEL}
+                  value={draft.maxParallel ?? 1}
+                  onChange={(e) =>
+                    setDraft({ ...draft, maxParallel: Number(e.target.value) || 1 })
+                  }
+                  className="input w-24 font-mono"
+                />
+                <span className="text-[14px] text-neutral-500 leading-snug">
+                  {t('nodeEditor.maxParallelHint', { max: HARD_MAX_PARALLEL })}
+                </span>
+              </div>
+            )}
           </Field>
         </div>
 
-        <div className="flex items-center justify-between px-5 py-3 border-t border-neutral-200 bg-neutral-50 rounded-b-2xl">
-          <Button
-            variant="ghost"
-            onClick={() => {
-              removeAgent(agent.id)
-              onClose()
-            }}
-            className="!text-red-600 hover:!bg-red-50"
-          >
-            Delete
-          </Button>
+        <div className="flex items-center justify-between px-5 py-3 border-t border-neutral-200 bg-neutral-50 rounded-b-md">
+          {agent.role === 'Lead' ? (
+            <span className="text-[14px] text-neutral-400">
+              Lead는 팀당 하나로 고정 — 삭제할 수 없습니다
+            </span>
+          ) : (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                removeAgent(agent.id)
+                onClose()
+              }}
+              className="!text-red-600 hover:!bg-red-50"
+            >
+              Delete
+            </Button>
+          )}
           <div className="flex gap-2">
             <Button variant="ghost" onClick={onClose}>
               Cancel
@@ -207,7 +253,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
             width: 100%;
             padding: 0.5rem 0.75rem;
             font-size: 0.875rem;
-            border-radius: 0.5rem;
+            border-radius: 0.25rem;
             border: 1px solid #d4d4d4;
             background: white;
             outline: none;
@@ -225,7 +271,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="block text-xs font-medium text-neutral-500 mb-1">{label}</span>
+      <span className="block text-[15px] font-medium text-neutral-500 mb-1">{label}</span>
       {children}
     </label>
   )

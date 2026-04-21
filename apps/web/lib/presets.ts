@@ -28,7 +28,7 @@ function buildReportTeam(): Team {
     agents: [
       {
         id: ceo,
-        role: 'CEO',
+        role: 'Lead',
         label: 'Copilot',
         providerId: 'copilot',
         model: 'gpt-5-mini',
@@ -77,8 +77,7 @@ function buildReportTeam(): Team {
 }
 
 function buildRndTeam(): Team {
-  const ceo = makeId('a')
-  const cto = makeId('a')
+  const lead = makeId('a')
   const eng1 = makeId('a')
   const eng2 = makeId('a')
   const scientist = makeId('a')
@@ -88,24 +87,14 @@ function buildRndTeam(): Team {
     name: 'R&D Team',
     agents: [
       {
-        id: ceo,
-        role: 'CEO',
+        id: lead,
+        role: 'Lead',
         label: 'Copilot',
         providerId: 'copilot',
         model: 'gpt-5-mini',
-        systemPrompt: 'You direct the research organization.',
+        systemPrompt: 'You lead the R&D team. Delegate experiments and implementation.',
         skills: [],
         position: { x: 400, y: 40 },
-      },
-      {
-        id: cto,
-        role: 'CTO',
-        label: 'Copilot',
-        providerId: 'copilot',
-        model: 'gpt-5-mini',
-        systemPrompt: 'You lead the technical direction.',
-        skills: [],
-        position: { x: 400, y: 220 },
       },
       {
         id: scientist,
@@ -115,7 +104,7 @@ function buildRndTeam(): Team {
         model: 'gpt-5-mini',
         systemPrompt: 'You design experiments and analyze results.',
         skills: ['python-runner'],
-        position: { x: 150, y: 420 },
+        position: { x: 150, y: 240 },
       },
       {
         id: eng1,
@@ -125,7 +114,7 @@ function buildRndTeam(): Team {
         model: 'gpt-5-mini',
         systemPrompt: 'You implement prototypes.',
         skills: ['python-runner'],
-        position: { x: 400, y: 420 },
+        position: { x: 400, y: 240 },
       },
       {
         id: eng2,
@@ -135,14 +124,13 @@ function buildRndTeam(): Team {
         model: 'gpt-5-mini',
         systemPrompt: 'You implement prototypes.',
         skills: ['python-runner'],
-        position: { x: 650, y: 420 },
+        position: { x: 650, y: 240 },
       },
     ],
     edges: [
-      { id: makeId('e'), source: ceo, target: cto },
-      { id: makeId('e'), source: cto, target: scientist },
-      { id: makeId('e'), source: cto, target: eng1 },
-      { id: makeId('e'), source: cto, target: eng2 },
+      { id: makeId('e'), source: lead, target: scientist },
+      { id: makeId('e'), source: lead, target: eng1 },
+      { id: makeId('e'), source: lead, target: eng2 },
     ],
   }
 }
@@ -159,7 +147,7 @@ function buildCodeReviewTeam(): Team {
     agents: [
       {
         id: lead,
-        role: 'CEO',
+        role: 'Lead',
         label: 'Copilot',
         providerId: 'copilot',
         model: 'gpt-5-mini',
