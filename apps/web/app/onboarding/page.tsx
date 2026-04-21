@@ -613,9 +613,6 @@ function StepTemplate({
         >
           <div className="text-[14px] font-medium text-neutral-800">
             {t('onboarding.template.gallery.title')}
-            <span className="ml-2 text-[11px] text-neutral-400">
-              {t('onboarding.template.opens')}
-            </span>
           </div>
           <div className="text-[12.5px] text-neutral-500 mt-0.5">
             {t('onboarding.template.gallery.desc')}
@@ -629,9 +626,6 @@ function StepTemplate({
         >
           <div className="text-[14px] font-medium text-neutral-800">
             {t('onboarding.template.frame.title')}
-            <span className="ml-2 text-[11px] text-neutral-400">
-              {t('onboarding.template.opens')}
-            </span>
           </div>
           <div className="text-[12.5px] text-neutral-500 mt-0.5">
             {t('onboarding.template.frame.desc')}
@@ -671,6 +665,24 @@ function FrameGalleryModal({
   const t = useT()
   const [entries, setEntries] = useState<GalleryEntry[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+
+  const filtered = useMemo(() => {
+    if (!entries) return null
+    const q = query.trim().toLowerCase()
+    if (!q) return entries
+    return entries.filter((e) => {
+      const haystack = [
+        e.name,
+        e.description ?? '',
+        e.id,
+        ...(e.requires?.skills ?? []),
+      ]
+        .join(' ')
+        .toLowerCase()
+      return haystack.includes(q)
+    })
+  }, [entries, query])
 
   useEffect(() => {
     let cancelled = false
@@ -704,8 +716,22 @@ function FrameGalleryModal({
         </div>
       )}
       {entries && entries.length > 0 && (
-        <div className="space-y-2 max-h-[60vh] overflow-y-auto">
-          {entries.map((e) => (
+        <>
+          <input
+            type="text"
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('onboarding.template.gallery.search')}
+            className="w-full px-3 py-2 rounded border border-neutral-300 text-[14px] focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400 sticky top-0"
+          />
+          {filtered && filtered.length === 0 ? (
+            <div className="text-[13px] text-neutral-500 py-6 text-center">
+              {t('onboarding.template.gallery.noMatch')}
+            </div>
+          ) : (
+        <div className="space-y-2">
+          {(filtered ?? entries).map((e) => (
             <button
               key={e.id}
               type="button"
@@ -730,6 +756,8 @@ function FrameGalleryModal({
             </button>
           ))}
         </div>
+          )}
+        </>
       )}
     </ModalShell>
   )
@@ -864,7 +892,7 @@ function ModalShell({
       onKeyDown={(e) => e.key === 'Escape' && onClose()}
     >
       <div
-        className="w-[560px] max-w-[94vw] rounded-md bg-white shadow-xl border border-neutral-200"
+        className="w-[960px] h-[720px] rounded-md bg-white shadow-xl border border-neutral-200 flex flex-col"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       >
@@ -879,7 +907,7 @@ function ModalShell({
             ✕
           </button>
         </div>
-        <div className="p-5 space-y-3">{children}</div>
+        <div className="p-5 space-y-3 flex-1 overflow-y-auto">{children}</div>
       </div>
     </div>
   )
@@ -904,7 +932,7 @@ function buildCompanySpec(
   const agents: Agent[] = [
     {
       id: leadId,
-      role: 'lead',
+      role: 'Lead',
       label: 'Lead',
       providerId,
       model: defaultModel,
