@@ -23,16 +23,16 @@
 | 1 | 1 | MCP 결과 truncation (cap + 힌트) | ✅ 2026-04-22 (ea73987) |
 | 2 | 1 | 병렬 tool dispatch (독립 tool_use 동시 실행) | ✅ 2026-04-22 (55f3cdd) |
 | 3 | 1 | Lead 내장 Task List (native tool 3종) | ✅ 2026-04-22 (27050e4) |
-| 4 | 1 | 세션 자동 제목 생성 | ⬜ |
-| 5 | 1 | 스킬 Auto-Hint (skill-rules.json + triggers) | ⬜ |
-| 6 | 1 | 스킬·툴 Verification 내장 | ⬜ |
+| 4 | 1 | 세션 자동 제목 생성 | ✅ 2026-04-22 (7f7f6e4) |
+| 5 | 1 | 스킬 Auto-Hint (skill-rules.json + triggers) | ✅ 2026-04-22 (794b5fe) |
+| 6 | 1 | 스킬·툴 Verification 내장 | ✅ 2026-04-22 (86626e8 + a4489c9) |
 | 7 | 1 | 이벤트 쓰기 async 배치 (appendFileSync → queue) | ✅ 2026-04-22 (b769929) |
-| 8 | 1 | MCP listTools 글로벌 캐시 | ⬜ |
-| 9 | 2 | 전 프로바이더 캐싱 인터페이스 (`CachingStrategy`) | ⬜ |
-| 10 | 2 | Python 스킬 cold start 최적화 (워커 풀 폐기) | ⬜ |
-| 11 | 3 | 히스토리 슬라이딩 윈도우 (20턴 초과 요약) | ⬜ |
+| 8 | 1 | MCP listTools 글로벌 캐시 | ✅ 2026-04-22 (86626e8 + a4489c9) |
+| 9 | 2 | 전 프로바이더 캐싱 인터페이스 (`CachingStrategy`) | ✅ 2026-04-22 (171848b) |
+| 10 | 2 | Python 스킬 cold start 최적화 (워커 풀 폐기) | ✅ 2026-04-22 (907feca) |
+| 11 | 3 | 히스토리 슬라이딩 윈도우 (20턴 초과 요약) | ✅ 2026-04-22 (ed1c13e) — 기본 비활성 |
 | 12 | 3 | Bundled Persona Gallery (`packages/agents/`) | ✅ 2026-04-22 (833b846) |
-| 13 | 3 | 웹페치 native tool | ⬜ |
+| 13 | 3 | 웹페치 native tool | ✅ 2026-04-22 (8ac0d49) |
 | 14 | 3 | 웹검색 MCP preset | ✅ 2026-04-22 (443d3c7) |
 
 ## Phase 1 — 속도·품질 즉시 개선
