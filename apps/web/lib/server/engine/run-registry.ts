@@ -12,6 +12,7 @@
  */
 
 import * as runsStore from '../runs-store'
+import * as sessionsStore from '../sessions'
 import { runTeam } from './run'
 import type { Event } from '../events/schema'
 import type { TeamSpec } from './team'
@@ -131,6 +132,7 @@ async function driveRun(
       if (handle.abort.signal.aborted) {
         if (capturedRunId && dbStarted) {
           runsStore.finishRun(capturedRunId, { error: 'cancelled' })
+          sessionsStore.finalizeSession(capturedRunId, { error: 'cancelled' })
         }
         return
       }
@@ -144,6 +146,7 @@ async function driveRun(
 
       if (event.kind === 'run_started' && !dbStarted) {
         runsStore.startRun(event.run_id, team.id, goal)
+        sessionsStore.createSession(event.run_id, team.id, goal)
         dbStarted = true
       }
 
@@ -164,23 +167,23 @@ async function driveRun(
       for (const q of handle.listeners) q.push(event)
 
       if (event.kind === 'run_finished') {
-        runsStore.finishRun(event.run_id, {
-          output:
-            typeof event.data.output === 'string'
-              ? (event.data.output as string)
-              : null,
-        })
+        const output =
+          typeof event.data.output === 'string'
+            ? (event.data.output as string)
+            : null
+        runsStore.finishRun(event.run_id, { output })
+        sessionsStore.finalizeSession(event.run_id, { output })
       } else if (event.kind === 'run_error') {
-        runsStore.finishRun(event.run_id, {
-          error: String(event.data.error ?? 'error'),
-        })
+        const err = String(event.data.error ?? 'error')
+        runsStore.finishRun(event.run_id, { error: err })
+        sessionsStore.finalizeSession(event.run_id, { error: err })
       }
     }
   } catch (exc) {
     if (capturedRunId && dbStarted) {
-      runsStore.finishRun(capturedRunId, {
-        error: exc instanceof Error ? exc.message : String(exc),
-      })
+      const err = exc instanceof Error ? exc.message : String(exc)
+      runsStore.finishRun(capturedRunId, { error: err })
+      sessionsStore.finalizeSession(capturedRunId, { error: err })
     }
     if (!capturedRunId) {
       readyErr(exc)

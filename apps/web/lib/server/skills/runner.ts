@@ -230,9 +230,16 @@ export async function runSkill(
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     outputDir,
   })
+  const files = collectNewFiles(outputDir, before)
+  // Leave no trace when the subprocess produced nothing — keeps the
+  // sessions/{uuid}/ layout clean ("artifacts/ only exists when files
+  // were actually generated").
+  if (files.length === 0 && before.size === 0) {
+    try { fs.rmdirSync(outputDir) } catch { /* dir might have stray non-file entries */ }
+  }
   return {
     ...result,
-    files: collectNewFiles(outputDir, before),
+    files,
     ok: !result.timedOut && result.exitCode === 0,
   }
 }
@@ -284,9 +291,16 @@ export async function runSkillScript(
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     outputDir,
   })
+  const files = collectNewFiles(outputDir, before)
+  // Leave no trace when the subprocess produced nothing — keeps the
+  // sessions/{uuid}/ layout clean ("artifacts/ only exists when files
+  // were actually generated").
+  if (files.length === 0 && before.size === 0) {
+    try { fs.rmdirSync(outputDir) } catch { /* dir might have stray non-file entries */ }
+  }
   return {
     ...result,
-    files: collectNewFiles(outputDir, before),
+    files,
     ok: !result.timedOut && result.exitCode === 0,
   }
 }

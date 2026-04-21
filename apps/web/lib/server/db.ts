@@ -152,6 +152,15 @@ function initConnection(file: string): BetterSqliteDatabase {
   if (!usageColSet.has('history_chars')) {
     conn.exec('ALTER TABLE usage_logs ADD COLUMN history_chars INTEGER DEFAULT 0')
   }
+  // Sessions: every run gets a stable UUID used as the filesystem session
+  // directory name under ~/.openhive/sessions/{uuid}/.
+  const runCols = conn
+    .prepare('PRAGMA table_info(runs)')
+    .all() as { name: string }[]
+  if (!runCols.some((c) => c.name === 'session_uuid')) {
+    conn.exec('ALTER TABLE runs ADD COLUMN session_uuid TEXT')
+    conn.exec('CREATE INDEX IF NOT EXISTS idx_runs_session_uuid ON runs(session_uuid)')
+  }
   return conn
 }
 

@@ -24,6 +24,7 @@ import type { AgentSpec, TeamSpec } from './team'
 import { entryAgent, subordinates as teamSubordinates } from './team'
 import { makeEvent, type Event } from '../events/schema'
 import * as artifactsStore from '../artifacts'
+import * as sessionsStore from '../sessions'
 import * as teamDataStore from '../team-data'
 import { recordUsage } from '../usage'
 import {
@@ -1484,7 +1485,7 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
   const names = [...byName.keys()].sort()
   const companySlug = ctx.teamSlugs ? ctx.teamSlugs[0] : null
   const teamSlug = ctx.teamSlugs ? ctx.teamSlugs[1] : null
-  const outputDir = artifactsStore.artifactDirFor(companySlug, teamSlug, ctx.runId)
+  const outputDir = sessionsStore.artifactDirForRun(ctx.runId)
 
   return {
     name: 'run_skill_script',
@@ -1564,7 +1565,7 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
 function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
   const companySlug = ctx.teamSlugs ? ctx.teamSlugs[0] : null
   const teamSlug = ctx.teamSlugs ? ctx.teamSlugs[1] : null
-  const outputDir = artifactsStore.artifactDirFor(companySlug, teamSlug, ctx.runId)
+  const outputDir = sessionsStore.artifactDirForRun(ctx.runId)
 
   return {
     name: skill.name,

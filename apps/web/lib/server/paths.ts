@@ -54,6 +54,10 @@ export function artifactsRoot(): string {
   return path.join(dataDir(), 'artifacts')
 }
 
+export function sessionsRoot(): string {
+  return path.join(dataDir(), 'sessions')
+}
+
 export function skillsRoot(): string {
   return path.join(dataDir(), 'skills')
 }
