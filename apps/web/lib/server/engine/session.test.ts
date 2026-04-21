@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { splitToolRuns, SERIAL_TOOL_NAMES } from './session'
+import {
+  renderTodosSection,
+  SERIAL_TOOL_NAMES,
+  splitToolRuns,
+  type TodoItem,
+} from './session'
 
 const tc = (name: string) => ({ function: { name } })
 
@@ -61,5 +66,37 @@ describe('splitToolRuns', () => {
     ]) {
       expect(SERIAL_TOOL_NAMES.has(name)).toBe(false)
     }
+  })
+})
+
+describe('renderTodosSection', () => {
+  const todo = (id: string, text: string, done = false): TodoItem => ({
+    id,
+    text,
+    done,
+  })
+
+  it('returns empty string when no todos', () => {
+    expect(renderTodosSection([])).toBe('')
+  })
+
+  it('renders pending/done counts in the header', () => {
+    const out = renderTodosSection([
+      todo('a', 'one'),
+      todo('b', 'two', true),
+      todo('c', 'three'),
+    ])
+    expect(out).toContain('2 pending, 1 done')
+  })
+
+  it('uses checkbox marks and shows the id', () => {
+    const out = renderTodosSection([
+      todo('todo_aa', 'first'),
+      todo('todo_bb', 'second', true),
+    ])
+    expect(out).toContain('1. [ ] first')
+    expect(out).toContain('2. [x] second')
+    expect(out).toContain('id: todo_aa')
+    expect(out).toContain('id: todo_bb')
   })
 })

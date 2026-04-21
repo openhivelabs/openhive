@@ -82,6 +82,11 @@ export function splitToolRuns<T extends { function: { name: string } }>(
 }
 
 // session_id → counters kept on globalThis so HMR doesn't drop in-flight runs.
+export interface TodoItem {
+  id: string
+  text: string
+  done: boolean
+}
 interface RunState {
   askUser: Map<string, number>
   teamSlugs: Map<string, [string, string]>
@@ -92,6 +97,8 @@ interface RunState {
   readSkillFileTotal: Map<string, number>
   // sessionId → set of `{skill}:{path}` already read. Phase C3 dedupe.
   readSkillFileSeen: Map<string, Set<string>>
+  // sessionId → ordered todo list maintained by the Lead via native tools.
+  todos: Map<string, TodoItem[]>
 }
 
 // Phase C1: Cap per-(parent→child) delegations within a run. A parent re-
@@ -117,6 +124,7 @@ function state(): RunState {
       delegations: new Map(),
       readSkillFileTotal: new Map(),
       readSkillFileSeen: new Map(),
+      todos: new Map(),
     }
   }
   // HMR-safe: if an older incarnation initialised the global without a newer
@@ -125,6 +133,7 @@ function state(): RunState {
   if (!s.delegations) s.delegations = new Map()
   if (!s.readSkillFileTotal) s.readSkillFileTotal = new Map()
   if (!s.readSkillFileSeen) s.readSkillFileSeen = new Map()
+  if (!s.todos) s.todos = new Map()
   return s
 }
 
@@ -299,6 +308,7 @@ export async function* runTeam(
     }
     state().readSkillFileTotal.delete(sessionId)
     state().readSkillFileSeen.delete(sessionId)
+    state().todos.delete(sessionId)
     errors.clearSessionFailures(sessionId)
     sem.release()
   }
@@ -366,7 +376,10 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
       tools.push(delegateParallelTool(team, node))
     }
   }
-  if (depth === 0) tools.push(askUserTool())
+  if (depth === 0) {
+    tools.push(askUserTool())
+    tools.push(...todoTools(sessionId))
+  }
   if (teamSlugs) {
     tools.push(...teamDataTools(teamSlugs, true))
   }
@@ -423,11 +436,15 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   const teamSection = describeTeamForAgent(team, node.id)
   const hasSubs = subs.length > 0
   const relaySection = buildRelaySection(depth, hasSubs)
-  const systemPrompt = composeSystemPrompt(
-    personaBody,
-    agentSkills,
-    teamSection + (relaySection ? '\n' + relaySection : ''),
-  )
+  const staticTeamBlock = teamSection + (relaySection ? '\n' + relaySection : '')
+  const buildSystemPrompt = (): string => {
+    const todos = depth === 0 ? state().todos.get(sessionId) ?? [] : []
+    const todosBlock = renderTodosSection(todos)
+    const teamBlock = todosBlock
+      ? todosBlock + '\n' + staticTeamBlock
+      : staticTeamBlock
+    return composeSystemPrompt(personaBody, agentSkills, teamBlock)
+  }
   tools.push(...makePersonaTools(persona))
 
   const history: ChatMessage[] = []
@@ -443,7 +460,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
       sessionId,
       team,
       node,
-      systemPrompt,
+      systemPrompt: buildSystemPrompt(),
       history,
       tools,
       depth,
@@ -676,6 +693,14 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
         { content, is_error: isError },
         { depth, node_id: node.id, tool_call_id: tc.id, tool_name: tc.function.name },
       )
+      if (!isError && TODO_TOOL_NAMES.has(tc.function.name)) {
+        yield makeEvent(
+          'todos_changed',
+          sessionId,
+          { todos: state().todos.get(sessionId) ?? [] },
+          { depth, node_id: node.id, tool_call_id: tc.id, tool_name: tc.function.name },
+        )
+      }
       return { content, isError }
     }
 
@@ -1669,6 +1694,113 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
     hint: 'Running skill script…',
   }
 }
+
+// -------- Lead task-list native tools --------
+
+/** Render the current todos block for the system prompt. Empty list → ''.
+ *  The LLM reads this on every turn so it can stay oriented on progress. */
+export function renderTodosSection(todos: TodoItem[]): string {
+  if (todos.length === 0) return ''
+  const pending = todos.filter((t) => !t.done).length
+  const done = todos.length - pending
+  const header = `# Current todos (${pending} pending, ${done} done)\n\n`
+  const lines = todos.map((t, i) => {
+    const mark = t.done ? 'x' : ' '
+    return `  ${i + 1}. [${mark}] ${t.text}  (id: ${t.id})`
+  })
+  return header + lines.join('\n') + '\n'
+}
+
+function todoTools(sessionId: string): Tool[] {
+  const getTodos = (): TodoItem[] => state().todos.get(sessionId) ?? []
+  const saveTodos = (items: TodoItem[]) => {
+    state().todos.set(sessionId, items)
+  }
+  return [
+    {
+      name: 'set_todos',
+      description:
+        'Replace the entire todo list for this session. Use at the start of a ' +
+        'complex task to lay out the plan, or to re-plan after scope changes. ' +
+        'Each item becomes a pending todo with a fresh id.',
+      parameters: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Ordered list of short todo descriptions (imperative voice).',
+          },
+        },
+        required: ['items'],
+      },
+      handler: async (args) => {
+        const raw = Array.isArray((args as { items?: unknown }).items)
+          ? ((args as { items: unknown[] }).items)
+          : []
+        const items: TodoItem[] = raw
+          .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+          .map((text) => ({ id: newId('todo'), text: text.trim(), done: false }))
+        saveTodos(items)
+        return JSON.stringify({ ok: true, todos: items })
+      },
+      hint: 'Planning todos…',
+    },
+    {
+      name: 'add_todo',
+      description:
+        'Append one todo to the list. Use when a new subtask emerges mid-work ' +
+        'that you want to track explicitly.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'Short description.' },
+        },
+        required: ['text'],
+      },
+      handler: async (args) => {
+        const text = typeof (args as { text?: unknown }).text === 'string'
+          ? ((args as { text: string }).text).trim()
+          : ''
+        if (!text) return JSON.stringify({ ok: false, error: 'empty text' })
+        const item: TodoItem = { id: newId('todo'), text, done: false }
+        saveTodos([...getTodos(), item])
+        return JSON.stringify({ ok: true, todo: item })
+      },
+      hint: 'Adding todo…',
+    },
+    {
+      name: 'complete_todo',
+      description:
+        'Mark the todo with the given id as done. Use exactly the id shown in ' +
+        'the Current todos block — not the 1-based index.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The todo id to complete.' },
+        },
+        required: ['id'],
+      },
+      handler: async (args) => {
+        const id = typeof (args as { id?: unknown }).id === 'string'
+          ? (args as { id: string }).id
+          : ''
+        const list = getTodos()
+        const idx = list.findIndex((t) => t.id === id)
+        if (idx < 0) {
+          return JSON.stringify({ ok: false, error: `no todo with id ${id}` })
+        }
+        const updated = list.map((t, i) => (i === idx ? { ...t, done: true } : t))
+        saveTodos(updated)
+        return JSON.stringify({ ok: true, todo: updated[idx] })
+      },
+      hint: 'Completing todo…',
+    },
+  ]
+}
+
+const TODO_TOOL_NAMES = new Set(['set_todos', 'add_todo', 'complete_todo'])
 
 // -------- typed skill tool --------
 
