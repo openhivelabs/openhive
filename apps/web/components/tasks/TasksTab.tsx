@@ -69,7 +69,7 @@ function stateFromSession(s: Session): SessionState {
 function describeCron(cron: string): string {
   const parts = cron.trim().split(/\s+/)
   if (parts.length !== 5) return cron
-  const [min, hour, dom, _mon, dow] = parts
+  const [min, hour, dom, _mon, dow] = parts as [string, string, string, string, string]
   const timeStr =
     /^\d+$/.test(min) && /^\d+$/.test(hour)
       ? `${hour.padStart(2, '0')}:${min.padStart(2, '0')}`

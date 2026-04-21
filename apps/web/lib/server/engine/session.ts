@@ -222,6 +222,9 @@ export function activeRunCapacity(): { inUse: number; total: number } {
 // -------- MCP bridge --------
 
 import * as mcpManagerImpl from '../mcp/manager'
+import type { getTools as getMcpTools } from '../mcp/manager'
+
+type ToolInfo = Awaited<ReturnType<typeof getMcpTools>>[number]
 
 /** Thin indirection so tests / alternate deployments can swap in a different
  *  MCP backend without rewiring the engine. Default = real stdio manager. */
@@ -367,7 +370,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     persona,
   )
   for (const serverName of effectiveMcp) {
-    let mcpTools: Record<string, unknown>[]
+    let mcpTools: ToolInfo[]
     try {
       mcpTools = await mcpManager().getTools(serverName)
     } catch (exc) {
@@ -382,7 +385,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
       )
       continue
     }
-    for (const t of mcpTools) tools.push(mcpTool(serverName, t))
+    for (const t of mcpTools) tools.push(mcpTool(serverName, t as unknown as Record<string, unknown>))
   }
 
   // Progressive disclosure: system prompt only holds skill NAMES + one-line
