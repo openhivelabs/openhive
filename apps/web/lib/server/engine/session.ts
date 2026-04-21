@@ -45,6 +45,7 @@ import {
   runSkillScript,
 } from '../skills/runner'
 import { toolsToOpenAI, type Tool } from '../tools/base'
+import { webFetchTool } from '../tools/webfetch'
 import type { ChatMessage } from '../providers/types'
 
 // Guard defaults + hard ceilings.
@@ -385,6 +386,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   if (teamSlugs) {
     tools.push(...teamDataTools(teamSlugs, true))
   }
+  tools.push(webFetchTool())
 
   // Skills: typed get a structured tool; agent-format go through activate/read/run.
   const allowed = new Set(team.allowed_skills ?? [])
