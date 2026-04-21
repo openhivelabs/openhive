@@ -21,7 +21,7 @@
 | # | Phase | 항목 | 상태 |
 |---|---|---|---|
 | 1 | 1 | MCP 결과 truncation (cap + 힌트) | ✅ 2026-04-22 (ea73987) |
-| 2 | 1 | 병렬 tool dispatch (독립 tool_use 동시 실행) | ⬜ |
+| 2 | 1 | 병렬 tool dispatch (독립 tool_use 동시 실행) | ✅ 2026-04-22 (55f3cdd) |
 | 3 | 1 | Lead 내장 Task List (native tool 3종) | ⬜ |
 | 4 | 1 | 세션 자동 제목 생성 | ⬜ |
 | 5 | 1 | 스킬 Auto-Hint (skill-rules.json + triggers) | ⬜ |
