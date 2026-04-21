@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { NextResponse } from 'next/server'
-import { getDb } from '@/lib/server/db'
+import { listForSession as listArtifactsForSession } from '@/lib/server/artifacts'
 import { getSession, sessionDir } from '@/lib/server/sessions'
 import { usageForSession } from '@/lib/server/usage'
 
@@ -31,15 +31,14 @@ export async function GET(
     }
     return out
   }
-  // Return DB-backed artifacts with ids (downloadable), not raw fs entries —
-  // the session page needs the artifact id for /api/artifacts/{id}/download.
-  const artifacts = getDb()
-    .prepare(
-      `SELECT id, filename, size, mime
-         FROM artifacts WHERE session_id = ?
-         ORDER BY created_at ASC`,
-    )
-    .all(sessionId) as { id: string; filename: string; size: number | null; mime: string | null }[]
+  // Artifact ids come from the session's artifacts.json index — the session
+  // page needs them for /api/artifacts/{id}/download.
+  const artifacts = listArtifactsForSession(sessionId).map((a) => ({
+    id: a.id,
+    filename: a.filename,
+    size: a.size,
+    mime: a.mime,
+  }))
   const usage = usageForSession(sessionId)
   return NextResponse.json({
     ...meta,

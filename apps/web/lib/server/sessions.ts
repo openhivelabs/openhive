@@ -1,25 +1,42 @@
 /**
- * Session persistence. A session is the single canonical execution record.
- * Events are persisted to SQLite and mirrored to ~/.openhive/sessions/{id}/
- * for transcript/debug artifacts.
+ * Session persistence — FS-only. One folder per session under
+ * ~/.openhive/sessions/{id}/:
+ *
+ *   meta.json         session metadata (id, task_id, team_id, goal, status, times)
+ *   events.jsonl      append-only stream of every engine event (live during run)
+ *   transcript.jsonl  distilled human-readable transcript (written on finalize)
+ *   artifacts.json    metadata index for files under artifacts/
+ *   artifacts/        generated files (PPTX, DOCX, PDF, etc.)
+ *   usage.json        aggregated token usage for this session (written on finalize)
+ *
+ * No system DB. Engine emits events → appendSessionEvent → jsonl line. SSE fan-out
+ * stays in-memory at the registry layer; on reconnect we replay from events.jsonl.
+ *
+ * Listing APIs scan meta.json files. At the current scale (hundreds of sessions)
+ * this is instantaneous; introduce an in-memory index if it ever becomes hot.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { getDb } from './db'
 import { artifactsRoot, sessionsRoot } from './paths'
 
-export interface SessionRow {
+export interface SessionMeta {
   id: string
   task_id: string | null
   team_id: string
   goal: string
-  status: string
+  status: 'running' | 'finished' | 'error' | 'interrupted'
   output: string | null
   error: string | null
   started_at: number
   finished_at: number | null
+  artifact_count: number
 }
+
+/** Row shape returned by listing queries — same fields as meta plus any future
+ *  columns. Kept as a separate alias for call-sites migrating off the SQL version. */
+export type SessionRow = SessionMeta
+export type SessionListRow = SessionMeta
 
 export interface StoredEventRow {
   seq: number
@@ -30,104 +47,6 @@ export interface StoredEventRow {
   tool_call_id: string | null
   tool_name: string | null
   data: Record<string, unknown>
-}
-
-export interface SessionMeta {
-  id: string
-  team_id: string | null
-  goal: string
-  status: 'running' | 'finished' | 'error' | 'interrupted'
-  output: string | null
-  error: string | null
-  started_at: number
-  finished_at: number | null
-  artifact_count: number
-}
-
-export interface SessionListRow {
-  id: string
-  team_id: string
-  task_id: string | null
-  goal: string
-  status: string
-  output: string | null
-  error: string | null
-  started_at: number
-  finished_at: number | null
-}
-
-export function sessionDir(sessionId: string): string {
-  return path.join(sessionsRoot(), sessionId)
-}
-
-export function sessionArtifactDir(sessionId: string): string {
-  return path.join(sessionDir(sessionId), 'artifacts')
-}
-
-export function sessionMetaPath(sessionId: string): string {
-  return path.join(sessionDir(sessionId), 'meta.json')
-}
-
-function readMeta(sessionId: string): SessionMeta | null {
-  try {
-    return JSON.parse(fs.readFileSync(sessionMetaPath(sessionId), 'utf8')) as SessionMeta
-  } catch {
-    return null
-  }
-}
-
-function writeMeta(sessionId: string, meta: SessionMeta): void {
-  fs.mkdirSync(sessionDir(sessionId), { recursive: true })
-  fs.writeFileSync(sessionMetaPath(sessionId), JSON.stringify(meta, null, 2), 'utf8')
-}
-
-function statusForMeta(status: string, error: string | null): SessionMeta['status'] {
-  if (error === 'interrupted' || error === 'cancelled') return 'interrupted'
-  if (status === 'running') return 'running'
-  if (status === 'error') return 'error'
-  return 'finished'
-}
-
-export function startSession(
-  sessionId: string,
-  teamId: string,
-  goal: string,
-  taskId: string | null = null,
-): void {
-  const now = Date.now()
-  getDb()
-    .prepare(
-      `INSERT OR REPLACE INTO sessions
-        (id, task_id, team_id, goal, status, started_at)
-       VALUES (?, ?, ?, ?, 'running', ?)`,
-    )
-    .run(sessionId, taskId, teamId, goal, now)
-  writeMeta(sessionId, {
-    id: sessionId,
-    team_id: teamId,
-    goal,
-    status: 'running',
-    output: null,
-    error: null,
-    started_at: now,
-    finished_at: null,
-    artifact_count: 0,
-  })
-}
-
-export function finishSession(
-  sessionId: string,
-  opts: { output?: string | null; error?: string | null } = {},
-): void {
-  const now = Date.now()
-  const status = opts.error ? 'error' : 'finished'
-  getDb()
-    .prepare(
-      `UPDATE sessions SET status = ?, output = ?, error = ?, finished_at = ?
-        WHERE id = ?`,
-    )
-    .run(status, opts.output ?? null, opts.error ?? null, now, sessionId)
-  finalizeSession(sessionId, opts)
 }
 
 export interface AppendEventInput {
@@ -142,72 +61,240 @@ export interface AppendEventInput {
   data: Record<string, unknown>
 }
 
-export function appendSessionEvent(input: AppendEventInput): void {
-  getDb()
-    .prepare(
-      `INSERT INTO session_events
-        (session_id, seq, ts, kind, depth, node_id, tool_call_id, tool_name, data_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      input.sessionId,
-      input.seq,
-      input.ts,
-      input.kind,
-      input.depth,
-      input.nodeId,
-      input.toolCallId,
-      input.toolName,
-      JSON.stringify(input.data),
-    )
+// ---------- path helpers ----------
+
+export function sessionDir(sessionId: string): string {
+  return path.join(sessionsRoot(), sessionId)
+}
+export function sessionArtifactDir(sessionId: string): string {
+  return path.join(sessionDir(sessionId), 'artifacts')
+}
+export function sessionMetaPath(sessionId: string): string {
+  return path.join(sessionDir(sessionId), 'meta.json')
+}
+export function sessionEventsPath(sessionId: string): string {
+  return path.join(sessionDir(sessionId), 'events.jsonl')
+}
+export function sessionTranscriptPath(sessionId: string): string {
+  return path.join(sessionDir(sessionId), 'transcript.jsonl')
+}
+export function sessionArtifactsIndexPath(sessionId: string): string {
+  return path.join(sessionDir(sessionId), 'artifacts.json')
+}
+export function sessionUsagePath(sessionId: string): string {
+  return path.join(sessionDir(sessionId), 'usage.json')
 }
 
-export function listForTeam(teamId: string, limit = 50): SessionRow[] {
-  return getDb()
-    .prepare(
-      `SELECT id, task_id, team_id, goal, status, output, error, started_at, finished_at
-         FROM sessions WHERE team_id = ? ORDER BY started_at DESC LIMIT ?`,
-    )
-    .all(teamId, limit) as SessionRow[]
-}
-
-export function eventsForSession(sessionId: string): StoredEventRow[] {
-  const rows = getDb()
-    .prepare(
-      `SELECT seq, ts, kind, depth, node_id, tool_call_id, tool_name, data_json
-         FROM session_events WHERE session_id = ? ORDER BY seq ASC`,
-    )
-    .all(sessionId) as (Omit<StoredEventRow, 'data'> & { data_json: string | null })[]
-  return rows.map((r) => ({
-    seq: r.seq,
-    ts: r.ts,
-    kind: r.kind,
-    depth: r.depth,
-    node_id: r.node_id,
-    tool_call_id: r.tool_call_id,
-    tool_name: r.tool_name,
-    data: r.data_json ? (JSON.parse(r.data_json) as Record<string, unknown>) : {},
-  }))
-}
-
-export function markOrphanedSessionsInterrupted(): number {
-  const now = Date.now()
-  const rows = getDb()
-    .prepare("SELECT id FROM sessions WHERE status = 'running'")
-    .all() as { id: string }[]
-  const info = getDb()
-    .prepare(
-      `UPDATE sessions SET status = 'error', error = 'interrupted', finished_at = ?
-        WHERE status = 'running'`,
-    )
-    .run(now)
-  for (const row of rows) finalizeSession(row.id, { error: 'interrupted' })
-  return info.changes
-}
-
+// Back-compat alias — tools used to call this name.
 export function artifactDirForSession(sessionId: string): string {
   return sessionArtifactDir(sessionId)
 }
+
+// ---------- meta read/write ----------
+
+function readMeta(sessionId: string): SessionMeta | null {
+  try {
+    return JSON.parse(fs.readFileSync(sessionMetaPath(sessionId), 'utf8')) as SessionMeta
+  } catch {
+    return null
+  }
+}
+
+function writeMeta(sessionId: string, meta: SessionMeta): void {
+  fs.mkdirSync(sessionDir(sessionId), { recursive: true })
+  const tmp = `${sessionMetaPath(sessionId)}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(meta, null, 2), 'utf8')
+  fs.renameSync(tmp, sessionMetaPath(sessionId))
+}
+
+function statusForMeta(status: string, error: string | null): SessionMeta['status'] {
+  if (error === 'interrupted' || error === 'cancelled') return 'interrupted'
+  if (status === 'running') return 'running'
+  if (status === 'error') return 'error'
+  return 'finished'
+}
+
+// ---------- lifecycle ----------
+
+export function startSession(
+  sessionId: string,
+  teamId: string,
+  goal: string,
+  taskId: string | null = null,
+): void {
+  const now = Date.now()
+  writeMeta(sessionId, {
+    id: sessionId,
+    task_id: taskId,
+    team_id: teamId,
+    goal,
+    status: 'running',
+    output: null,
+    error: null,
+    started_at: now,
+    finished_at: null,
+    artifact_count: 0,
+  })
+  // Touch events.jsonl so tail-style readers don't ENOENT.
+  fs.closeSync(fs.openSync(sessionEventsPath(sessionId), 'a'))
+}
+
+export function finishSession(
+  sessionId: string,
+  opts: { output?: string | null; error?: string | null } = {},
+): void {
+  finalizeSession(sessionId, opts)
+}
+
+/** Writes transcript.jsonl + updates meta.json with final status. Safe to call
+ *  multiple times (last one wins). */
+export function finalizeSession(
+  sessionId: string,
+  opts: { output?: string | null; error?: string | null } = {},
+): void {
+  const meta = readMeta(sessionId)
+  if (!meta) return
+
+  const events = eventsForSession(sessionId)
+  const lines = buildTranscript(meta.goal, meta.started_at, events)
+  fs.writeFileSync(
+    sessionTranscriptPath(sessionId),
+    `${lines.map((t) => JSON.stringify(t)).join('\n')}\n`,
+    'utf8',
+  )
+
+  const artDir = sessionArtifactDir(sessionId)
+  if (fs.existsSync(artDir) && fs.readdirSync(artDir).length === 0) {
+    try { fs.rmdirSync(artDir) } catch { /* ignore */ }
+  }
+  const artifactCount = fs.existsSync(artDir) ? fs.readdirSync(artDir).length : 0
+
+  const prevStatus = meta.status === 'running'
+    ? (opts.error ? 'error' : 'finished')
+    : meta.status
+
+  writeMeta(sessionId, {
+    ...meta,
+    status: statusForMeta(prevStatus, opts.error ?? meta.error),
+    output: opts.output ?? meta.output,
+    error: opts.error ?? meta.error,
+    finished_at: meta.finished_at ?? Date.now(),
+    artifact_count: artifactCount,
+  })
+}
+
+// ---------- events ----------
+
+export function appendSessionEvent(input: AppendEventInput): void {
+  fs.mkdirSync(sessionDir(input.sessionId), { recursive: true })
+  const row = {
+    seq: input.seq,
+    ts: input.ts,
+    kind: input.kind,
+    depth: input.depth,
+    node_id: input.nodeId,
+    tool_call_id: input.toolCallId,
+    tool_name: input.toolName,
+    data_json: JSON.stringify(input.data),
+  }
+  fs.appendFileSync(sessionEventsPath(input.sessionId), `${JSON.stringify(row)}\n`, 'utf8')
+}
+
+export function eventsForSession(sessionId: string): StoredEventRow[] {
+  const p = sessionEventsPath(sessionId)
+  if (!fs.existsSync(p)) return []
+  const text = fs.readFileSync(p, 'utf8')
+  const out: StoredEventRow[] = []
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const row = JSON.parse(line) as {
+        seq: number; ts: number; kind: string; depth: number;
+        node_id: string | null; tool_call_id: string | null;
+        tool_name: string | null; data_json?: string;
+        data?: Record<string, unknown>;
+      }
+      out.push({
+        seq: row.seq,
+        ts: row.ts,
+        kind: row.kind,
+        depth: row.depth,
+        node_id: row.node_id,
+        tool_call_id: row.tool_call_id,
+        tool_name: row.tool_name,
+        data: row.data ?? (row.data_json ? JSON.parse(row.data_json) as Record<string, unknown> : {}),
+      })
+    } catch {
+      // Truncated last line after crash — skip it, don't fail the whole session.
+    }
+  }
+  return out
+}
+
+// ---------- listing ----------
+
+function listSessionIds(): string[] {
+  const root = sessionsRoot()
+  if (!fs.existsSync(root)) return []
+  return fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+}
+
+function readAllMeta(): SessionMeta[] {
+  const out: SessionMeta[] = []
+  for (const id of listSessionIds()) {
+    const m = readMeta(id)
+    if (m) out.push(m)
+  }
+  return out
+}
+
+export function listSessions(limit = 100): SessionMeta[] {
+  const metas = readAllMeta().sort((a, b) => b.started_at - a.started_at)
+  return metas.slice(0, limit)
+}
+
+export function listForTeam(teamId: string, limit = 50): SessionRow[] {
+  return readAllMeta()
+    .filter((m) => m.team_id === teamId)
+    .sort((a, b) => b.started_at - a.started_at)
+    .slice(0, limit)
+}
+
+export function getSession(sessionId: string): SessionMeta | null {
+  return readMeta(sessionId)
+}
+
+export function listSessionsFor(opts: {
+  teamId?: string | null
+  taskId?: string | null
+  limit?: number
+}): SessionListRow[] {
+  const { teamId = null, taskId = null, limit = 200 } = opts
+  let metas = readAllMeta()
+  if (teamId) metas = metas.filter((m) => m.team_id === teamId)
+  if (taskId) metas = metas.filter((m) => m.task_id === taskId)
+  metas.sort((a, b) => b.started_at - a.started_at)
+  const lim = Number.isFinite(limit) ? (limit as number) : 200
+  return metas.slice(0, lim)
+}
+
+/** Any session whose meta.json still says status='running' on boot was in flight
+ *  when the process died. Mark them interrupted and finalize transcript. */
+export function markOrphanedSessionsInterrupted(): number {
+  let n = 0
+  for (const id of listSessionIds()) {
+    const meta = readMeta(id)
+    if (!meta || meta.status !== 'running') continue
+    finalizeSession(id, { error: 'interrupted' })
+    n += 1
+  }
+  return n
+}
+
+// ---------- transcript helper ----------
 
 function buildTranscript(
   goal: string,
@@ -248,130 +335,7 @@ function buildTranscript(
   return lines
 }
 
-function writeTranscriptAndEvents(
-  sessionId: string,
-  goal: string,
-  startedAt: number,
-  events: StoredEventRow[],
-): void {
-  fs.mkdirSync(sessionDir(sessionId), { recursive: true })
-  if (events.length > 0) {
-    fs.writeFileSync(
-      path.join(sessionDir(sessionId), 'events.jsonl'),
-      `${events.map((e) => JSON.stringify(e)).join('\n')}\n`,
-      'utf8',
-    )
-  }
-  const lines = buildTranscript(goal, startedAt, events)
-  fs.writeFileSync(
-    path.join(sessionDir(sessionId), 'transcript.jsonl'),
-    `${lines.map((t) => JSON.stringify(t)).join('\n')}\n`,
-    'utf8',
-  )
-}
-
-export function finalizeSession(
-  sessionId: string,
-  opts: { output?: string | null; error?: string | null } = {},
-): void {
-  const row = getDb()
-    .prepare(
-      `SELECT id, task_id, team_id, goal, status, output, error, started_at, finished_at
-         FROM sessions WHERE id = ?`,
-    )
-    .get(sessionId) as SessionRow | undefined
-  if (!row) return
-
-  const events = eventsForSession(sessionId)
-  writeTranscriptAndEvents(sessionId, row.goal, row.started_at, events)
-
-  const artDir = sessionArtifactDir(sessionId)
-  if (fs.existsSync(artDir) && fs.readdirSync(artDir).length === 0) fs.rmdirSync(artDir)
-  const artifactCount = fs.existsSync(artDir) ? fs.readdirSync(artDir).length : 0
-
-  writeMeta(sessionId, {
-    id: sessionId,
-    team_id: row.team_id,
-    goal: row.goal,
-    status: statusForMeta(opts.error ? 'error' : row.status, opts.error ?? row.error),
-    output: opts.output ?? row.output,
-    error: opts.error ?? row.error,
-    started_at: row.started_at,
-    finished_at: row.finished_at ?? Date.now(),
-    artifact_count: artifactCount,
-  })
-}
-
-export function listSessions(limit = 100): SessionMeta[] {
-  const rows = getDb()
-    .prepare(
-      `SELECT id, task_id, team_id, goal, status, output, error, started_at, finished_at
-         FROM sessions ORDER BY started_at DESC LIMIT ?`,
-    )
-    .all(limit) as SessionRow[]
-  return rows.map((row) => ({
-    id: row.id,
-    team_id: row.team_id,
-    goal: row.goal,
-    status: statusForMeta(row.status, row.error),
-    output: row.output,
-    error: row.error,
-    started_at: row.started_at,
-    finished_at: row.finished_at,
-    artifact_count: 0,
-  }))
-}
-
-export function getSession(sessionId: string): SessionMeta | null {
-  const meta = readMeta(sessionId)
-  if (meta) return meta
-  const row = getDb()
-    .prepare(
-      `SELECT id, task_id, team_id, goal, status, output, error, started_at, finished_at
-         FROM sessions WHERE id = ?`,
-    )
-    .get(sessionId) as SessionRow | undefined
-  if (!row) return null
-  return {
-    id: row.id,
-    team_id: row.team_id,
-    goal: row.goal,
-    status: statusForMeta(row.status, row.error),
-    output: row.output,
-    error: row.error,
-    started_at: row.started_at,
-    finished_at: row.finished_at,
-    artifact_count: 0,
-  }
-}
-
-export function listSessionsFor(opts: {
-  teamId?: string | null
-  taskId?: string | null
-  limit?: number
-}): SessionListRow[] {
-  const { teamId = null, taskId = null, limit = 200 } = opts
-  const where: string[] = []
-  const args: unknown[] = []
-  if (teamId) {
-    where.push('team_id = ?')
-    args.push(teamId)
-  }
-  if (taskId) {
-    where.push('task_id = ?')
-    args.push(taskId)
-  }
-  const sqlWhere = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
-  return getDb()
-    .prepare(
-      `SELECT id, team_id, task_id, goal, status, output, error, started_at, finished_at
-         FROM sessions
-        ${sqlWhere}
-        ORDER BY started_at DESC
-        LIMIT ?`,
-    )
-    .all(...args, Number.isFinite(limit) ? limit : 200) as SessionListRow[]
-}
+// ---------- legacy artifacts root cleanup ----------
 
 const JUNK_FILENAMES = new Set(['.DS_Store', 'Thumbs.db', '.localized'])
 
@@ -385,18 +349,18 @@ function pruneEmptyTree(root: string): void {
       if (e.isDirectory()) {
         if (!walk(abs)) allEmpty = false
       } else if (JUNK_FILENAMES.has(e.name)) {
-        try { fs.unlinkSync(abs) } catch {}
+        try { fs.unlinkSync(abs) } catch { /* ignore */ }
       } else {
         allEmpty = false
       }
     }
     if (allEmpty && dir !== root) {
-      try { fs.rmdirSync(dir) } catch {}
+      try { fs.rmdirSync(dir) } catch { /* ignore */ }
     }
     return allEmpty
   }
   if (walk(root)) {
-    try { fs.rmdirSync(root) } catch {}
+    try { fs.rmdirSync(root) } catch { /* ignore */ }
   }
 }
 

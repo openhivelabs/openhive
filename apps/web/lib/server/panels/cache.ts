@@ -1,14 +1,15 @@
 /**
- * panel_cache CRUD — last-known data for each bound block.
- * Ports apps/server/openhive/panels/cache.py.
+ * panel_cache — FS-only. One JSON file per panel under
+ *   ~/.openhive/cache/panels/{panel_id}.json
  *
- * The scheduler refreshes bindings on a cadence and writes the result here.
- * The frontend reads via /api/panels/:id/data (or SSE). On failure, `error`
- * is populated and stale `data_json` is preserved so the UI can still show
- * last-good data alongside an error indicator.
+ * Scheduler writes here on successful/failed refresh; frontend reads via the
+ * panel data endpoints. On failure we preserve stale `data_json` alongside the
+ * `error` so the UI can show last-good data with an error indicator.
  */
 
-import { getDb } from '../db'
+import fs from 'node:fs'
+import path from 'node:path'
+import { dataDir } from '../paths'
 
 export interface CacheRow {
   panel_id: string
@@ -19,7 +20,7 @@ export interface CacheRow {
   duration_ms: number | null
 }
 
-interface RawRow {
+interface Stored {
   panel_id: string
   team_id: string
   data_json: string | null
@@ -28,26 +29,51 @@ interface RawRow {
   duration_ms: number | null
 }
 
+function cacheRoot(): string {
+  const dir = path.join(dataDir(), 'cache', 'panels')
+  fs.mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+function safeName(panelId: string): string {
+  return panelId.replace(/[^a-zA-Z0-9_.-]/g, '_')
+}
+
+function pathFor(panelId: string): string {
+  return path.join(cacheRoot(), `${safeName(panelId)}.json`)
+}
+
+function readStored(panelId: string): Stored | null {
+  const p = pathFor(panelId)
+  if (!fs.existsSync(p)) return null
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8')) as Stored
+  } catch {
+    return null
+  }
+}
+
+function writeStored(panelId: string, value: Stored): void {
+  const p = pathFor(panelId)
+  const tmp = `${p}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8')
+  fs.renameSync(tmp, p)
+}
+
 export function upsertSuccess(input: {
   panelId: string
   teamId: string
   data: unknown
   durationMs: number
 }): void {
-  const payload = JSON.stringify(input.data)
-  const now = Date.now()
-  getDb()
-    .prepare(
-      `INSERT INTO panel_cache (panel_id, team_id, data_json, error, fetched_at, duration_ms)
-       VALUES (?, ?, ?, NULL, ?, ?)
-       ON CONFLICT(panel_id) DO UPDATE SET
-         team_id = excluded.team_id,
-         data_json = excluded.data_json,
-         error = NULL,
-         fetched_at = excluded.fetched_at,
-         duration_ms = excluded.duration_ms`,
-    )
-    .run(input.panelId, input.teamId, payload, now, input.durationMs)
+  writeStored(input.panelId, {
+    panel_id: input.panelId,
+    team_id: input.teamId,
+    data_json: JSON.stringify(input.data),
+    error: null,
+    fetched_at: Date.now(),
+    duration_ms: input.durationMs,
+  })
 }
 
 export function upsertError(input: {
@@ -56,42 +82,43 @@ export function upsertError(input: {
   error: string
   durationMs: number
 }): void {
-  const now = Date.now()
-  getDb()
-    .prepare(
-      `INSERT INTO panel_cache (panel_id, team_id, data_json, error, fetched_at, duration_ms)
-       VALUES (?, ?, NULL, ?, ?, ?)
-       ON CONFLICT(panel_id) DO UPDATE SET
-         team_id = excluded.team_id,
-         error = excluded.error,
-         fetched_at = excluded.fetched_at,
-         duration_ms = excluded.duration_ms`,
-    )
-    .run(input.panelId, input.teamId, input.error, now, input.durationMs)
+  const prior = readStored(input.panelId)
+  writeStored(input.panelId, {
+    panel_id: input.panelId,
+    team_id: input.teamId,
+    // Keep stale data so UI can show last-good alongside the error.
+    data_json: prior?.data_json ?? null,
+    error: input.error,
+    fetched_at: Date.now(),
+    duration_ms: input.durationMs,
+  })
 }
 
 export function get(panelId: string): CacheRow | null {
-  const row = getDb()
-    .prepare(
-      `SELECT panel_id, team_id, data_json, error, fetched_at, duration_ms
-         FROM panel_cache WHERE panel_id = ?`,
-    )
-    .get(panelId) as RawRow | undefined
-  if (!row) return null
+  const s = readStored(panelId)
+  if (!s) return null
   return {
-    panel_id: row.panel_id,
-    team_id: row.team_id,
-    data: row.data_json ? JSON.parse(row.data_json) : null,
-    error: row.error,
-    fetched_at: row.fetched_at,
-    duration_ms: row.duration_ms,
+    panel_id: s.panel_id,
+    team_id: s.team_id,
+    data: s.data_json ? JSON.parse(s.data_json) : null,
+    error: s.error,
+    fetched_at: s.fetched_at,
+    duration_ms: s.duration_ms,
   }
 }
 
 export function deleteCache(panelId: string): void {
-  getDb().prepare('DELETE FROM panel_cache WHERE panel_id = ?').run(panelId)
+  const p = pathFor(panelId)
+  if (fs.existsSync(p)) { try { fs.unlinkSync(p) } catch { /* ignore */ } }
 }
 
 export function deleteForTeam(teamId: string): void {
-  getDb().prepare('DELETE FROM panel_cache WHERE team_id = ?').run(teamId)
+  const root = cacheRoot()
+  for (const entry of fs.readdirSync(root)) {
+    if (!entry.endsWith('.json')) continue
+    const s = readStored(entry.replace(/\.json$/, ''))
+    if (s?.team_id === teamId) {
+      try { fs.unlinkSync(path.join(root, entry)) } catch { /* ignore */ }
+    }
+  }
 }

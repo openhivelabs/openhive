@@ -19,6 +19,18 @@ import { companyDir, packagesRoot, teamYamlPath } from './paths'
 import { saveTeam, type TeamDict } from './companies'
 import { loadDashboard, saveDashboard } from './dashboards'
 import { teamDbPath, withTeamDb } from './team-data'
+import { CLAUDE_CODE_MODELS, CODEX_MODELS } from './providers/models'
+
+function defaultModelFor(providerId: string): string {
+  if (providerId === 'claude-code') {
+    return CLAUDE_CODE_MODELS.find((m) => m.default)?.id ?? CLAUDE_CODE_MODELS[0]?.id ?? ''
+  }
+  if (providerId === 'codex') {
+    return CODEX_MODELS.find((m) => m.default)?.id ?? CODEX_MODELS[0]?.id ?? ''
+  }
+  if (providerId === 'copilot') return 'gpt-5-mini'
+  return ''
+}
 
 export const FRAME_VERSION = 1
 
@@ -404,11 +416,11 @@ export function installFrame(
       agent.persona_path = personaBundlePaths.get(bundleKey)
     }
     const prov = agent.provider_id
+    const hasProv = typeof prov === 'string' && prov.length > 0
     if (
       opts.connectedProviders &&
-      typeof prov === 'string' &&
-      prov &&
-      !opts.connectedProviders.has(prov)
+      hasProv &&
+      !opts.connectedProviders.has(prov as string)
     ) {
       if (fallbackProvider) {
         warnings.push(
@@ -422,6 +434,21 @@ export function installFrame(
             `which isn't connected, and no other provider is connected either. Connect one in Settings.`,
         )
       }
+    } else if (!hasProv && fallbackProvider) {
+      // Frame didn't pin a provider — backfill from whatever the user has
+      // connected so preflight doesn't reject the run.
+      agent.provider_id = fallbackProvider
+    }
+    // Backfill model if the frame left it blank. Picks the provider's default
+    // from the catalog; the user can still swap it in the node editor.
+    const chosenProv =
+      typeof agent.provider_id === 'string' ? agent.provider_id : ''
+    if (
+      chosenProv &&
+      (typeof agent.model !== 'string' || agent.model.length === 0)
+    ) {
+      const def = defaultModelFor(chosenProv)
+      if (def) agent.model = def
     }
     outAgents.push(agent)
   }

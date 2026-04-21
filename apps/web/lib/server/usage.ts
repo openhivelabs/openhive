@@ -1,16 +1,20 @@
 /**
- * Usage logging + aggregation. Ports apps/server/openhive/persistence/usage.py.
+ * Usage logging — FS-only. Every call appends to the owning session's
+ * ~/.openhive/sessions/{id}/usage.json list. Aggregation queries scan all
+ * session usage.json files.
  *
- * Reads and writes the same `usage_logs` table as the Python side. During
- * migration only the read path is exercised from TS (the engine is still in
- * Python and writes its own rows); once Phase 4 lands, writes move here too.
+ * For sessions still in flight we accept null sessionId (rare — engine
+ * always knows its session) and drop the record silently since nothing
+ * would be able to look it up later.
  */
 
-import { getDb } from './db'
+import fs from 'node:fs'
+
+import { listSessions, sessionDir, sessionUsagePath } from './sessions'
 
 export type UsagePeriod = '24h' | '7d' | '30d' | 'all'
 
-// Rough $ / 1M tokens (input, output). Kept in sync with the Python table.
+// Rough $ / 1M tokens (input, output).
 const RATES: Record<string, [number, number]> = {
   'claude-opus-4': [15.0, 75.0],
   'claude-sonnet-4': [3.0, 15.0],
@@ -51,44 +55,73 @@ export interface RecordUsageInput {
   outputTokens: number
   cacheReadTokens?: number
   cacheWriteTokens?: number
-  // Phase G1 — char counts of the prompt payload regions we built.
-  // Not tokens; a cheap attribution proxy. char/token ratio is model-stable
-  // enough (≈3–4 for latin, ≈1–2 for CJK) to rank spend by region.
   systemChars?: number
   toolsChars?: number
   historyChars?: number
 }
 
+interface UsageRow {
+  ts: number
+  session_id: string
+  company_id: string | null
+  team_id: string | null
+  agent_id: string | null
+  agent_role: string | null
+  provider_id: string
+  model: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  cost_usd_cents: number
+  system_chars: number
+  tools_chars: number
+  history_chars: number
+}
+
+function readRows(sessionId: string): UsageRow[] {
+  const p = sessionUsagePath(sessionId)
+  if (!fs.existsSync(p)) return []
+  try {
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'))
+    return Array.isArray(data) ? (data as UsageRow[]) : []
+  } catch {
+    return []
+  }
+}
+
+function writeRows(sessionId: string, rows: UsageRow[]): void {
+  fs.mkdirSync(sessionDir(sessionId), { recursive: true })
+  const p = sessionUsagePath(sessionId)
+  const tmp = `${p}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(rows, null, 2), 'utf8')
+  fs.renameSync(tmp, p)
+}
+
 export function recordUsage(input: RecordUsageInput): void {
+  if (!input.sessionId) return
   const cost = estimateCostCents(input.model, input.inputTokens, input.outputTokens)
-  getDb()
-    .prepare(
-      `INSERT INTO usage_logs
-        (ts, session_id, company_id, team_id, agent_id, agent_role,
-         provider_id, model,
-         input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-         cost_usd_cents,
-         system_chars, tools_chars, history_chars)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      Date.now(),
-      input.sessionId,
-      input.companyId,
-      input.teamId,
-      input.agentId,
-      input.agentRole,
-      input.providerId,
-      input.model,
-      Math.trunc(input.inputTokens),
-      Math.trunc(input.outputTokens),
-      Math.trunc(input.cacheReadTokens ?? 0),
-      Math.trunc(input.cacheWriteTokens ?? 0),
-      cost,
-      Math.trunc(input.systemChars ?? 0),
-      Math.trunc(input.toolsChars ?? 0),
-      Math.trunc(input.historyChars ?? 0),
-    )
+  const row: UsageRow = {
+    ts: Date.now(),
+    session_id: input.sessionId,
+    company_id: input.companyId,
+    team_id: input.teamId,
+    agent_id: input.agentId,
+    agent_role: input.agentRole,
+    provider_id: input.providerId,
+    model: input.model,
+    input_tokens: Math.trunc(input.inputTokens),
+    output_tokens: Math.trunc(input.outputTokens),
+    cache_read_tokens: Math.trunc(input.cacheReadTokens ?? 0),
+    cache_write_tokens: Math.trunc(input.cacheWriteTokens ?? 0),
+    cost_usd_cents: cost,
+    system_chars: Math.trunc(input.systemChars ?? 0),
+    tools_chars: Math.trunc(input.toolsChars ?? 0),
+    history_chars: Math.trunc(input.historyChars ?? 0),
+  }
+  const existing = readRows(input.sessionId)
+  existing.push(row)
+  writeRows(input.sessionId, existing)
 }
 
 function sinceMs(period: UsagePeriod): number {
@@ -128,24 +161,41 @@ export interface UsageSummary {
   by_model: UsageGroupRow[]
 }
 
-function group(by: string, since: number): UsageGroupRow[] {
-  // `by` is a hardcoded column name — never user input, so string interpolation
-  // is safe here (parameterised SQL doesn't support column-name binding).
-  return getDb()
-    .prepare(
-      `SELECT COALESCE(${by}, '-') AS key,
-              SUM(input_tokens) AS input_tokens,
-              SUM(output_tokens) AS output_tokens,
-              SUM(cache_read_tokens) AS cache_read,
-              SUM(cache_write_tokens) AS cache_write,
-              SUM(cost_usd_cents) AS cost_cents,
-              COUNT(*) AS n
-       FROM usage_logs
-       WHERE ts >= ?
-       GROUP BY COALESCE(${by}, '-')
-       ORDER BY (SUM(input_tokens) + SUM(output_tokens)) DESC`,
-    )
-    .all(since) as UsageGroupRow[]
+function allRowsSince(since: number): UsageRow[] {
+  const out: UsageRow[] = []
+  for (const meta of listSessions(10_000)) {
+    for (const row of readRows(meta.id)) {
+      if (row.ts >= since) out.push(row)
+    }
+  }
+  return out
+}
+
+function groupRows(rows: UsageRow[], keyFn: (r: UsageRow) => string | null): UsageGroupRow[] {
+  const buckets = new Map<string, UsageGroupRow>()
+  for (const r of rows) {
+    const rawKey = keyFn(r)
+    const key = rawKey ?? '-'
+    const b = buckets.get(key) ?? {
+      key,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read: 0,
+      cache_write: 0,
+      cost_cents: 0,
+      n: 0,
+    }
+    b.input_tokens += r.input_tokens
+    b.output_tokens += r.output_tokens
+    b.cache_read += r.cache_read_tokens
+    b.cache_write += r.cache_write_tokens
+    b.cost_cents += r.cost_usd_cents
+    b.n += 1
+    buckets.set(key, b)
+  }
+  return Array.from(buckets.values()).sort(
+    (a, b) => b.input_tokens + b.output_tokens - (a.input_tokens + a.output_tokens),
+  )
 }
 
 export interface SessionUsage {
@@ -158,66 +208,52 @@ export interface SessionUsage {
 }
 
 export function usageForSession(sessionId: string): SessionUsage {
-  return getDb()
-    .prepare(
-      `SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
-              COALESCE(SUM(output_tokens), 0) AS output_tokens,
-              COALESCE(SUM(cache_read_tokens), 0) AS cache_read,
-              COALESCE(SUM(cache_write_tokens), 0) AS cache_write,
-              COALESCE(SUM(cost_usd_cents), 0) AS cost_cents,
-              COUNT(*) AS n
-       FROM usage_logs
-       WHERE session_id = ?`,
-    )
-    .get(sessionId) as SessionUsage
+  const agg: SessionUsage = {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read: 0,
+    cache_write: 0,
+    cost_cents: 0,
+    n: 0,
+  }
+  for (const r of readRows(sessionId)) {
+    agg.input_tokens += r.input_tokens
+    agg.output_tokens += r.output_tokens
+    agg.cache_read += r.cache_read_tokens
+    agg.cache_write += r.cache_write_tokens
+    agg.cost_cents += r.cost_usd_cents
+    agg.n += 1
+  }
+  return agg
 }
 
 export function usageForSessions(sessionIds: string[]): Record<string, SessionUsage> {
-  if (sessionIds.length === 0) return {}
-  const placeholders = sessionIds.map(() => '?').join(',')
-  const rows = getDb()
-    .prepare(
-      `SELECT session_id,
-              COALESCE(SUM(input_tokens), 0) AS input_tokens,
-              COALESCE(SUM(output_tokens), 0) AS output_tokens,
-              COALESCE(SUM(cache_read_tokens), 0) AS cache_read,
-              COALESCE(SUM(cache_write_tokens), 0) AS cache_write,
-              COALESCE(SUM(cost_usd_cents), 0) AS cost_cents,
-              COUNT(*) AS n
-       FROM usage_logs
-       WHERE session_id IN (${placeholders})
-       GROUP BY session_id`,
-    )
-    .all(...sessionIds) as (SessionUsage & { session_id: string })[]
   const out: Record<string, SessionUsage> = {}
-  for (const r of rows) {
-    const { session_id, ...rest } = r
-    out[session_id] = rest
-  }
+  for (const id of sessionIds) out[id] = usageForSession(id)
   return out
 }
 
 export function summary(period: UsagePeriod = 'all'): UsageSummary {
-  const since = sinceMs(period)
-  const totals = getDb()
-    .prepare(
-      `SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
-              COALESCE(SUM(output_tokens), 0) AS output_tokens,
-              COALESCE(SUM(cache_read_tokens), 0) AS cache_read,
-              COALESCE(SUM(cache_write_tokens), 0) AS cache_write,
-              COALESCE(SUM(cost_usd_cents), 0) AS cost_cents,
-              COUNT(*) AS n
-       FROM usage_logs
-       WHERE ts >= ?`,
-    )
-    .get(since) as UsageTotals
+  const rows = allRowsSince(sinceMs(period))
+  const totals = rows.reduce<UsageTotals>(
+    (acc, r) => {
+      acc.input_tokens += r.input_tokens
+      acc.output_tokens += r.output_tokens
+      acc.cache_read += r.cache_read_tokens
+      acc.cache_write += r.cache_write_tokens
+      acc.cost_cents += r.cost_usd_cents
+      acc.n += 1
+      return acc
+    },
+    { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0, cost_cents: 0, n: 0 },
+  )
   return {
     period,
     totals,
-    by_company: group('company_id', since),
-    by_team: group('team_id', since),
-    by_agent: group('agent_id', since),
-    by_provider: group('provider_id', since),
-    by_model: group('model', since),
+    by_company: groupRows(rows, (r) => r.company_id),
+    by_team: groupRows(rows, (r) => r.team_id),
+    by_agent: groupRows(rows, (r) => r.agent_id),
+    by_provider: groupRows(rows, (r) => r.provider_id),
+    by_model: groupRows(rows, (r) => r.model),
   }
 }

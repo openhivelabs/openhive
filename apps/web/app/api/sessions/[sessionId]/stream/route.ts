@@ -1,6 +1,5 @@
 import { attach, END, forceEvict, isActive } from '@/lib/server/engine/session-registry'
-import { eventsForSession, finishSession } from '@/lib/server/sessions'
-import { getDb } from '@/lib/server/db'
+import { eventsForSession, finishSession, getSession } from '@/lib/server/sessions'
 
 // An "active" run with no event for this long is a zombie — the engine
 // generator died silently (HMR, uncaught rejection) but the registry
@@ -37,12 +36,8 @@ export async function GET(
     // ask_user, the engine generator is effectively dead. Evict so the
     // replay/reconcile path can mark it interrupted.
     try {
-      const latest = getDb()
-        .prepare(
-          `SELECT ts, kind FROM session_events WHERE session_id = ?
-             ORDER BY seq DESC LIMIT 1`,
-        )
-        .get(sessionId) as { ts: number; kind: string } | undefined
+      const allEvents = eventsForSession(sessionId)
+      const latest = allEvents[allEvents.length - 1]
       if (latest) {
         const ageMs = Date.now() - latest.ts * 1000
         if (ageMs > ZOMBIE_THRESHOLD_MS && latest.kind !== 'user_question') {
@@ -139,22 +134,19 @@ export async function GET(
             (r) => r.kind === 'run_finished' || r.kind === 'run_error',
           )
           if (!alreadyTerminal) {
-            let row = getDb()
-              .prepare('SELECT status, output, error FROM sessions WHERE id = ?')
-              .get(sessionId) as
-              | { status: string; output: string | null; error: string | null }
-              | undefined
-            // Zombie reconciliation: the engine isn't running this run
-            // (isActive=false checked above) but the DB still says
-            // 'running' — means the engine process died mid-flight and
-            // nothing updated the status. Mark it interrupted here so
-            // the UI stops spinning forever.
-            if (row && row.status === 'running') {
-              try {
-                finishSession(sessionId, { error: 'interrupted' })
-              } catch { /* best-effort */ }
-              row = { status: 'error', output: null, error: 'interrupted' }
+            let meta = getSession(sessionId)
+            // Zombie reconciliation: the engine isn't running this session
+            // (isActive=false checked above) but meta.json still says
+            // 'running' — engine process died mid-flight. Mark it
+            // interrupted so the UI stops spinning forever.
+            if (meta && meta.status === 'running') {
+              try { finishSession(sessionId, { error: 'interrupted' }) }
+              catch { /* best-effort */ }
+              meta = { ...meta, status: 'interrupted', error: 'interrupted' }
             }
+            const row = meta
+              ? { status: meta.status, output: meta.output, error: meta.error }
+              : undefined
             if (row && row.status !== 'running') {
               controller.enqueue(
                 sseFrame({

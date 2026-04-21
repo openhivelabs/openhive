@@ -9,7 +9,26 @@
 
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
-  // Dynamic imports so the edge runtime never loads better-sqlite3 etc.
+
+  // Legacy DB → FS migration. Must run before the FS-only stores try to read
+  // anything, because sessions/usage/artifacts all live in per-session files
+  // after this point.
+  try {
+    const { needsMigration, migrateLegacyDb } = await import(
+      './lib/server/legacy-db-migration'
+    )
+    if (needsMigration()) {
+      const counts = migrateLegacyDb()
+      console.log(
+        `boot: legacy DB migrated — ${counts.sessions} sessions, ${counts.events} events, ` +
+        `${counts.artifacts} artifacts, ${counts.usageRows} usage rows, ` +
+        `${counts.messages} messages, ${counts.panels} panels, ${counts.oauth} oauth`,
+      )
+    }
+  } catch (exc) {
+    console.error('boot: legacy DB migration failed', exc)
+  }
+
   const { startScheduler } = await import('./lib/server/scheduler/scheduler')
   const {
     markOrphanedSessionsInterrupted,

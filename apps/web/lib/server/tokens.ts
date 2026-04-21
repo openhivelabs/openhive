@@ -1,12 +1,14 @@
 /**
- * OAuth token store — encrypt on write, decrypt on read.
- * Ports apps/server/openhive/persistence/tokens.py.
+ * OAuth token store — FS-only. Tokens live Fernet-encrypted in
+ *   ~/.openhive/oauth.enc.json
  *
- * Shared `oauth_tokens` table + Fernet key with the legacy Python runtime,
- * so tokens saved by either runtime are readable by the other.
+ * We hold the full record map in one file and rewrite on save. At single-digit
+ * provider counts this is fine; if it ever grows we can shard per-provider.
  */
 
-import { getDb } from './db'
+import fs from 'node:fs'
+import path from 'node:path'
+import { dataDir } from './paths'
 import { decrypt, encrypt } from './crypto'
 
 export interface TokenRecord {
@@ -19,10 +21,10 @@ export interface TokenRecord {
   account_id: string | null
 }
 
-interface TokenRow {
+interface StoredRow {
   provider_id: string
-  access_token: string
-  refresh_token: string | null
+  access_token: string           // encrypted
+  refresh_token: string | null   // encrypted
   expires_at: number | null
   scope: string | null
   account_label: string | null
@@ -31,42 +33,50 @@ interface TokenRow {
   updated_at: number
 }
 
+function tokensPath(): string {
+  return path.join(dataDir(), 'oauth.enc.json')
+}
+
+function readAll(): Record<string, StoredRow> {
+  const p = tokensPath()
+  if (!fs.existsSync(p)) return {}
+  try {
+    const raw = JSON.parse(fs.readFileSync(p, 'utf8'))
+    return (raw && typeof raw === 'object') ? (raw as Record<string, StoredRow>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeAll(rows: Record<string, StoredRow>): void {
+  const p = tokensPath()
+  fs.mkdirSync(path.dirname(p), { recursive: true })
+  const tmp = `${p}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(rows, null, 2), 'utf8')
+  fs.renameSync(tmp, p)
+}
+
 export function saveToken(record: TokenRecord): void {
+  const rows = readAll()
   const now = Math.floor(Date.now() / 1000)
-  const accessEnc = encrypt(record.access_token)
-  const refreshEnc = record.refresh_token ? encrypt(record.refresh_token) : null
-  getDb()
-    .prepare(
-      `INSERT INTO oauth_tokens
-        (provider_id, access_token, refresh_token, expires_at, scope, account_label,
-         account_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(provider_id) DO UPDATE SET
-         access_token=excluded.access_token,
-         refresh_token=excluded.refresh_token,
-         expires_at=excluded.expires_at,
-         scope=excluded.scope,
-         account_label=excluded.account_label,
-         account_id=excluded.account_id,
-         updated_at=excluded.updated_at`,
-    )
-    .run(
-      record.provider_id,
-      accessEnc,
-      refreshEnc,
-      record.expires_at,
-      record.scope,
-      record.account_label,
-      record.account_id,
-      now,
-      now,
-    )
+  const prev = rows[record.provider_id]
+  rows[record.provider_id] = {
+    provider_id: record.provider_id,
+    access_token: encrypt(record.access_token),
+    refresh_token: record.refresh_token ? encrypt(record.refresh_token) : null,
+    expires_at: record.expires_at,
+    scope: record.scope,
+    account_label: record.account_label,
+    account_id: record.account_id,
+    created_at: prev?.created_at ?? now,
+    updated_at: now,
+  }
+  writeAll(rows)
 }
 
 export function loadToken(providerId: string): TokenRecord | null {
-  const row = getDb()
-    .prepare('SELECT * FROM oauth_tokens WHERE provider_id = ?')
-    .get(providerId) as TokenRow | undefined
+  const rows = readAll()
+  const row = rows[providerId]
   if (!row) return null
   return {
     provider_id: row.provider_id,
@@ -80,23 +90,18 @@ export function loadToken(providerId: string): TokenRecord | null {
 }
 
 export function deleteToken(providerId: string): boolean {
-  const info = getDb()
-    .prepare('DELETE FROM oauth_tokens WHERE provider_id = ?')
-    .run(providerId)
-  return info.changes > 0
+  const rows = readAll()
+  if (!(providerId in rows)) return false
+  delete rows[providerId]
+  writeAll(rows)
+  return true
 }
 
-/** Provider IDs that have a stored token row (regardless of decryptability). */
 export function listConnected(): string[] {
-  const rows = getDb()
-    .prepare('SELECT provider_id FROM oauth_tokens')
-    .all() as { provider_id: string }[]
-  return rows.map((r) => r.provider_id)
+  return Object.keys(readAll())
 }
 
 export function getAccountLabel(providerId: string): string | null {
-  const row = getDb()
-    .prepare('SELECT account_label FROM oauth_tokens WHERE provider_id = ?')
-    .get(providerId) as { account_label: string | null } | undefined
+  const row = readAll()[providerId]
   return row?.account_label ?? null
 }
