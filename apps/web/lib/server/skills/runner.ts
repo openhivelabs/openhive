@@ -220,7 +220,11 @@ export async function runSkill(
   }
   const result = await runSubprocess({
     cmd: [bin, skill.entrypoint],
-    cwd: skill.skillDir,
+    // cwd = outputDir so relative --out paths land in the artifact directory
+    // and the before/after snapshot can actually register new files. Scripts
+    // that need skill resources use OPENHIVE_SKILL_DIR or __file__-based
+    // resolution, not cwd.
+    cwd: outputDir,
     env,
     stdinBytes: Buffer.from(JSON.stringify(args), 'utf8'),
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -273,7 +277,8 @@ export async function runSkillScript(
   }
   const result = await runSubprocess({
     cmd: [bin, resolved, ...(opts.args ?? [])],
-    cwd: skill.skillDir,
+    // cwd = outputDir: relative --out paths land in artifacts, snapshot works.
+    cwd: outputDir,
     env,
     stdinBytes: Buffer.from(opts.stdinText ?? '', 'utf8'),
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,

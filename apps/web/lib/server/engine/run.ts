@@ -1300,7 +1300,11 @@ function describeTeamForAgent(team: TeamSpec, agentId: string): string {
       if (visited.has(sub.id)) continue
       visited.add(sub.id)
       const label = sub.label && sub.label !== sub.role ? ` (${sub.label})` : ''
-      lines.push(`${'  '.repeat(indent)}- ${sub.role}${label}`)
+      // Phase F1: surface skill ownership so Lead routes "make PDF" to the
+      // agent that actually has `pdf` instead of delegating blindly by role.
+      const skills = Array.isArray(sub.skills) ? sub.skills : []
+      const skillTag = skills.length > 0 ? ` [skills: ${skills.join(', ')}]` : ''
+      lines.push(`${'  '.repeat(indent)}- ${sub.role}${label}${skillTag}`)
       walk(sub.id, indent + 1)
     }
   }
@@ -1309,7 +1313,10 @@ function describeTeamForAgent(team: TeamSpec, agentId: string): string {
   return (
     '# Your team\n' +
     '`delegate_to` reaches DIRECT reports only (top-level bullets). For deeper ' +
-    'specialists, delegate to the branch parent and have them relay.\n\n' +
+    'specialists, delegate to the branch parent and have them relay. Skill tags ' +
+    'in [brackets] show who actually owns each skill — route file-generation ' +
+    'tasks (pdf, docx, pptx, etc.) to the agent that has that skill, not to ' +
+    'whoever seems vaguely related.\n\n' +
     lines.join('\n') +
     '\n'
   )
