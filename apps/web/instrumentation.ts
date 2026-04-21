@@ -31,6 +31,7 @@ export async function register() {
 
   const { startScheduler } = await import('./lib/server/scheduler/scheduler')
   const {
+    backfillTranscripts,
     markOrphanedSessionsInterrupted,
     pruneLegacyArtifactsRoot,
   } = await import('./lib/server/sessions')
@@ -42,6 +43,13 @@ export async function register() {
     }
   } catch (exc) {
     console.error('boot: orphan cleanup failed', exc)
+  }
+
+  try {
+    const n = backfillTranscripts()
+    if (n > 0) console.log(`boot: backfilled ${n} transcript(s) from events.jsonl`)
+  } catch (exc) {
+    console.error('boot: transcript backfill failed', exc)
   }
 
   try {

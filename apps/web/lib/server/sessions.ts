@@ -294,6 +294,27 @@ export function markOrphanedSessionsInterrupted(): number {
   return n
 }
 
+/** Regenerate transcript.jsonl for any already-finished session that lacks
+ *  one (e.g. historical rows migrated from the legacy DB that were finalised
+ *  before transcripts were being written to disk). Reads events.jsonl →
+ *  distills → writes transcript.jsonl. Idempotent: sessions with an existing
+ *  transcript are skipped. */
+export function backfillTranscripts(): number {
+  let n = 0
+  for (const id of listSessionIds()) {
+    const tPath = sessionTranscriptPath(id)
+    if (fs.existsSync(tPath)) continue
+    const meta = readMeta(id)
+    if (!meta) continue
+    const events = eventsForSession(id)
+    if (events.length === 0) continue
+    const lines = buildTranscript(meta.goal, meta.started_at, events)
+    fs.writeFileSync(tPath, `${lines.map((t) => JSON.stringify(t)).join('\n')}\n`, 'utf8')
+    n += 1
+  }
+  return n
+}
+
 // ---------- transcript helper ----------
 
 function buildTranscript(
