@@ -12,6 +12,7 @@
 
 import * as sessionsStore from '../sessions'
 import { runTeam } from './session'
+import { generateTitle } from '../sessions/title'
 import type { Event } from '../events/schema'
 import type { TeamSpec } from './team'
 
@@ -158,6 +159,15 @@ async function driveSession(
       if (event.kind === 'run_started' && !dbStarted) {
         sessionsStore.startSession(event.session_id, team.id, goal, taskId)
         dbStarted = true
+        // Fire-and-forget auto-title generation. Must not block the run, must
+        // not throw, and only writes meta.title on success.
+        const sid = event.session_id
+        const titleLocale = locale === 'ko' ? 'ko' : 'en'
+        void generateTitle(goal, titleLocale)
+          .then((t) => {
+            if (t) sessionsStore.updateMetaTitle(sid, t)
+          })
+          .catch(() => { /* swallow — title is best-effort */ })
       }
 
       sessionsStore.appendSessionEvent({

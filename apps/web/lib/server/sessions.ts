@@ -32,6 +32,9 @@ export interface SessionMeta {
   started_at: number
   finished_at: number | null
   artifact_count: number
+  /** Optional human-friendly title generated asynchronously from the goal.
+   *  null/undefined means "not generated yet" — UI falls back to goal slice. */
+  title?: string | null
 }
 
 /** Row shape returned by listing queries — same fields as meta plus any future
@@ -106,6 +109,30 @@ function writeMeta(sessionId: string, meta: SessionMeta): void {
   const tmp = `${sessionMetaPath(sessionId)}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(meta, null, 2), 'utf8')
   fs.renameSync(tmp, sessionMetaPath(sessionId))
+}
+
+/** Partially update a session's meta.json. Silently no-ops if the session
+ *  folder is gone (e.g. deleted mid-run). Used by async enrichers like the
+ *  auto-title generator. */
+export function updateMeta(
+  sessionId: string,
+  patch: Partial<SessionMeta>,
+): SessionMeta | null {
+  const current = readMeta(sessionId)
+  if (!current) return null
+  const next: SessionMeta = { ...current, ...patch, id: current.id }
+  writeMeta(sessionId, next)
+  return next
+}
+
+/** Convenience wrapper — used by driveSession's fire-and-forget title job. */
+export function updateMetaTitle(sessionId: string, title: string | null): void {
+  if (!title) return
+  try {
+    updateMeta(sessionId, { title })
+  } catch {
+    /* swallow — title is best-effort */
+  }
 }
 
 function statusForMeta(status: string, error: string | null): SessionMeta['status'] {
