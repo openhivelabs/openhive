@@ -23,12 +23,23 @@ export const MAX_READABLE_FILE_BYTES = 256 * 1024
 
 export type SkillKind = 'agent' | 'typed'
 
+export interface SkillTriggers {
+  /** Case-insensitive substring matches against the user's task text. */
+  keywords?: string[]
+  /** Regex sources; matched with `i` flag. Invalid patterns are ignored. */
+  patterns?: string[]
+}
+
 export interface SkillDef {
   name: string
   description: string
   kind: SkillKind
   skillDir: string
   source: 'bundled' | 'user'
+  /** Optional auto-hint rules injected into the system prompt when the
+   *  user's goal appears to match this skill. Discovery aid only — the
+   *  LLM still decides whether to activate. */
+  triggers?: SkillTriggers
   // agent-skill
   body?: string
   fileTree?: string[]
@@ -116,6 +127,7 @@ function loadOne(
   if (typeof name !== 'string' || !name) return null
   const description = String(fm.description ?? '').trim()
   const skillDir = path.dirname(skillMd)
+  const triggers = parseTriggers(fm.triggers)
 
   // Typed skill discriminator: entrypoint present.
   const entrypointRel = fm.entrypoint
@@ -147,6 +159,7 @@ function loadOne(
       kind: 'typed',
       skillDir,
       source,
+      triggers,
       runtime: runtime as 'python' | 'node',
       entrypoint: entrypointAbs,
       parameters: parametersRaw as Record<string, unknown>,
@@ -159,9 +172,63 @@ function loadOne(
     kind: 'agent',
     skillDir,
     source,
+    triggers,
     body: body.trim(),
     fileTree: walkSkillTree(skillDir),
   }
+}
+
+function parseTriggers(raw: unknown): SkillTriggers | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const obj = raw as Record<string, unknown>
+  const keywords = Array.isArray(obj.keywords)
+    ? obj.keywords.filter((k): k is string => typeof k === 'string' && k.trim().length > 0)
+    : undefined
+  const patterns = Array.isArray(obj.patterns)
+    ? obj.patterns.filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
+    : undefined
+  if (!keywords?.length && !patterns?.length) return undefined
+  return { keywords, patterns }
+}
+
+/** Rule-match the user's goal against skills' `triggers:` frontmatter and
+ *  return the subset that plausibly applies. Keyword matches are case-
+ *  insensitive substrings; patterns compile with the `i` flag. Invalid
+ *  regex sources are silently skipped so one bad YAML entry can't crash
+ *  skill discovery. */
+export function matchSkillHints(
+  text: string,
+  skills: SkillDef[],
+): SkillDef[] {
+  const lower = text.toLowerCase()
+  const out: SkillDef[] = []
+  for (const s of skills) {
+    const t = s.triggers
+    if (!t) continue
+    let hit = false
+    if (t.keywords) {
+      for (const k of t.keywords) {
+        if (lower.includes(k.toLowerCase())) {
+          hit = true
+          break
+        }
+      }
+    }
+    if (!hit && t.patterns) {
+      for (const p of t.patterns) {
+        try {
+          if (new RegExp(p, 'i').test(text)) {
+            hit = true
+            break
+          }
+        } catch {
+          /* invalid regex: skip */
+        }
+      }
+    }
+    if (hit) out.push(s)
+  }
+  return out
 }
 
 function scan(root: string, source: 'bundled' | 'user'): Map<string, SkillDef> {

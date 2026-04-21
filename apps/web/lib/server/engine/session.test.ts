@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  renderSkillHints,
   renderTodosSection,
   SERIAL_TOOL_NAMES,
   splitToolRuns,
   type TodoItem,
 } from './session'
+import type { SkillDef } from '../skills/loader'
 
 const tc = (name: string) => ({ function: { name } })
 
@@ -98,5 +100,29 @@ describe('renderTodosSection', () => {
     expect(out).toContain('2. [x] second')
     expect(out).toContain('id: todo_aa')
     expect(out).toContain('id: todo_bb')
+  })
+})
+
+describe('renderSkillHints', () => {
+  const skill = (name: string, description = ''): SkillDef => ({
+    name,
+    description,
+    kind: 'agent',
+    skillDir: `/tmp/${name}`,
+    source: 'bundled',
+  })
+
+  it('returns empty string when nothing matched', () => {
+    expect(renderSkillHints([])).toBe('')
+  })
+
+  it('lists matched skills with truncated description', () => {
+    const out = renderSkillHints([
+      skill('pdf', 'Build PDF docs\nsecond line ignored'),
+      skill('docx', 'Word docs'),
+    ])
+    expect(out).toContain('Skill hints for this task')
+    expect(out).toContain('`pdf` — Build PDF docs …')
+    expect(out).toContain('`docx` — Word docs')
   })
 })

@@ -36,6 +36,7 @@ import {
 } from '../agents/runtime'
 import {
   getSkill,
+  matchSkillHints,
   type SkillDef,
 } from '../skills/loader'
 import {
@@ -437,12 +438,19 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   const hasSubs = subs.length > 0
   const relaySection = buildRelaySection(depth, hasSubs)
   const staticTeamBlock = teamSection + (relaySection ? '\n' + relaySection : '')
-  const buildSystemPrompt = (): string => {
+  // Skill auto-hint: match the incoming task once against frontmatter triggers
+  // so the first turn's system prompt nudges the LLM toward relevant skills.
+  // We only inject hints on turn 1 — after that, the LLM has already chosen.
+  const hintedSkills = matchSkillHints(task, agentSkills)
+  const hintsBlock = renderSkillHints(hintedSkills)
+  const buildSystemPrompt = (turn: number): string => {
     const todos = depth === 0 ? state().todos.get(sessionId) ?? [] : []
     const todosBlock = renderTodosSection(todos)
-    const teamBlock = todosBlock
-      ? todosBlock + '\n' + staticTeamBlock
-      : staticTeamBlock
+    const showHints = turn === 1 && hintsBlock.length > 0
+    const prefix =
+      (todosBlock ? todosBlock + '\n' : '') +
+      (showHints ? hintsBlock + '\n' : '')
+    const teamBlock = prefix ? prefix + staticTeamBlock : staticTeamBlock
     return composeSystemPrompt(personaBody, agentSkills, teamBlock)
   }
   tools.push(...makePersonaTools(persona))
@@ -460,7 +468,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
       sessionId,
       team,
       node,
-      systemPrompt: buildSystemPrompt(),
+      systemPrompt: buildSystemPrompt(rounds),
       history,
       tools,
       depth,
@@ -1693,6 +1701,28 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
     },
     hint: 'Running skill script…',
   }
+}
+
+// -------- skill auto-hint rendering --------
+
+/** Compose a short "matching skills" block to prepend to the system prompt
+ *  when the user's goal triggers one or more skills. Empty list → ''. The
+ *  hint is advisory — the LLM still has to activate/use the skill. */
+export function renderSkillHints(matches: SkillDef[]): string {
+  if (matches.length === 0) return ''
+  const lines = [
+    '# Skill hints for this task',
+    '',
+    'Your current request looks like a fit for the skill(s) below. Consider ' +
+      'activating one before planning from scratch.',
+    '',
+  ]
+  for (const s of matches) {
+    let desc = (s.description || '').trim()
+    if (desc.includes('\n')) desc = desc.split('\n', 1)[0]!.trimEnd() + ' …'
+    lines.push(`- \`${s.name}\`${desc ? ` — ${desc}` : ''}`)
+  }
+  return lines.join('\n') + '\n'
 }
 
 // -------- Lead task-list native tools --------
