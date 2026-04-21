@@ -1,0 +1,23 @@
+id: kanban-by-stage
+name: 단계별 칸반
+description: 거래/태스크를 상태(stage) 필드로 그룹화해 칸반으로 표시.
+icon: "📊"
+category: crm
+block:
+  type: kanban
+  colSpan: 4
+  rowSpan: 2
+  props: {}
+binding_skeleton:
+  source:
+    kind: team_data
+    config:
+      sql: "SELECT * FROM customer"
+  map:
+    group_by: stage
+    title: name
+    value: value
+  refresh_seconds: 60
+ai_prompts:
+  goal: "항목을 단계(stage) 필드로 그룹화해 칸반으로 표시. 영업 파이프라인 류."
+  requires: []

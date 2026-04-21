@@ -1,0 +1,40 @@
+<!-- A table inside a <p:graphicFrame>. Place graphicFrame inside <p:spTree>.
+     Column widths and row heights are in EMU.
+-->
+<p:graphicFrame xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:nvGraphicFramePr>
+    <p:cNvPr id="{SHAPE_ID}" name="Table {N}"/>
+    <p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>
+    <p:nvPr/>
+  </p:nvGraphicFramePr>
+  <p:xfrm>
+    <a:off x="{X_EMU}" y="{Y_EMU}"/>
+    <a:ext cx="{W_EMU}" cy="{H_EMU}"/>
+  </p:xfrm>
+  <a:graphic>
+    <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">
+      <a:tbl>
+        <a:tblPr firstRow="1" bandRow="1"/>
+        <a:tblGrid>
+          <a:gridCol w="{COL_W_1}"/>
+          <a:gridCol w="{COL_W_2}"/>
+          <a:gridCol w="{COL_W_3}"/>
+        </a:tblGrid>
+        <!-- header row -->
+        <a:tr h="{ROW_H_HEADER}">
+          <a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" b="1"/><a:t>{H1}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>
+          <a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" b="1"/><a:t>{H2}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>
+          <a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" b="1"/><a:t>{H3}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>
+        </a:tr>
+        <!-- data row -->
+        <a:tr h="{ROW_H_BODY}">
+          <a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR"/><a:t>{C11}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>
+          <a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR"/><a:t>{C12}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>
+          <a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR"/><a:t>{C13}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>
+        </a:tr>
+        <!-- Repeat <a:tr>...</a:tr> for each data row. -->
+      </a:tbl>
+    </a:graphicData>
+  </a:graphic>
+</p:graphicFrame>

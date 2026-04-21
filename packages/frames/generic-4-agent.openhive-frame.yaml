@@ -1,0 +1,55 @@
+openhive_frame: 1
+name: 4-agent starter
+description: Lead coordinates a Researcher, Reviewer, and Writer. A safe default for most multi-step workflows.
+version: 1.0.0
+tags: [starter, generic]
+
+team:
+  name: Main
+  entry_agent_index: 0
+  allowed_skills: [pptx, docx, pdf]
+  agents:
+    - role: lead
+      label: Lead
+      persona_name: generic-lead
+      model: ""
+      system_prompt: ""
+      skills: []
+      position: { x: 400, y: 80 }
+      max_parallel: 1
+    - role: researcher
+      label: Researcher
+      persona_name: generic-researcher
+      model: ""
+      system_prompt: ""
+      skills: []
+      position: { x: 180, y: 300 }
+      max_parallel: 2
+    - role: reviewer
+      label: Reviewer
+      persona_name: generic-reviewer
+      model: ""
+      system_prompt: ""
+      skills: []
+      position: { x: 400, y: 300 }
+      max_parallel: 1
+    - role: writer
+      label: Writer
+      persona_name: generic-writer
+      model: ""
+      system_prompt: ""
+      skills: [pptx, docx, pdf]
+      position: { x: 620, y: 300 }
+      max_parallel: 1
+  edges:
+    - { source: 0, target: 1 }
+    - { source: 0, target: 2 }
+    - { source: 0, target: 3 }
+
+requires:
+  skills: [pptx, docx, pdf]
+  providers: []
+
+persona_assets: {}
+data_schema: []
+dashboard: null

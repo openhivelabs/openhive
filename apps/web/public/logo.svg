@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>OpenHive</title>
+  <defs>
+    <linearGradient id="hive" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+  <!-- three-cell honeycomb cluster -->
+  <path d="M20 8 L28 8 L32 14.93 L28 21.86 L20 21.86 L16 14.93 Z" fill="url(#hive)"/>
+  <path d="M36 8 L44 8 L48 14.93 L44 21.86 L36 21.86 L32 14.93 Z" fill="url(#hive)" opacity="0.85"/>
+  <path d="M28 21.86 L36 21.86 L40 28.79 L36 35.71 L28 35.71 L24 28.79 Z" fill="url(#hive)" opacity="0.7"/>
+  <path d="M12 21.86 L20 21.86 L24 28.79 L20 35.71 L12 35.71 L8 28.79 Z" fill="url(#hive)" opacity="0.55"/>
+  <path d="M44 21.86 L52 21.86 L56 28.79 L52 35.71 L44 35.71 L40 28.79 Z" fill="url(#hive)" opacity="0.55"/>
+  <path d="M20 35.71 L28 35.71 L32 42.64 L28 49.57 L20 49.57 L16 42.64 Z" fill="url(#hive)" opacity="0.4"/>
+  <path d="M36 35.71 L44 35.71 L48 42.64 L44 49.57 L36 49.57 L32 42.64 Z" fill="url(#hive)" opacity="0.4"/>
+</svg>

@@ -1,0 +1,46 @@
+{
+  "name": "@openhive/web",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 4483",
+    "build": "next build",
+    "start": "next start -p 4483",
+    "lint": "next lint",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "@types/js-yaml": "^4.0.9",
+    "@xyflow/react": "^12.10.2",
+    "better-sqlite3": "^12.9.0",
+    "clsx": "^2.1.1",
+    "cron-parser": "^5.5.0",
+    "fernet": "^0.3.3",
+    "js-yaml": "^4.1.1",
+    "jsonpath-plus": "^10.4.0",
+    "next": "^16.2.4",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-icons": "^5.6.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.2",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "jsdom": "^25.0.1",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,24 @@
+id: supabase
+name: Supabase
+icon: "⚡"
+brand: supabase
+# Drop the official full-color logo at apps/web/public/brands/supabase.{svg,png}
+# and it'll be used in place of the monochrome simple-icons mark.
+icon_url: /brands/supabase.webp
+description: Query Supabase databases, manage tables and projects via the official Supabase MCP server.
+command: npx
+args:
+  - "-y"
+  - "@supabase/mcp-server-supabase@latest"
+  - "--access-token"
+  - "{{access_token}}"
+env_template: {}
+inputs:
+  - key: access_token
+    label: Supabase Personal Access Token
+    type: secret
+    placeholder: sbp_xxxxxxxxxxxxxxxxxxxx
+    help_text: |
+      Create at https://supabase.com/dashboard/account/tokens.
+      The token grants Supabase Management API access for the projects you own.
+    required: true

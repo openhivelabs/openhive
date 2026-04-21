@@ -1,0 +1,64 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "https://excalidraw.com",
+  "elements": [
+    {"type":"text","id":"t1","x":180,"y":25,"width":520,"height":32,"text":"런 동작 방식 (델리게이션)","fontSize":26,"strokeColor":"#1e1e1e","textAlign":"left","verticalAlign":"top"},
+    {"type":"text","id":"t2","x":145,"y":62,"width":560,"height":18,"text":"'Researcher한테 받아와서 정리해' 가 응답이 되는 실제 경로","fontSize":14,"strokeColor":"#757575","textAlign":"left","verticalAlign":"top"},
+
+    {"type":"rectangle","id":"lnUser","x":60,"y":105,"width":110,"height":44,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","strokeColor":"#2563eb","strokeWidth":2,"boundElements":[{"type":"text","id":"lnUser_t"}]},
+    {"type":"text","id":"lnUser_t","x":60,"y":105,"width":110,"height":44,"text":"사용자","fontSize":16,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"lnUser"},
+    {"type":"line","id":"lnUserLine","x":115,"y":149,"width":0,"height":430,"points":[[0,0],[0,430]],"strokeColor":"#b0b0b0","strokeWidth":1,"strokeStyle":"dashed"},
+
+    {"type":"rectangle","id":"lnChat","x":200,"y":105,"width":110,"height":44,"roundness":{"type":3},"backgroundColor":"#d0bfff","fillStyle":"solid","strokeColor":"#8b5cf6","strokeWidth":2,"boundElements":[{"type":"text","id":"lnChat_t"}]},
+    {"type":"text","id":"lnChat_t","x":200,"y":105,"width":110,"height":44,"text":"채팅 탭","fontSize":15,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"lnChat"},
+    {"type":"line","id":"lnChatLine","x":255,"y":149,"width":0,"height":430,"points":[[0,0],[0,430]],"strokeColor":"#b0b0b0","strokeWidth":1,"strokeStyle":"dashed"},
+
+    {"type":"rectangle","id":"lnEngine","x":340,"y":105,"width":110,"height":44,"roundness":{"type":3},"backgroundColor":"#b2f2bb","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":2,"boundElements":[{"type":"text","id":"lnEngine_t"}]},
+    {"type":"text","id":"lnEngine_t","x":340,"y":105,"width":110,"height":44,"text":"엔진","fontSize":16,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"lnEngine"},
+    {"type":"line","id":"lnEngineLine","x":395,"y":149,"width":0,"height":430,"points":[[0,0],[0,430]],"strokeColor":"#b0b0b0","strokeWidth":1,"strokeStyle":"dashed"},
+
+    {"type":"rectangle","id":"lnCEO","x":480,"y":105,"width":110,"height":44,"roundness":{"type":3},"backgroundColor":"#ffd8a8","fillStyle":"solid","strokeColor":"#c2410c","strokeWidth":2,"boundElements":[{"type":"text","id":"lnCEO_t"}]},
+    {"type":"text","id":"lnCEO_t","x":480,"y":105,"width":110,"height":44,"text":"CEO (LLM)","fontSize":15,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"lnCEO"},
+    {"type":"line","id":"lnCEOLine","x":535,"y":149,"width":0,"height":430,"points":[[0,0],[0,430]],"strokeColor":"#b0b0b0","strokeWidth":1,"strokeStyle":"dashed"},
+
+    {"type":"rectangle","id":"lnRes","x":620,"y":105,"width":130,"height":44,"roundness":{"type":3},"backgroundColor":"#ffc9c9","fillStyle":"solid","strokeColor":"#c2410c","strokeWidth":2,"boundElements":[{"type":"text","id":"lnRes_t"}]},
+    {"type":"text","id":"lnRes_t","x":620,"y":105,"width":130,"height":44,"text":"Researcher (LLM)","fontSize":13,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"lnRes"},
+    {"type":"line","id":"lnResLine","x":685,"y":149,"width":0,"height":430,"points":[[0,0],[0,430]],"strokeColor":"#b0b0b0","strokeWidth":1,"strokeStyle":"dashed"},
+
+    {"type":"arrow","id":"m1","x":115,"y":170,"width":140,"height":0,"points":[[0,0],[140,0]],"strokeColor":"#1e1e1e","strokeWidth":2,"endArrowhead":"arrow","boundElements":[{"type":"text","id":"m1_t"}]},
+    {"type":"text","id":"m1_t","x":115,"y":170,"width":140,"height":18,"text":"프롬프트 전송","fontSize":14,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m1"},
+
+    {"type":"arrow","id":"m2","x":255,"y":200,"width":140,"height":0,"points":[[0,0],[140,0]],"strokeColor":"#1e1e1e","strokeWidth":2,"endArrowhead":"arrow","boundElements":[{"type":"text","id":"m2_t"}]},
+    {"type":"text","id":"m2_t","x":255,"y":200,"width":140,"height":18,"text":"POST /api/runs/stream","fontSize":12,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m2"},
+
+    {"type":"arrow","id":"m3","x":395,"y":230,"width":140,"height":0,"points":[[0,0],[140,0]],"strokeColor":"#15803d","strokeWidth":2,"endArrowhead":"arrow","boundElements":[{"type":"text","id":"m3_t"}]},
+    {"type":"text","id":"m3_t","x":395,"y":230,"width":140,"height":18,"text":"chat + 툴=[delegate_to]","fontSize":11,"strokeColor":"#15803d","textAlign":"center","verticalAlign":"middle","containerId":"m3"},
+
+    {"type":"arrow","id":"m4","x":535,"y":260,"width":-140,"height":0,"points":[[0,0],[-140,0]],"strokeColor":"#c2410c","strokeWidth":2,"endArrowhead":"arrow","strokeStyle":"dashed","boundElements":[{"type":"text","id":"m4_t"}]},
+    {"type":"text","id":"m4_t","x":395,"y":260,"width":140,"height":18,"text":"tool_call: delegate_to(Researcher)","fontSize":11,"strokeColor":"#c2410c","textAlign":"center","verticalAlign":"middle","containerId":"m4"},
+
+    {"type":"arrow","id":"m5","x":395,"y":290,"width":290,"height":0,"points":[[0,0],[290,0]],"strokeColor":"#15803d","strokeWidth":2,"endArrowhead":"arrow","boundElements":[{"type":"text","id":"m5_t"}]},
+    {"type":"text","id":"m5_t","x":395,"y":290,"width":290,"height":18,"text":"서브런 시작: chat(task)","fontSize":12,"strokeColor":"#15803d","textAlign":"center","verticalAlign":"middle","containerId":"m5"},
+
+    {"type":"arrow","id":"m6","x":685,"y":320,"width":-290,"height":0,"points":[[0,0],[-290,0]],"strokeColor":"#c2410c","strokeWidth":2,"endArrowhead":"arrow","strokeStyle":"dashed","boundElements":[{"type":"text","id":"m6_t"}]},
+    {"type":"text","id":"m6_t","x":395,"y":320,"width":290,"height":18,"text":"토큰 스트리밍: '0, 1, 1, 2, 3'","fontSize":12,"strokeColor":"#c2410c","textAlign":"center","verticalAlign":"middle","containerId":"m6"},
+
+    {"type":"arrow","id":"m7","x":395,"y":350,"width":140,"height":0,"points":[[0,0],[140,0]],"strokeColor":"#15803d","strokeWidth":2,"endArrowhead":"arrow","boundElements":[{"type":"text","id":"m7_t"}]},
+    {"type":"text","id":"m7_t","x":395,"y":350,"width":140,"height":18,"text":"tool_result를 히스토리에","fontSize":12,"strokeColor":"#15803d","textAlign":"center","verticalAlign":"middle","containerId":"m7"},
+
+    {"type":"arrow","id":"m8","x":535,"y":380,"width":-140,"height":0,"points":[[0,0],[-140,0]],"strokeColor":"#c2410c","strokeWidth":2,"endArrowhead":"arrow","strokeStyle":"dashed","boundElements":[{"type":"text","id":"m8_t"}]},
+    {"type":"text","id":"m8_t","x":395,"y":380,"width":140,"height":18,"text":"토큰 스트리밍 (합성)","fontSize":12,"strokeColor":"#c2410c","textAlign":"center","verticalAlign":"middle","containerId":"m8"},
+
+    {"type":"arrow","id":"m9","x":395,"y":420,"width":-140,"height":0,"points":[[0,0],[-140,0]],"strokeColor":"#1e1e1e","strokeWidth":2,"endArrowhead":"arrow","strokeStyle":"dashed","boundElements":[{"type":"text","id":"m9_t"}]},
+    {"type":"text","id":"m9_t","x":255,"y":420,"width":140,"height":18,"text":"SSE 이벤트 (실시간)","fontSize":12,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m9"},
+
+    {"type":"arrow","id":"m10","x":255,"y":455,"width":-140,"height":0,"points":[[0,0],[-140,0]],"strokeColor":"#1e1e1e","strokeWidth":2,"endArrowhead":"arrow","boundElements":[{"type":"text","id":"m10_t"}]},
+    {"type":"text","id":"m10_t","x":115,"y":455,"width":140,"height":18,"text":"버블 렌더링","fontSize":13,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m10"},
+
+    {"type":"rectangle","id":"note1","x":60,"y":500,"width":690,"height":70,"roundness":{"type":3},"backgroundColor":"#fff3bf","fillStyle":"solid","strokeColor":"#f59e0b","strokeWidth":1,"opacity":55,"boundElements":[{"type":"text","id":"note1_t"}]},
+    {"type":"text","id":"note1_t","x":60,"y":500,"width":690,"height":70,"text":"핵심 포인트: CEO의 LLM이 런타임에 delegate_to를 부름 — 하드코드된 그래프가 아님.\n조직도(보고선)는 assignee enum의 후보 리스트만 제한할 뿐.","fontSize":13,"strokeColor":"#92400e","textAlign":"center","verticalAlign":"middle","containerId":"note1"}
+  ],
+  "appState": {"viewBackgroundColor": "#ffffff", "gridSize": null},
+  "files": {}
+}
