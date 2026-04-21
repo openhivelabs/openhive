@@ -180,14 +180,14 @@ async function fire(task: Record<string, unknown>): Promise<void> {
       })
       seq += 1
       if (event.kind === 'run_finished') {
-        finishSession(event.session_id, {
+        await finishSession(event.session_id, {
           output:
             typeof event.data.output === 'string'
               ? (event.data.output as string)
               : null,
         })
       } else if (event.kind === 'run_error') {
-        finishSession(event.session_id, {
+        await finishSession(event.session_id, {
           error: String(event.data.error ?? 'error'),
         })
       }
@@ -195,7 +195,7 @@ async function fire(task: Record<string, unknown>): Promise<void> {
   } catch (exc) {
     console.error(`scheduler: runTeam raised for task ${taskId}`, exc)
     if (capturedSessionId) {
-      finishSession(capturedSessionId, { error: 'scheduler exception' })
+      await finishSession(capturedSessionId, { error: 'scheduler exception' })
     }
   }
 

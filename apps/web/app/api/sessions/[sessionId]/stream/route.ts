@@ -140,7 +140,7 @@ export async function GET(
             // 'running' — engine process died mid-flight. Mark it
             // interrupted so the UI stops spinning forever.
             if (meta && meta.status === 'running') {
-              try { finishSession(sessionId, { error: 'interrupted' }) }
+              try { await finishSession(sessionId, { error: 'interrupted' }) }
               catch { /* best-effort */ }
               meta = { ...meta, status: 'interrupted', error: 'interrupted' }
             }

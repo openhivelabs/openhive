@@ -143,7 +143,7 @@ async function driveSession(
     for await (const event of runTeam(team, goal, { teamSlugs, locale })) {
       if (handle.abort.signal.aborted) {
         if (capturedSessionId && dbStarted) {
-          sessionsStore.finishSession(capturedSessionId, { error: 'cancelled' })
+          await sessionsStore.finishSession(capturedSessionId, { error: 'cancelled' })
         }
         return
       }
@@ -181,16 +181,16 @@ async function driveSession(
           typeof event.data.output === 'string'
             ? (event.data.output as string)
             : null
-        sessionsStore.finishSession(event.session_id, { output })
+        await sessionsStore.finishSession(event.session_id, { output })
       } else if (event.kind === 'run_error') {
         const err = String(event.data.error ?? 'error')
-        sessionsStore.finishSession(event.session_id, { error: err })
+        await sessionsStore.finishSession(event.session_id, { error: err })
       }
     }
   } catch (exc) {
     if (capturedSessionId && dbStarted) {
       const err = exc instanceof Error ? exc.message : String(exc)
-      sessionsStore.finishSession(capturedSessionId, { error: err })
+      await sessionsStore.finishSession(capturedSessionId, { error: err })
     }
     if (!capturedSessionId) {
       readyErr(exc)

@@ -1,0 +1,137 @@
+/**
+ * Per-session async event writer with batching.
+ *
+ * Event lines enter a per-session FIFO buffer. A flush is triggered whenever
+ * the buffer reaches FLUSH_THRESHOLD entries OR a FLUSH_INTERVAL_MS timer
+ * elapses after the first pending enqueue — whichever comes first. Flushes
+ * for a given session are serialized via a chained promise so disk order
+ * matches enqueue order (preserving seq monotonicity).
+ *
+ * SSE fan-out is independent of this path: the engine pushes events to
+ * listener queues directly. Losing at most one batch's worth of pending
+ * lines on crash is acceptable; replay detects gaps via seq.
+ *
+ * Spec: docs/superpowers/specs/2026-04-22-event-write-batching.md
+ */
+import fs from 'node:fs'
+import fsp from 'node:fs/promises'
+import path from 'node:path'
+
+import { sessionsRoot } from '../paths'
+
+export const FLUSH_INTERVAL_MS = 100
+export const FLUSH_THRESHOLD = 10
+
+interface Queue {
+  buf: string[]
+  timer: NodeJS.Timeout | null
+  /** Chain of in-flight flushes. Each new flush awaits the previous one,
+   *  so append order on disk matches enqueue order even across concurrent
+   *  triggers (timer fires + threshold hit at the same tick). */
+  flushing: Promise<void>
+}
+
+const queues = new Map<string, Queue>()
+
+/** Resolver to plug in a custom path (tests); defaults to the real sessions
+ *  layout. Avoids a circular import against `../sessions.ts`. */
+let pathResolver: (sessionId: string) => string = (sessionId) =>
+  path.join(sessionsRoot(), sessionId, 'events.jsonl')
+
+/** For tests: override the events-file resolver. */
+export function __setPathResolver(fn: (sessionId: string) => string): void {
+  pathResolver = fn
+}
+
+function ensureQueue(sessionId: string): Queue {
+  let q = queues.get(sessionId)
+  if (!q) {
+    q = { buf: [], timer: null, flushing: Promise.resolve() }
+    queues.set(sessionId, q)
+  }
+  return q
+}
+
+/** Queue a single JSONL row (no trailing newline) for async append. */
+export function enqueueEvent(sessionId: string, rowJsonl: string): void {
+  const q = ensureQueue(sessionId)
+  q.buf.push(rowJsonl)
+
+  if (q.buf.length >= FLUSH_THRESHOLD) {
+    if (q.timer) {
+      clearTimeout(q.timer)
+      q.timer = null
+    }
+    void triggerFlush(sessionId)
+    return
+  }
+
+  if (!q.timer) {
+    q.timer = setTimeout(() => {
+      const cur = queues.get(sessionId)
+      if (cur) cur.timer = null
+      void triggerFlush(sessionId)
+    }, FLUSH_INTERVAL_MS)
+    // Don't block process shutdown on the timer; flushAll() drains on SIGTERM.
+    q.timer.unref?.()
+  }
+}
+
+function triggerFlush(sessionId: string): Promise<void> {
+  const q = queues.get(sessionId)
+  if (!q) return Promise.resolve()
+  const next = q.flushing.then(() => doFlush(sessionId))
+  q.flushing = next.catch(() => {
+    /* swallow — errors logged below; don't poison the chain */
+  })
+  return next
+}
+
+async function doFlush(sessionId: string): Promise<void> {
+  const q = queues.get(sessionId)
+  if (!q || q.buf.length === 0) return
+  const lines = q.buf
+  q.buf = []
+  const payload = `${lines.join('\n')}\n`
+  const filePath = pathResolver(sessionId)
+  try {
+    await fsp.mkdir(path.dirname(filePath), { recursive: true })
+    await fsp.appendFile(filePath, payload, 'utf8')
+  } catch (exc) {
+    // Fallback: try to write synchronously so we don't silently lose data.
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.appendFileSync(filePath, payload, 'utf8')
+    } catch (exc2) {
+      console.error('event-writer: flush failed', sessionId, exc, exc2)
+    }
+  }
+}
+
+/** Drain any pending events for one session. Resolves once the last
+ *  currently-queued batch has hit disk. */
+export async function flushSession(sessionId: string): Promise<void> {
+  const q = queues.get(sessionId)
+  if (!q) return
+  if (q.timer) {
+    clearTimeout(q.timer)
+    q.timer = null
+  }
+  await triggerFlush(sessionId)
+  // Await the chained flush so everything enqueued up to this call is durable.
+  await q.flushing
+}
+
+/** Drain all sessions. Used from the SIGTERM hook. */
+export async function flushAll(): Promise<void> {
+  const ids = [...queues.keys()]
+  await Promise.all(ids.map((id) => flushSession(id)))
+}
+
+/** Test helper: reset in-memory state. */
+export function __resetForTests(): void {
+  for (const q of queues.values()) {
+    if (q.timer) clearTimeout(q.timer)
+  }
+  queues.clear()
+}

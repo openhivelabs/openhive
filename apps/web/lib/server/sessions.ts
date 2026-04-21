@@ -19,6 +19,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { artifactsRoot, sessionsRoot } from './paths'
+import { enqueueEvent, flushSession } from './sessions/event-writer'
 
 export interface SessionMeta {
   id: string
@@ -139,19 +140,24 @@ export function startSession(
   fs.closeSync(fs.openSync(sessionEventsPath(sessionId), 'a'))
 }
 
-export function finishSession(
+export async function finishSession(
   sessionId: string,
   opts: { output?: string | null; error?: string | null } = {},
-): void {
-  finalizeSession(sessionId, opts)
+): Promise<void> {
+  await finalizeSession(sessionId, opts)
 }
 
 /** Writes transcript.jsonl + updates meta.json with final status. Safe to call
- *  multiple times (last one wins). */
-export function finalizeSession(
+ *  multiple times (last one wins). Awaits the per-session event flusher so
+ *  no buffered events are lost when the transcript is built. */
+export async function finalizeSession(
   sessionId: string,
   opts: { output?: string | null; error?: string | null } = {},
-): void {
+): Promise<void> {
+  // Drain any in-flight batched events before we read events.jsonl to build
+  // the transcript.
+  await flushSession(sessionId)
+
   const meta = readMeta(sessionId)
   if (!meta) return
 
@@ -186,7 +192,6 @@ export function finalizeSession(
 // ---------- events ----------
 
 export function appendSessionEvent(input: AppendEventInput): void {
-  fs.mkdirSync(sessionDir(input.sessionId), { recursive: true })
   const row = {
     seq: input.seq,
     ts: input.ts,
@@ -197,7 +202,7 @@ export function appendSessionEvent(input: AppendEventInput): void {
     tool_name: input.toolName,
     data_json: JSON.stringify(input.data),
   }
-  fs.appendFileSync(sessionEventsPath(input.sessionId), `${JSON.stringify(row)}\n`, 'utf8')
+  enqueueEvent(input.sessionId, JSON.stringify(row))
 }
 
 export function eventsForSession(sessionId: string): StoredEventRow[] {
@@ -283,12 +288,12 @@ export function listSessionsFor(opts: {
 
 /** Any session whose meta.json still says status='running' on boot was in flight
  *  when the process died. Mark them interrupted and finalize transcript. */
-export function markOrphanedSessionsInterrupted(): number {
+export async function markOrphanedSessionsInterrupted(): Promise<number> {
   let n = 0
   for (const id of listSessionIds()) {
     const meta = readMeta(id)
     if (!meta || meta.status !== 'running') continue
-    finalizeSession(id, { error: 'interrupted' })
+    await finalizeSession(id, { error: 'interrupted' })
     n += 1
   }
   return n
