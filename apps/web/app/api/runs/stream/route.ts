@@ -64,6 +64,15 @@ export async function POST(req: Request) {
     })
   }
 
+  let detach: (() => void) | null = null
+  const cleanup = () => {
+    if (detach) {
+      detach()
+      detach = null
+    }
+  }
+  req.signal.addEventListener('abort', cleanup)
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const attached = attach(runId)
@@ -72,13 +81,15 @@ export async function POST(req: Request) {
         controller.close()
         return
       }
-      for (const ev of attached.snapshot) controller.enqueue(sseFrame(ev))
+      detach = attached.detach
+      for (const ev of attached.snapshot) {
+        try { controller.enqueue(sseFrame(ev)) } catch { cleanup(); return }
+      }
       let timer: NodeJS.Timeout | null = null
       const resetTimer = () => {
         if (timer) clearTimeout(timer)
         timer = setTimeout(() => {
-          controller.enqueue(keepaliveFrame())
-          resetTimer()
+          try { controller.enqueue(keepaliveFrame()); resetTimer() } catch { cleanup() }
         }, HEARTBEAT_MS)
       }
       resetTimer()
@@ -89,11 +100,16 @@ export async function POST(req: Request) {
           controller.enqueue(sseFrame(item))
           resetTimer()
         }
+      } catch {
+        /* client gone */
       } finally {
         if (timer) clearTimeout(timer)
+        cleanup()
       }
-      controller.enqueue(doneFrame())
-      controller.close()
+      try { controller.enqueue(doneFrame()); controller.close() } catch {}
+    },
+    cancel() {
+      cleanup()
     },
   })
 

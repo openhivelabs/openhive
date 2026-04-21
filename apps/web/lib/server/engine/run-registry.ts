@@ -52,10 +52,15 @@ export function isActive(runId: string): boolean {
   return state().active.has(runId)
 }
 
-/** Attach to a run: snapshot past events + subscribe to future ones. */
+/** Attach to a run: snapshot past events + subscribe to future ones.
+ *  `detach()` removes the listener queue from the handle so it stops receiving
+ *  pushes — callers MUST invoke it when their consumer goes away (client
+ *  disconnect, error, etc.), otherwise event buffers leak memory for every
+ *  browser tab that ever connected. */
 export function attach(runId: string): {
   snapshot: Event[]
   queue: AsyncPushQueue<Envelope>
+  detach: () => void
 } | null {
   const h = getHandle(runId)
   if (!h) return null
@@ -63,10 +68,15 @@ export function attach(runId: string): {
   const snapshot = [...h.events]
   if (h.finished) {
     q.push(END)
-  } else {
-    h.listeners.add(q)
+    return { snapshot, queue: q, detach: () => {} }
   }
-  return { snapshot, queue: q }
+  h.listeners.add(q)
+  const detach = () => {
+    h.listeners.delete(q)
+    // Wake any pending pop so the consumer's loop can finish.
+    q.push(END)
+  }
+  return { snapshot, queue: q, detach }
 }
 
 export async function stop(runId: string): Promise<boolean> {

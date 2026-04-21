@@ -19,7 +19,7 @@ function doneFrame(): Uint8Array {
 }
 
 export async function GET(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ runId: string }> },
 ) {
   const { runId } = await ctx.params
@@ -34,17 +34,39 @@ export async function GET(
     }
   }
 
+  // Capture detach outside start() so both cancel() and req.signal can call it.
+  let detach: (() => void) | null = null
+  const onAbort = () => {
+    if (detach) {
+      detach()
+      detach = null
+    }
+  }
+  req.signal.addEventListener('abort', onAbort)
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const attached = attach(runId)
       if (attached) {
-        for (const ev of attached.snapshot) controller.enqueue(sseFrame(ev))
+        detach = attached.detach
+        for (const ev of attached.snapshot) {
+          try {
+            controller.enqueue(sseFrame(ev))
+          } catch {
+            onAbort()
+            return
+          }
+        }
         let timer: NodeJS.Timeout | null = null
         const resetTimer = () => {
           if (timer) clearTimeout(timer)
           timer = setTimeout(() => {
-            controller.enqueue(keepaliveFrame())
-            resetTimer()
+            try {
+              controller.enqueue(keepaliveFrame())
+              resetTimer()
+            } catch {
+              onAbort()
+            }
           }, HEARTBEAT_MS)
         }
         resetTimer()
@@ -55,28 +77,43 @@ export async function GET(
             controller.enqueue(sseFrame(item))
             resetTimer()
           }
+        } catch {
+          // Client disconnected mid-enqueue. Just fall through to finally.
         } finally {
           if (timer) clearTimeout(timer)
+          onAbort()
         }
       } else {
         // Replay from DB.
-        for (const row of eventsFor(runId)) {
-          controller.enqueue(
-            sseFrame({
-              kind: row.kind,
-              ts: row.ts,
-              run_id: runId,
-              depth: row.depth,
-              node_id: row.node_id,
-              tool_call_id: row.tool_call_id,
-              tool_name: row.tool_name,
-              data: row.data,
-            }),
-          )
+        try {
+          for (const row of eventsFor(runId)) {
+            controller.enqueue(
+              sseFrame({
+                kind: row.kind,
+                ts: row.ts,
+                run_id: runId,
+                depth: row.depth,
+                node_id: row.node_id,
+                tool_call_id: row.tool_call_id,
+                tool_name: row.tool_name,
+                data: row.data,
+              }),
+            )
+          }
+        } catch {
+          /* client gone, drop */
         }
       }
-      controller.enqueue(doneFrame())
-      controller.close()
+      try {
+        controller.enqueue(doneFrame())
+        controller.close()
+      } catch {
+        /* already closed */
+      }
+      req.signal.removeEventListener('abort', onAbort)
+    },
+    cancel() {
+      onAbort()
     },
   })
 
