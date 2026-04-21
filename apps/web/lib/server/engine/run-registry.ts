@@ -53,6 +53,18 @@ export function isActive(runId: string): boolean {
   return state().active.has(runId)
 }
 
+/** Forcibly evict a handle from the registry. Used when the stream handler
+ *  detects a zombie (registry says active but no event in a long time —
+ *  engine generator died from HMR or an uncaught rejection). After this,
+ *  `isActive()` flips to false so the replay/reconcile path takes over. */
+export function forceEvict(runId: string): void {
+  const h = state().active.get(runId)
+  if (!h) return
+  h.finished = true
+  for (const q of h.listeners) q.push(END)
+  state().active.delete(runId)
+}
+
 /** Attach to a run: snapshot past events + subscribe to future ones.
  *  `detach()` removes the listener queue from the handle so it stops receiving
  *  pushes — callers MUST invoke it when their consumer goes away (client

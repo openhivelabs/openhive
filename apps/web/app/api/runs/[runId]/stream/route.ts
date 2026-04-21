@@ -1,6 +1,14 @@
-import { attach, END, isActive } from '@/lib/server/engine/run-registry'
-import { eventsFor } from '@/lib/server/runs-store'
+import { attach, END, forceEvict, isActive } from '@/lib/server/engine/run-registry'
+import { eventsFor, finishRun } from '@/lib/server/runs-store'
+import { finalizeSession } from '@/lib/server/sessions'
 import { getDb } from '@/lib/server/db'
+
+// An "active" run with no event for this long is a zombie — the engine
+// generator died silently (HMR, uncaught rejection) but the registry
+// still thinks it's live. We evict + reconcile on the next reconnect.
+// We exclude user_question as the last event because those legitimately
+// wait on human input for arbitrary durations.
+const ZOMBIE_THRESHOLD_MS = 120_000
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -24,6 +32,28 @@ export async function GET(
   ctx: { params: Promise<{ runId: string }> },
 ) {
   const { runId } = await ctx.params
+  if (isActive(runId)) {
+    // Staleness sniff: if the registry thinks this run is live but no
+    // event has been appended in >120s and the last event wasn't an
+    // ask_user, the engine generator is effectively dead. Evict so the
+    // replay/reconcile path can mark it interrupted.
+    try {
+      const latest = getDb()
+        .prepare(
+          `SELECT ts, kind FROM run_events WHERE run_id = ?
+             ORDER BY seq DESC LIMIT 1`,
+        )
+        .get(runId) as { ts: number; kind: string } | undefined
+      if (latest) {
+        const ageMs = Date.now() - latest.ts * 1000
+        if (ageMs > ZOMBIE_THRESHOLD_MS && latest.kind !== 'user_question') {
+          forceEvict(runId)
+        }
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
   if (!isActive(runId)) {
     // Finished or unknown — replay from DB. 404 only when neither.
     const events = eventsFor(runId)
@@ -110,11 +140,23 @@ export async function GET(
             (r) => r.kind === 'run_finished' || r.kind === 'run_error',
           )
           if (!alreadyTerminal) {
-            const row = getDb()
+            let row = getDb()
               .prepare('SELECT status, output, error FROM runs WHERE id = ?')
               .get(runId) as
               | { status: string; output: string | null; error: string | null }
               | undefined
+            // Zombie reconciliation: the engine isn't running this run
+            // (isActive=false checked above) but the DB still says
+            // 'running' — means the engine process died mid-flight and
+            // nothing updated the status. Mark it interrupted here so
+            // the UI stops spinning forever.
+            if (row && row.status === 'running') {
+              try {
+                finishRun(runId, { error: 'interrupted' })
+                finalizeSession(runId, { error: 'interrupted' })
+              } catch { /* best-effort */ }
+              row = { status: 'error', output: null, error: 'interrupted' }
+            }
             if (row && row.status !== 'running') {
               controller.enqueue(
                 sseFrame({
