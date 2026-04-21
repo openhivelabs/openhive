@@ -14,6 +14,7 @@
 
 import { CLIENT_ID } from '../auth/claude'
 import { getAccountLabel, loadToken, saveToken } from '../tokens'
+import { AnthropicCachingStrategy } from './caching'
 import type { ChatMessage, ToolCall, ToolSpec } from './types'
 
 const MESSAGES_URL = 'https://api.anthropic.com/v1/messages?beta=true'
@@ -131,6 +132,8 @@ interface AnthropicMessage {
   content: string | AnthropicBlock[]
 }
 
+const cachingStrategy = new AnthropicCachingStrategy()
+
 function splitSystem(
   messages: ChatMessage[],
 ): { system: string | null; out: AnthropicMessage[] } {
@@ -182,24 +185,6 @@ function splitSystem(
   return { system, out }
 }
 
-function toolsToAnthropic(tools: ToolSpec[] | undefined): unknown[] | null {
-  if (!tools || tools.length === 0) return null
-  return tools.map((t, i) => {
-    const block: Record<string, unknown> = {
-      name: t.function.name,
-      description: t.function.description ?? '',
-      input_schema: t.function.parameters ?? { type: 'object', properties: {} },
-    }
-    // Anthropic cache_control applied to the LAST tool caches the entire
-    // tools + system prefix. Per-turn tool sets are stable within a node,
-    // so this hits hard on long conversations.
-    if (i === tools.length - 1) {
-      block.cache_control = { type: 'ephemeral' }
-    }
-    return block
-  })
-}
-
 // -------- streaming --------
 
 /** Parse a text/event-stream body into discrete SSE `data:` JSON events. */
@@ -243,45 +228,17 @@ export async function* streamMessages(
   const providerId = opts.providerId ?? 'claude-code'
   const access = await getAccessToken(providerId)
   const { system, out } = splitSystem(opts.messages)
-  const tools = toolsToAnthropic(opts.tools)
 
-  const payload: Record<string, unknown> = {
-    model: opts.model,
+  // Caching strategy owns the payload shape — cache_control markers on
+  // (system, tools[last], messages[last]) land here without touching
+  // the stream loop below.
+  const payload = cachingStrategy.applyToRequest({
+    system,
     messages: out,
-    max_tokens: opts.maxTokens ?? 4096,
-    stream: true,
-  }
-  if (system) {
-    // Wrap system as a content-block array so we can attach cache_control.
-    // A single ephemeral marker here caches the full system-prompt prefix
-    // (persona + team outline + relay rules + skill index) across turns.
-    payload.system = [
-      { type: 'text', text: system, cache_control: { type: 'ephemeral' } },
-    ]
-  }
-  if (tools) payload.tools = tools
-
-  // Mark the last conversation message as a cache breakpoint too. Next turn's
-  // prefix (…through this message) is identical to what we're sending now, so
-  // the prior turn's cache write becomes this turn's cache read. Anthropic
-  // allows 4 breakpoints; we use tools + system + last-message = 3.
-  if (out.length > 0) {
-    const last = out[out.length - 1]!
-    if (typeof last.content === 'string') {
-      last.content = [
-        {
-          type: 'text',
-          text: last.content,
-          cache_control: { type: 'ephemeral' },
-        } as AnthropicBlock & { cache_control: { type: 'ephemeral' } },
-      ]
-    } else if (Array.isArray(last.content) && last.content.length > 0) {
-      const tail = last.content[last.content.length - 1]!
-      ;(tail as AnthropicBlock & { cache_control?: unknown }).cache_control = {
-        type: 'ephemeral',
-      }
-    }
-  }
+    tools: opts.tools && opts.tools.length > 0 ? opts.tools : null,
+    model: opts.model,
+    maxTokens: opts.maxTokens ?? 4096,
+  })
 
   const resp = await fetch(MESSAGES_URL, {
     method: 'POST',

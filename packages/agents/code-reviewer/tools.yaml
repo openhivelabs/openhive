@@ -1,0 +1,7 @@
+skills: []
+mcp: []
+team_data:
+  read: true
+  write: false
+knowledge_exposure: summary
+notes: "Code reviewer. Reports bugs/security/convention issues; never modifies code."

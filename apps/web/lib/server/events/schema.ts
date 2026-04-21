@@ -24,6 +24,7 @@ export type EventKind =
   | 'user_answered'
   | 'user_message'
   | 'turn_finished'
+  | 'todos_changed'
 
 export interface Event {
   kind: EventKind

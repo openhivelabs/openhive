@@ -1,0 +1,18 @@
+id: tavily
+name: Tavily Search
+icon: "🔎"
+brand: tavily
+description: AI-optimised web search with built-in answer summarisation. Great for research agents.
+command: npx
+args: ["-y", "tavily-mcp"]
+env_template:
+  TAVILY_API_KEY: "{{api_key}}"
+inputs:
+  - key: api_key
+    label: Tavily API Key
+    type: secret
+    placeholder: tvly-xxxxxxxxxxxxxxxxxxxx
+    help_text: |
+      Sign up at https://tavily.com and create an API key in the dashboard.
+      The free tier includes a generous monthly search quota.
+    required: true

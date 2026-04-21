@@ -14,6 +14,10 @@ import traceback
 
 SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_ROOT))
+# _lib lives one level above packages/skills/pdf — at packages/skills/_lib.
+sys.path.insert(0, str(SKILL_ROOT.parent))
+
+from _lib.verify import EmitError, check_file, emit_error, emit_success  # noqa: E402
 
 
 def main() -> int:
@@ -23,10 +27,29 @@ def main() -> int:
     args = ap.parse_args()
 
     try:
+        return _run(args)
+    except EmitError as e:
+        emit_error(e.code, e.message, e.suggestion)
+        return 1  # unreachable; emit_error exits
+    except Exception as e:  # last-resort structured failure
+        emit_error(
+            "unexpected_error",
+            f"{type(e).__name__}: {e}",
+            "see stderr for traceback; fix the underlying exception and retry",
+        )
+        return 1
+
+
+def _run(args: argparse.Namespace) -> int:
+    try:
         spec = _load_spec(args.spec)
     except Exception as e:
-        _fail(f"failed to load spec: {e}")
-        return 1
+        raise EmitError(
+            "bad_spec",
+            f"failed to load spec: {e}",
+            "check that --spec points to a valid JSON file or that stdin "
+            "contains a well-formed JSON spec",
+        ) from e
 
     try:
         from dataclasses import replace as _dc_replace
@@ -38,14 +61,20 @@ def main() -> int:
         from lib.spec import SpecError, validate
         from lib.themes import get_theme
     except ImportError as e:
-        _fail(f"missing dependency: {e}. Run: pip install reportlab pypdf Pillow")
-        return 1
+        raise EmitError(
+            "missing_dependency",
+            f"missing dependency: {e}",
+            "run: pip install reportlab pypdf Pillow",
+        ) from e
 
     try:
         warnings = validate(spec)
     except SpecError as e:
-        _fail(str(e))
-        return 1
+        raise EmitError(
+            "bad_spec",
+            str(e),
+            "fix the spec validation error described in the message and retry",
+        ) from e
 
     meta = spec.get("meta") or {}
     theme = get_theme(meta.get("theme"), meta.get("theme_overrides"))
@@ -78,30 +107,50 @@ def main() -> int:
         try:
             story.extend(renderer(block, theme, ctx))
         except Exception as e:
-            _fail(f"block[{i}] ({block['type']}): render failed: {e}\n"
-                  + traceback.format_exc())
-            return 1
+            sys.stderr.write(traceback.format_exc())
+            raise EmitError(
+                "render_failed",
+                f"block[{i}] ({block['type']}): render failed: {e}",
+                "inspect the indicated block in the spec; common causes "
+                "are malformed table rows, bad image paths, or unsupported "
+                "fields",
+            ) from e
 
     try:
         doc.build(story, onFirstPage=_make_page_decorator(theme),
                   onLaterPages=_make_page_decorator(theme))
     except Exception as e:
-        _fail(f"build failed: {e}\n{traceback.format_exc()}")
-        return 1
+        sys.stderr.write(traceback.format_exc())
+        raise EmitError(
+            "build_failed",
+            f"build failed: {e}",
+            "check that page size / margins leave room for the content; "
+            "very tall blocks or oversized images can abort a build",
+        ) from e
 
     # pair .spec.json for edit round-trip
     spec_out = out.with_suffix(out.suffix + ".spec.json")
     spec_out.write_text(json.dumps(spec, ensure_ascii=False, indent=2),
                         encoding="utf-8")
 
-    print(json.dumps({
-        "ok": True,
-        "path": str(out),
-        "spec_path": str(spec_out),
-        "blocks": len(spec["blocks"]),
-        "theme": theme.name,
-        "warnings": warnings,
-    }, ensure_ascii=False))
+    # self-check: a valid PDF is comfortably over 1KB
+    check_file(str(out), min_bytes=1000)
+
+    emit_success(
+        files=[
+            {
+                "name": out.name,
+                "path": str(out),
+                "mime": "application/pdf",
+            },
+            {
+                "name": spec_out.name,
+                "path": str(spec_out),
+                "mime": "application/json",
+            },
+        ],
+        warnings=warnings,
+    )
     return 0
 
 
@@ -126,10 +175,6 @@ def _load_spec(path: str | None) -> dict:
         with open(pathlib.Path(path).expanduser(), "r", encoding="utf-8") as f:
             return json.load(f)
     return json.load(sys.stdin)
-
-
-def _fail(msg: str) -> None:
-    print(json.dumps({"ok": False, "error": msg}), file=sys.stdout)
 
 
 if __name__ == "__main__":

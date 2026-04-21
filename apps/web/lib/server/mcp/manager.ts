@@ -16,6 +16,7 @@ import * as mcpConfig from './config'
 
 const SPAWN_TIMEOUT_MS = 30_000
 const CALL_TIMEOUT_MS = 60_000
+const MCP_RESULT_MAX_CHARS = 20_000
 
 interface ToolInfo {
   name: string
@@ -172,10 +173,21 @@ export async function callTool(
     else pieces.push(JSON.stringify(block))
   }
   const body = pieces.join('\n')
+  const capped = capMcpBody(body)
   if ((result as { isError?: boolean }).isError) {
-    return `ERROR from ${name}__${toolName}: ${body || 'unknown error'}`
+    return `ERROR from ${name}__${toolName}: ${capped || 'unknown error'}`
   }
-  return body
+  return capped
+}
+
+export function capMcpBody(body: string): string {
+  if (body.length <= MCP_RESULT_MAX_CHARS) return body
+  const head = body.slice(0, MCP_RESULT_MAX_CHARS)
+  return (
+    `${head}\n\n[openhive:mcp-truncated] Response was ${body.length} chars; ` +
+    `showing first ${MCP_RESULT_MAX_CHARS}. Narrow the query ` +
+    `(pagination, filter, search term) and call again if more is needed.`
+  )
 }
 
 export async function restart(name: string): Promise<void> {

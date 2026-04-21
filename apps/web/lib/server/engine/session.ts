@@ -36,6 +36,7 @@ import {
 } from '../agents/runtime'
 import {
   getSkill,
+  matchSkillHints,
   type SkillDef,
 } from '../skills/loader'
 import {
@@ -44,6 +45,7 @@ import {
   runSkillScript,
 } from '../skills/runner'
 import { toolsToOpenAI, type Tool } from '../tools/base'
+import { webFetchTool } from '../tools/webfetch'
 import type { ChatMessage } from '../providers/types'
 
 // Guard defaults + hard ceilings.
@@ -53,7 +55,40 @@ export const MAX_ASK_USER_PER_RUN = 3
 export const HARD_MAX_TOOL_ROUNDS = 30
 export const HARD_MAX_DEPTH = 8
 
+/** Tool names that mutate run-scoped state (delegation tree, ask_user
+ *  counter, todos) — these must execute serially. Every other tool (MCP,
+ *  skill helpers, custom handlers) is parallel-safe in a single turn. */
+export const SERIAL_TOOL_NAMES = new Set<string>([
+  'delegate_to',
+  'delegate_parallel',
+  'ask_user',
+  'set_todos',
+  'add_todo',
+  'complete_todo',
+])
+
+/** Partition tool_calls into consecutive serial/parallel runs. Adjacent
+ *  same-kind calls collapse into one run; the order inside each run is
+ *  preserved so provider history remains deterministic. */
+export function splitToolRuns<T extends { function: { name: string } }>(
+  calls: T[],
+): { serial: boolean; items: T[] }[] {
+  const runs: { serial: boolean; items: T[] }[] = []
+  for (const tc of calls) {
+    const serial = SERIAL_TOOL_NAMES.has(tc.function.name)
+    const last = runs[runs.length - 1]
+    if (last && last.serial === serial) last.items.push(tc)
+    else runs.push({ serial, items: [tc] })
+  }
+  return runs
+}
+
 // session_id → counters kept on globalThis so HMR doesn't drop in-flight runs.
+export interface TodoItem {
+  id: string
+  text: string
+  done: boolean
+}
 interface RunState {
   askUser: Map<string, number>
   teamSlugs: Map<string, [string, string]>
@@ -64,6 +99,8 @@ interface RunState {
   readSkillFileTotal: Map<string, number>
   // sessionId → set of `{skill}:{path}` already read. Phase C3 dedupe.
   readSkillFileSeen: Map<string, Set<string>>
+  // sessionId → ordered todo list maintained by the Lead via native tools.
+  todos: Map<string, TodoItem[]>
 }
 
 // Phase C1: Cap per-(parent→child) delegations within a run. A parent re-
@@ -89,6 +126,7 @@ function state(): RunState {
       delegations: new Map(),
       readSkillFileTotal: new Map(),
       readSkillFileSeen: new Map(),
+      todos: new Map(),
     }
   }
   // HMR-safe: if an older incarnation initialised the global without a newer
@@ -97,6 +135,7 @@ function state(): RunState {
   if (!s.delegations) s.delegations = new Map()
   if (!s.readSkillFileTotal) s.readSkillFileTotal = new Map()
   if (!s.readSkillFileSeen) s.readSkillFileSeen = new Map()
+  if (!s.todos) s.todos = new Map()
   return s
 }
 
@@ -223,6 +262,8 @@ export function activeRunCapacity(): { inUse: number; total: number } {
 
 import * as mcpManagerImpl from '../mcp/manager'
 import type { getTools as getMcpTools } from '../mcp/manager'
+import { getTeamMcpTools } from './mcp-tools-cache'
+import { compactHistory } from './history-window'
 
 type ToolInfo = Awaited<ReturnType<typeof getMcpTools>>[number]
 
@@ -311,6 +352,7 @@ export async function* runTeam(
     }
     state().readSkillFileTotal.delete(sessionId)
     state().readSkillFileSeen.delete(sessionId)
+    state().todos.delete(sessionId)
     errors.clearSessionFailures(sessionId)
     sem.release()
   }
@@ -426,10 +468,14 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
       tools.push(delegateParallelTool(team, node))
     }
   }
-  if (depth === 0) tools.push(askUserTool())
+  if (depth === 0) {
+    tools.push(askUserTool())
+    tools.push(...todoTools(sessionId))
+  }
   if (teamSlugs) {
     tools.push(...teamDataTools(teamSlugs, true))
   }
+  tools.push(webFetchTool())
 
   // Skills: typed get a structured tool; agent-format go through activate/read/run.
   // team.allowed_skills is an OPTIONAL whitelist. If it's undefined or empty,
@@ -458,23 +504,22 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   }
 
   // MCP: per-server get_tools, wrap each as <server>__<tool>. A misconfigured
-  // server surfaces a tool_result error but doesn't kill the run.
+  // server surfaces a tool_result error but doesn't kill the run. The
+  // (teamId, sorted servers) cache means sibling/descendant nodes in the
+  // same session reuse the already-resolved tool list instead of re-wrapping.
   const effectiveMcp = effectiveMcpServers(
     team.allowed_mcp_servers ?? [],
     persona,
   )
-  for (const serverName of effectiveMcp) {
-    let mcpTools: ToolInfo[]
-    try {
-      mcpTools = await mcpManager().getTools(serverName)
-    } catch (exc) {
+  const teamMcp = await getTeamMcpTools(team.id, effectiveMcp, (s) =>
+    mcpManager().getTools(s),
+  )
+  for (const { serverName, tools: mcpTools, error } of teamMcp) {
+    if (error) {
       yield makeEvent(
         'tool_result',
         sessionId,
-        {
-          content: `MCP server '${serverName}' unavailable: ${exc instanceof Error ? exc.message : String(exc)}`,
-          is_error: true,
-        },
+        { content: `MCP server '${serverName}' unavailable: ${error}`, is_error: true },
         { depth, node_id: node.id, tool_name: `${serverName}__init` },
       )
       continue
@@ -489,27 +534,53 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   const teamSection = describeTeamForAgent(team, node.id)
   const hasSubs = subs.length > 0
   const relaySection = buildRelaySection(depth, hasSubs)
-  const systemPrompt = composeSystemPrompt(
-    personaBody,
-    agentSkills,
-    teamSection + (relaySection ? '\n' + relaySection : ''),
-  )
+  const staticTeamBlock = teamSection + (relaySection ? '\n' + relaySection : '')
+  // Skill auto-hint: match the incoming task once against frontmatter triggers
+  // so the first turn's system prompt nudges the LLM toward relevant skills.
+  // We only inject hints on turn 1 — after that, the LLM has already chosen.
+  const hintedSkills = matchSkillHints(task, agentSkills)
+  const hintsBlock = renderSkillHints(hintedSkills)
+  const buildSystemPrompt = (turn: number): string => {
+    const todos = depth === 0 ? state().todos.get(sessionId) ?? [] : []
+    const todosBlock = renderTodosSection(todos)
+    const showHints = turn === 1 && hintsBlock.length > 0
+    const prefix =
+      (todosBlock ? todosBlock + '\n' : '') +
+      (showHints ? hintsBlock + '\n' : '')
+    const teamBlock = prefix ? prefix + staticTeamBlock : staticTeamBlock
+    return composeSystemPrompt(personaBody, agentSkills, teamBlock)
+  }
   tools.push(...makePersonaTools(persona))
 
   const history: ChatMessage[] = externalHistory ?? []
   history.push({ role: 'user', content: task })
+
+  // History sliding-window: Infinity keeps the feature inert by default so
+  // existing sessions see byte-identical prompts. Nodes can opt in later by
+  // surfacing a finite window via persona config.
+  const historyWindow = Number.POSITIVE_INFINITY
+  const summariseHistory = async (_msgs: ChatMessage[]): Promise<string> => ''
 
   let rounds = 0
   while (true) {
     rounds += 1
     if (rounds > maxRounds) break
 
+    // Only pays when the node has opted into a finite window.
+    if (Number.isFinite(historyWindow)) {
+      const next = await compactHistory(history, historyWindow, summariseHistory)
+      if (next !== history) {
+        history.length = 0
+        history.push(...next)
+      }
+    }
+
     let turnDone = false
     for await (const ev of streamTurn({
       sessionId,
       team,
       node,
-      systemPrompt,
+      systemPrompt: buildSystemPrompt(rounds),
       history,
       tools,
       depth,
@@ -645,7 +716,15 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       tool_calls: toolCallsForHistory,
     })
 
-    for (const tc of toolCallsForHistory) {
+    // Split tool_calls into serial-vs-parallel runs. Tools that mutate
+    // run-scoped state (delegation, ask_user, todo) stay serial; everything
+    // else (MCP, skills, custom) runs concurrently. History is always pushed
+    // in original tool_call order so provider payloads stay deterministic.
+    type ExecResult = { content: string; isError: boolean }
+    type TC = (typeof toolCallsForHistory)[number]
+    const runs = splitToolRuns<TC>(toolCallsForHistory)
+
+    const executeOne = async function* (tc: TC): AsyncGenerator<Event, ExecResult> {
       let parsedArgs: Record<string, unknown> = {}
       try {
         parsedArgs = tc.function.arguments
@@ -734,27 +813,36 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
         { content, is_error: isError },
         { depth, node_id: node.id, tool_call_id: tc.id, tool_name: tc.function.name },
       )
+      if (!isError && TODO_TOOL_NAMES.has(tc.function.name)) {
+        yield makeEvent(
+          'todos_changed',
+          sessionId,
+          { todos: state().todos.get(sessionId) ?? [] },
+          { depth, node_id: node.id, tool_call_id: tc.id, tool_name: tc.function.name },
+        )
+      }
+      return { content, isError }
+    }
 
-      // B2: shrink oversize delegation results before they hit history.
-      // The full text is already persisted in the tool_result event above.
-      let historyContent = content
+    const applyResult = (tc: TC, res: ExecResult) => {
+      // B2: shrink oversize delegation results before they hit history. The
+      // full text is already persisted in the tool_result event above.
+      let historyContent = res.content
       if (
-        !isError &&
+        !res.isError &&
         (tc.function.name === 'delegate_to' ||
           tc.function.name === 'delegate_parallel')
       ) {
-        historyContent = summarizeLargeDelegationResult(content)
+        historyContent = summarizeLargeDelegationResult(res.content)
       }
-
       history.push({
         role: 'tool',
         tool_call_id: tc.id,
         content: historyContent,
       })
-
       // B1: once a skill script succeeds, reference docs read earlier are
       // dead weight on the prompt. Elide them in-place.
-      if (!isError && tc.function.name === 'run_skill_script') {
+      if (!res.isError && tc.function.name === 'run_skill_script') {
         let skillName = ''
         try {
           skillName = String(
@@ -764,6 +852,69 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
           /* ignore */
         }
         if (skillName) elideReadSkillFileResults(history, skillName)
+      }
+    }
+
+    for (const run of runs) {
+      if (run.serial || run.items.length === 1) {
+        for (const tc of run.items) {
+          const gen = executeOne(tc)
+          let step = await gen.next()
+          while (!step.done) {
+            yield step.value
+            step = await gen.next()
+          }
+          applyResult(tc, step.value)
+        }
+      } else {
+        // Parallel: kick off every tc concurrently; interleave their events
+        // via AsyncQueue so the caller sees them as they arrive. Results are
+        // collected into a slot array so history.push remains in index order.
+        const n = run.items.length
+        type Item =
+          | { kind: 'event'; event: Event }
+          | { kind: 'done'; index: number; result: ExecResult }
+        const queue = new AsyncQueue<Item>()
+        const results: Array<ExecResult | null> = new Array(n).fill(null)
+
+        for (let i = 0; i < n; i++) {
+          const tc = run.items[i]!
+          const idx = i
+          void (async () => {
+            try {
+              const gen = executeOne(tc)
+              let step = await gen.next()
+              while (!step.done) {
+                queue.push({ kind: 'event', event: step.value })
+                step = await gen.next()
+              }
+              queue.push({ kind: 'done', index: idx, result: step.value })
+            } catch (exc) {
+              queue.push({
+                kind: 'done',
+                index: idx,
+                result: {
+                  content: `ERROR: ${exc instanceof Error ? exc.message : String(exc)}`,
+                  isError: true,
+                },
+              })
+            }
+          })()
+        }
+
+        let completed = 0
+        while (completed < n) {
+          const item = await queue.pop()
+          if (item.kind === 'event') {
+            yield item.event
+          } else {
+            results[item.index] = item.result
+            completed += 1
+          }
+        }
+        for (let i = 0; i < n; i++) {
+          applyResult(run.items[i]!, results[i] as ExecResult)
+        }
       }
     }
   }
@@ -1663,6 +1814,135 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
     hint: 'Running skill script…',
   }
 }
+
+// -------- skill auto-hint rendering --------
+
+/** Compose a short "matching skills" block to prepend to the system prompt
+ *  when the user's goal triggers one or more skills. Empty list → ''. The
+ *  hint is advisory — the LLM still has to activate/use the skill. */
+export function renderSkillHints(matches: SkillDef[]): string {
+  if (matches.length === 0) return ''
+  const lines = [
+    '# Skill hints for this task',
+    '',
+    'Your current request looks like a fit for the skill(s) below. Consider ' +
+      'activating one before planning from scratch.',
+    '',
+  ]
+  for (const s of matches) {
+    let desc = (s.description || '').trim()
+    if (desc.includes('\n')) desc = desc.split('\n', 1)[0]!.trimEnd() + ' …'
+    lines.push(`- \`${s.name}\`${desc ? ` — ${desc}` : ''}`)
+  }
+  return lines.join('\n') + '\n'
+}
+
+// -------- Lead task-list native tools --------
+
+/** Render the current todos block for the system prompt. Empty list → ''.
+ *  The LLM reads this on every turn so it can stay oriented on progress. */
+export function renderTodosSection(todos: TodoItem[]): string {
+  if (todos.length === 0) return ''
+  const pending = todos.filter((t) => !t.done).length
+  const done = todos.length - pending
+  const header = `# Current todos (${pending} pending, ${done} done)\n\n`
+  const lines = todos.map((t, i) => {
+    const mark = t.done ? 'x' : ' '
+    return `  ${i + 1}. [${mark}] ${t.text}  (id: ${t.id})`
+  })
+  return header + lines.join('\n') + '\n'
+}
+
+function todoTools(sessionId: string): Tool[] {
+  const getTodos = (): TodoItem[] => state().todos.get(sessionId) ?? []
+  const saveTodos = (items: TodoItem[]) => {
+    state().todos.set(sessionId, items)
+  }
+  return [
+    {
+      name: 'set_todos',
+      description:
+        'Replace the entire todo list for this session. Use at the start of a ' +
+        'complex task to lay out the plan, or to re-plan after scope changes. ' +
+        'Each item becomes a pending todo with a fresh id.',
+      parameters: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Ordered list of short todo descriptions (imperative voice).',
+          },
+        },
+        required: ['items'],
+      },
+      handler: async (args) => {
+        const raw = Array.isArray((args as { items?: unknown }).items)
+          ? ((args as { items: unknown[] }).items)
+          : []
+        const items: TodoItem[] = raw
+          .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+          .map((text) => ({ id: newId('todo'), text: text.trim(), done: false }))
+        saveTodos(items)
+        return JSON.stringify({ ok: true, todos: items })
+      },
+      hint: 'Planning todos…',
+    },
+    {
+      name: 'add_todo',
+      description:
+        'Append one todo to the list. Use when a new subtask emerges mid-work ' +
+        'that you want to track explicitly.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'Short description.' },
+        },
+        required: ['text'],
+      },
+      handler: async (args) => {
+        const text = typeof (args as { text?: unknown }).text === 'string'
+          ? ((args as { text: string }).text).trim()
+          : ''
+        if (!text) return JSON.stringify({ ok: false, error: 'empty text' })
+        const item: TodoItem = { id: newId('todo'), text, done: false }
+        saveTodos([...getTodos(), item])
+        return JSON.stringify({ ok: true, todo: item })
+      },
+      hint: 'Adding todo…',
+    },
+    {
+      name: 'complete_todo',
+      description:
+        'Mark the todo with the given id as done. Use exactly the id shown in ' +
+        'the Current todos block — not the 1-based index.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The todo id to complete.' },
+        },
+        required: ['id'],
+      },
+      handler: async (args) => {
+        const id = typeof (args as { id?: unknown }).id === 'string'
+          ? (args as { id: string }).id
+          : ''
+        const list = getTodos()
+        const idx = list.findIndex((t) => t.id === id)
+        if (idx < 0) {
+          return JSON.stringify({ ok: false, error: `no todo with id ${id}` })
+        }
+        const updated = list.map((t, i) => (i === idx ? { ...t, done: true } : t))
+        saveTodos(updated)
+        return JSON.stringify({ ok: true, todo: updated[idx] })
+      },
+      hint: 'Completing todo…',
+    },
+  ]
+}
+
+const TODO_TOOL_NAMES = new Set(['set_todos', 'add_todo', 'complete_todo'])
 
 // -------- typed skill tool --------
 

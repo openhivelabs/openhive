@@ -1,4 +1,4 @@
-# OpenHive — 성능·효율 개선 방향성
+# OpenHive — 성능·효율 개선 방향성 + 로드맵
 
 작성일: 2026-04-22
 성격: 방향성 문서 (구체 스펙은 각 항목별로 별도 `specs/` 로 쪼갤 것)
@@ -6,6 +6,27 @@
 ## 한 줄 요약
 
 **동시에 돌리고, 한 번 한 건 또 안 하고, 모든 프로바이더에서 캐싱한다.**
+
+---
+
+## 진행 상태
+
+| # | Phase | 항목 | 상태 |
+|---|---|---|---|
+| 1 | 1 | MCP 결과 truncation (cap + 힌트) | ✅ 2026-04-22 (ea73987) |
+| 2 | 1 | 병렬 tool dispatch (독립 tool_use 동시 실행) | ✅ 2026-04-22 (55f3cdd) |
+| 3 | 1 | Lead 내장 Task List (native tool 3종) | ✅ 2026-04-22 (27050e4) |
+| 4 | 1 | 세션 자동 제목 생성 | ✅ 2026-04-22 (7f7f6e4) |
+| 5 | 1 | 스킬 Auto-Hint (skill-rules.json + triggers) | ✅ 2026-04-22 (794b5fe) |
+| 6 | 1 | 스킬·툴 Verification 내장 | ✅ 2026-04-22 (86626e8 + a4489c9) |
+| 7 | 1 | 이벤트 쓰기 async 배치 (appendFileSync → queue) | ✅ 2026-04-22 (b769929) |
+| 8 | 1 | MCP listTools 글로벌 캐시 | ✅ 2026-04-22 (86626e8 + a4489c9) |
+| 9 | 2 | 전 프로바이더 캐싱 인터페이스 (`CachingStrategy`) | ✅ 2026-04-22 (171848b) |
+| 10 | 2 | Python 스킬 cold start 최적화 (워커 풀 폐기) | ✅ 2026-04-22 (907feca) |
+| 11 | 3 | 히스토리 슬라이딩 윈도우 | ✅ 2026-04-22 (ed1c13e) — 기본 비활성 |
+| 12 | 3 | Bundled Persona Gallery (`packages/agents/`) | ✅ 2026-04-22 (833b846) |
+| 13 | 3 | 웹페치 native tool | ✅ 2026-04-22 (8ac0d49) |
+| 14 | 3 | 웹검색 MCP preset | ✅ 2026-04-22 (443d3c7) |
 
 ---
 
@@ -74,49 +95,39 @@ Claude 만 잘 돼있는 상태는 편향. 목표는 "어떤 프로바이더를 
 
 - `skill-rules.json` 같은 매칭 규칙 파일 지원: `keywords`, `intentPatterns`, `pathPatterns`.
 - 엔진이 **사용자 프롬프트 / 에이전트 persona 영역** 기반으로 결정론적 매칭 → 해당 스킬을 "우선 검토하라" 힌트로 시스템 프롬프트 상단에 주입.
-- Reddit 사례(300k LOC 단독 리팩터, 6개월): "night and day difference" + 토큰 40-60% 절약.
 - **적용 레벨**: 번들 스킬은 `SKILL.md` frontmatter 에 `triggers:` 섹션 추가, 사용자 스킬은 optional.
 
-### 🎯 Direction 7 — 품질: Lead 내장 Task List (Dev docs 의 엔진 버전)
-Reddit 저자가 "가장 임팩트 컸다" 고 꼽은 시스템. 별도 플래닝 노드 추가 대신 **Lead 에이전트에 내장**:
-
-- 새 native tool 추가: `set_todos(items)`, `complete_todo(id)`, `add_todo(content)`.
-- Lead 의 시스템 프롬프트에 규칙: "복수 단계 작업이면 먼저 set_todos 로 선언, delegation 끝날 때마다 업데이트".
+### 🎯 Direction 7 — 품질: Lead 내장 Task List
+- 새 native tool: `set_todos(items)`, `complete_todo(id)`, `add_todo(content)`.
+- Lead 시스템 프롬프트에 규칙: "복수 단계 작업이면 먼저 set_todos 로 선언, delegation 끝날 때마다 업데이트".
 - **핵심**: todos 는 히스토리가 압축돼도 **시스템 프롬프트 상단에 상시 유지** → 컨텍스트 긴 세션에서도 "잃어버림" 불가.
 - UI 에도 노출 → 사용자가 진행 상황 실시간 확인.
-- 며칠 전 논의한 "풀 플래닝 노드는 철학 충돌" 결론의 **최종 구현 형태**.
 
 ### 🎯 Direction 8 — 품질: 스킬·툴 자체 Verification
-Boris 영상 "스스로 확인하게 하라" + Reddit Hook #2 "빌드 체커" 의 OpenHive 번역. **각 스킬·툴이 실행 완료 직후 자체 sanity check 를 포함**:
+**각 스킬·툴이 실행 완료 직후 자체 sanity check 를 포함**:
 
 - PDF/PPTX/DOCX 스킬 → 리턴 시 파일 크기·페이지 수·열림 여부 체크, 리턴 payload 에 `verification: { ok, details }` 포함.
 - 웹페치 → 200 응답·non-empty 확인.
-- 실패 시 단순 실패가 아니라 **"무엇이 왜 실패" 를 LLM 에게 피드백** → 자율 재시도 (엔진은 이미 `MAX_DELEGATIONS_PER_PAIR=2` 로 지원).
+- 실패 시 단순 실패가 아니라 **"무엇이 왜 실패" 를 LLM 에게 피드백** → 자율 재시도.
 - SKILL.md 작성 가이드에 "verification 단계 포함" 을 **의무 체크리스트** 로.
 
-### 🎯 Direction 10 — UX: 세션 자동 제목 생성
-현재 세션은 draft/팀 이름이 그대로 제목으로 쓰여서 여러 세션 구분이 안 됨 (`sessions.ts` 에 title 필드 자체 없음). ChatGPT / Claude.ai 방식으로:
-
-- 세션 스토어에 `title: string | null` 필드 추가.
-- **첫 유저 메시지 or N회 교환 후** 비동기로 **싼 모델**(예: Haiku / Mini) 에 한 번 호출 → 5-8단어 제목 생성.
-- 생성은 **async fire-and-forget**, 세션 진행 블록 금지. 실패 시 fallback 으로 draft 이름.
-- 사용자 수동 rename 가능 (Claude.ai 와 동일).
-- Sidebar 의 세션 리스트가 이 title 을 1차로 표시.
-
-**근거**: 본 문서의 "토큰·속도" 주제와 다르지만 **멀티 세션 운용 UX 의 기본**. 추가로 Reddit 저자가 강조한 "여러 인스턴스 동시 운용" 스타일을 OpenHive 에서 하려면 세션 구분이 선결 조건.
-
 ### 🎯 Direction 9 — 경량: Bundled Persona Gallery 확충
-Reddit 저자의 13개+ 전문 subagent 교훈: **"very specific roles + clear return format"**. OpenHive persona 시스템에 번들 템플릿 추가:
+OpenHive persona 시스템에 번들 템플릿 추가:
 
 - `code-reviewer`, `plan-reviewer`, `researcher`, `writer`, `editor` 등 기본 persona.
 - 사용자가 첫 팀 짤 때 "템플릿에서 끌어오기" UX.
 - `packages/agents/` 확장 작업. 코드 변경 거의 없음, 주로 콘텐츠.
 
+### 🎯 Direction 10 — UX: 세션 자동 제목 생성
+- 세션 스토어에 `title: string | null` 필드 추가.
+- **첫 유저 메시지 or N회 교환 후** 비동기로 **싼 모델**(예: Haiku / Mini) 에 한 번 호출 → 5-8단어 제목 생성.
+- 생성은 **async fire-and-forget**, 세션 진행 블록 금지. 실패 시 fallback 으로 draft 이름.
+- 사용자 수동 rename 가능.
+- Sidebar 의 세션 리스트가 이 title 을 1차로 표시.
+
 ---
 
 ## 개념 재검토: Agent-format vs Typed Skill
-
-며칠 전 "agent-format 3툴 구조는 과설계" 로 적었으나 **부분 철회**. Reddit 저자 및 Anthropic 공식 가이드 근거로:
 
 - **Progressive disclosure** (가벼운 main SKILL + on-demand 리소스 로드) 가 토큰 40-60% 절약시킴.
 - Agent-format 의 `activate → read → run` 3툴 분리는 **탐색·가이드 복잡 워크플로우** 에선 올바름.
@@ -129,40 +140,34 @@ Reddit 저자의 13개+ 전문 subagent 교훈: **"very specific roles + clear r
 
 ---
 
-## 우선순위 (착수 권고)
-
-| # | 항목 | Direction | 효과 | 난이도 | 예상 기간 |
-|---|---|---|---|---|---|
-| 1 | 병렬 tool dispatch | D1 | ⭐⭐⭐⭐⭐ | 中 | 3-5일 |
-| 2 | Lead 내장 Task List | D7 | ⭐⭐⭐⭐⭐ | 中 | 3-4일 |
-| 3 | 스킬 Auto-Hint | D6 | ⭐⭐⭐⭐⭐ | 中 | 3-5일 |
-| 4 | 스킬·툴 Verification 내장 | D8 | ⭐⭐⭐⭐ | 中 | 1주 (번들 스킬 전반) |
-| 5 | MCP 결과 truncation | D3 | ⭐⭐⭐ | 下 | 1일 |
-| 6 | 이벤트 쓰기 async 배치 | D4 | ⭐⭐⭐ | 下 | 1일 |
-| 7 | MCP listTools 글로벌 캐시 | D4 | ⭐⭐ | 下 | 1일 |
-| 8 | 전 프로바이더 캐싱 인터페이스 | D2 | ⭐⭐⭐⭐ | 上 | 1-2주 |
-| 9 | Skill 워커 풀 | D4 | ⭐⭐⭐ | 上 | 1주 |
-| 10 | 히스토리 슬라이딩 윈도우 | D3 | ⭐⭐ | 中 | 2-3일 |
-| 11 | 세션 자동 제목 생성 | D10 | ⭐⭐⭐ | 下 | 1-2일 |
-| 12 | Bundled Persona Gallery | D9 | ⭐⭐ | 下 | 2-3일 (콘텐츠 위주) |
-| 13 | 웹페치 native tool | D5 | ⭐⭐ | 下 | 1-2일 |
-| 14 | 웹검색 MCP preset | D5 | ⭐⭐ | 下 | 1-2일 |
-
-**Phase 1 (이번 스프린트, 체감 속도·품질 즉시 개선)**: #1, #2, #3, #4, #5, #6, #7, #11.
-**Phase 2 (구조적 이득)**: #8, #9.
-**Phase 3 (개념 정리·기능 확장)**: #10, #12, #13, #14.
-
----
-
 ## 측정 방법
 
 각 phase 전후로 **동일 프롬프트 3회 평균**을 기록 (LLM 비결정성 때문에 단발 비교 금지). 포맷은 `2026-04-21-token-and-reliability-roadmap.md` 표 참고:
 
-- Input / Output / Cache read 토큰
-- Wall time
-- LLM 호출 수
-- Delegation 경로 (얕음/깊음)
-- 모델
-- 비용
+| 지표 | Before (session_id / 3회 평균) | After (session_id / 3회 평균) | 델타 |
+|---|---:|---:|---:|
+| Input tokens | | | |
+| Output tokens | | | |
+| Cache read | | | |
+| Wall time (s) | | | |
+| LLM 호출 수 | | | |
+| 성공 (0/1) | | | |
+| 최대 델리게이션 깊이 | | | |
 
-각 착수 항목은 구현 직전에 `specs/YYYY-MM-DD-<항목>.md` 로 구체 스펙 쪼개서 작성.
+---
+
+## 공통 워크플로우 (각 항목)
+
+1. 영역 전수조사 (`file:line` 메모).
+2. `specs/2026-04-22-<slug>.md` 작성 → 사용자 승인.
+3. 구현 (한 커밋 = 한 관심사).
+4. `pnpm build` + `pnpm --filter @openhive/web test` + 실제 세션 이벤트 로그 확인.
+5. 측정 항목이면 벤치 표 갱신.
+6. 커밋 메시지 `feat|fix|refactor: …` prefix.
+7. 이 문서 진행 상태 표에 `✅ (YYYY-MM-DD, <hash>)` 기록.
+
+## 다이어그램 업데이트 트리거
+
+- #2 병렬 tool dispatch: 엔진 플로우 변경 — 구현 완료 후 유저 동의 시 `03-agent-flow.excalidraw` 갱신.
+- #3 Task List native tool: 이벤트 구조·툴 집합 변경 — 마찬가지.
+- 그 외는 구현 상세라 다이어그램 건드리지 않음.

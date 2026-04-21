@@ -15,6 +15,7 @@
 import crypto from 'node:crypto'
 import { CLIENT_ID } from '../auth/codex'
 import { getAccountLabel, loadToken, saveToken } from '../tokens'
+import { CodexCachingStrategy } from './caching'
 import type { ChatMessage, ToolSpec } from './types'
 
 const TOKEN_URL = 'https://auth.openai.com/oauth/token'
@@ -253,6 +254,35 @@ export interface StreamOpts {
   providerId?: string
 }
 
+const cachingStrategy = new CodexCachingStrategy()
+
+/**
+ * Single-slot response-id memory. The engine does not pass a sessionId
+ * down to the provider, so for a first cut we keep module-local "last
+ * response id" — sufficient for back-to-back turns within one agent loop.
+ * When the engine grows a sessionId in StreamOpts this becomes a Map.
+ *
+ * Chaining is **opt-in** via OPENHIVE_CODEX_CHAIN=1 to avoid surprising
+ * users with `store: true` (OpenAI retains the conversation server-side)
+ * until we have a ToS review.
+ */
+const globalForResp = globalThis as unknown as {
+  __openhive_codex_last_response_id?: string | null
+  __openhive_codex_chain_warned?: boolean
+}
+
+function chainingEnabled(): boolean {
+  return process.env.OPENHIVE_CODEX_CHAIN === '1'
+}
+
+export function getLastResponseId(): string | null {
+  return globalForResp.__openhive_codex_last_response_id ?? null
+}
+
+export function setLastResponseId(id: string | null): void {
+  globalForResp.__openhive_codex_last_response_id = id
+}
+
 export async function* streamResponses(
   opts: StreamOpts,
 ): AsyncIterable<Record<string, unknown>> {
@@ -265,20 +295,24 @@ export async function* streamResponses(
     (system ?? '').trim() ||
     "You are Codex, a helpful coding assistant. Follow the user's request directly."
 
-  const payload: Record<string, unknown> = {
+  const chain = chainingEnabled()
+  if (chain && !globalForResp.__openhive_codex_chain_warned) {
+    // ToS-ish heads-up — `store: true` means OpenAI retains the request
+    // body server-side. We emit once per process to usage_logs via
+    // stderr (the logger pipeline picks it up).
+    console.warn(
+      '[codex] OPENHIVE_CODEX_CHAIN=1 — previous_response_id chaining on; requests stored server-side (store: true). Review ToS before enabling in shared deployments.',
+    )
+    globalForResp.__openhive_codex_chain_warned = true
+  }
+
+  const payload = cachingStrategy.applyToRequest({
     model: opts.model,
     input: items,
     instructions,
-    stream: true,
-    store: false,
-    parallel_tool_calls: false,
-    reasoning: { effort: 'low', summary: 'auto' },
-    include: ['reasoning.encrypted_content'],
-  }
-  if (respTools) {
-    payload.tools = respTools
-    payload.tool_choice = 'auto'
-  }
+    tools: respTools,
+    previousResponseId: chain ? getLastResponseId() : null,
+  })
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${session.accessToken}`,
@@ -300,5 +334,11 @@ export async function* streamResponses(
     const body = resp.body ? await resp.text() : ''
     throw new Error(`Codex responses ${resp.status}: ${body}`)
   }
-  yield* sseEvents(resp.body)
+  for await (const ev of sseEvents(resp.body)) {
+    // Capture response id for next-turn chaining (only when enabled — we
+    // still read it either way so flipping the env var mid-session works).
+    const id = cachingStrategy.extractResponseId?.(ev)
+    if (id) setLastResponseId(id)
+    yield ev
+  }
 }

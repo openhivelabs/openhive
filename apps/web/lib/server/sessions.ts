@@ -19,6 +19,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { artifactsRoot, sessionsRoot } from './paths'
+import { enqueueEvent, flushSession } from './sessions/event-writer'
 
 export interface SessionMeta {
   id: string
@@ -31,6 +32,9 @@ export interface SessionMeta {
   started_at: number
   finished_at: number | null
   artifact_count: number
+  /** Optional human-friendly title generated asynchronously from the goal.
+   *  null/undefined means "not generated yet" — UI falls back to goal slice. */
+  title?: string | null
 }
 
 /** Row shape returned by listing queries — same fields as meta plus any future
@@ -107,6 +111,30 @@ function writeMeta(sessionId: string, meta: SessionMeta): void {
   fs.renameSync(tmp, sessionMetaPath(sessionId))
 }
 
+/** Partially update a session's meta.json. Silently no-ops if the session
+ *  folder is gone (e.g. deleted mid-run). Used by async enrichers like the
+ *  auto-title generator. */
+export function updateMeta(
+  sessionId: string,
+  patch: Partial<SessionMeta>,
+): SessionMeta | null {
+  const current = readMeta(sessionId)
+  if (!current) return null
+  const next: SessionMeta = { ...current, ...patch, id: current.id }
+  writeMeta(sessionId, next)
+  return next
+}
+
+/** Convenience wrapper — used by driveSession's fire-and-forget title job. */
+export function updateMetaTitle(sessionId: string, title: string | null): void {
+  if (!title) return
+  try {
+    updateMeta(sessionId, { title })
+  } catch {
+    /* swallow — title is best-effort */
+  }
+}
+
 function statusForMeta(status: string, error: string | null): SessionMeta['status'] {
   if (error === 'interrupted' || error === 'cancelled') return 'interrupted'
   if (status === 'running') return 'running'
@@ -139,19 +167,24 @@ export function startSession(
   fs.closeSync(fs.openSync(sessionEventsPath(sessionId), 'a'))
 }
 
-export function finishSession(
+export async function finishSession(
   sessionId: string,
   opts: { output?: string | null; error?: string | null } = {},
-): void {
-  finalizeSession(sessionId, opts)
+): Promise<void> {
+  await finalizeSession(sessionId, opts)
 }
 
 /** Writes transcript.jsonl + updates meta.json with final status. Safe to call
- *  multiple times (last one wins). */
-export function finalizeSession(
+ *  multiple times (last one wins). Awaits the per-session event flusher so
+ *  no buffered events are lost when the transcript is built. */
+export async function finalizeSession(
   sessionId: string,
   opts: { output?: string | null; error?: string | null } = {},
-): void {
+): Promise<void> {
+  // Drain any in-flight batched events before we read events.jsonl to build
+  // the transcript.
+  await flushSession(sessionId)
+
   const meta = readMeta(sessionId)
   if (!meta) return
 
@@ -186,7 +219,6 @@ export function finalizeSession(
 // ---------- events ----------
 
 export function appendSessionEvent(input: AppendEventInput): void {
-  fs.mkdirSync(sessionDir(input.sessionId), { recursive: true })
   const row = {
     seq: input.seq,
     ts: input.ts,
@@ -197,7 +229,7 @@ export function appendSessionEvent(input: AppendEventInput): void {
     tool_name: input.toolName,
     data_json: JSON.stringify(input.data),
   }
-  fs.appendFileSync(sessionEventsPath(input.sessionId), `${JSON.stringify(row)}\n`, 'utf8')
+  enqueueEvent(input.sessionId, JSON.stringify(row))
 }
 
 export function eventsForSession(sessionId: string): StoredEventRow[] {
@@ -283,12 +315,12 @@ export function listSessionsFor(opts: {
 
 /** Any session whose meta.json still says status='running' on boot was in flight
  *  when the process died. Mark them interrupted and finalize transcript. */
-export function markOrphanedSessionsInterrupted(): number {
+export async function markOrphanedSessionsInterrupted(): Promise<number> {
   let n = 0
   for (const id of listSessionIds()) {
     const meta = readMeta(id)
     if (!meta || meta.status !== 'running') continue
-    finalizeSession(id, { error: 'interrupted' })
+    await finalizeSession(id, { error: 'interrupted' })
     n += 1
   }
   return n

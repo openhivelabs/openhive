@@ -40,7 +40,104 @@ export interface SkillResult {
   exitCode: number
   files: GeneratedFile[]
   timedOut: boolean
+  /**
+   * Structured self-check envelope. Present when the script ends with a
+   * line parseable as `{ok: boolean, ...}` per
+   * docs/skills/authoring.md. When `ok === false`, the engine surfaces
+   * this verbatim so the LLM sees `error_code` + `suggestion`.
+   */
+  structured?: StructuredEnvelope
 }
+
+export interface StructuredEnvelope {
+  ok: boolean
+  // success path
+  files?: Array<{ name?: string; path?: string; mime?: string }>
+  warnings?: string[]
+  // error path
+  error_code?: string
+  message?: string
+  suggestion?: string
+  // passthrough for anything extra the script included
+  [key: string]: unknown
+}
+
+/**
+ * Parse the final non-empty line of stdout as a self-check envelope.
+ * Returns `undefined` if the last line is not a JSON object carrying an
+ * `ok: boolean` field — keeping backward compatibility with legacy
+ * scripts that print freeform text.
+ */
+export function parseFinalJsonLine(stdout: string): StructuredEnvelope | undefined {
+  if (!stdout) return undefined
+  // Stdout may have been truncated with a "…[truncated, N more bytes]"
+  // marker — skip those trailing markers to reach the real last line.
+  const lines = stdout.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim()
+    if (!line) continue
+    if (line.startsWith('…[truncated')) continue
+    if (!line.startsWith('{') || !line.endsWith('}')) return undefined
+    try {
+      const parsed = JSON.parse(line) as unknown
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        'ok' in (parsed as Record<string, unknown>) &&
+        typeof (parsed as Record<string, unknown>).ok === 'boolean'
+      ) {
+        return parsed as StructuredEnvelope
+      }
+      return undefined
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
+}
+
+/**
+ * Promote files declared in a success envelope to `GeneratedFile[]`.
+ * Preferred over the directory snapshot because the script is the
+ * authoritative source for what it produced.
+ */
+function filesFromEnvelope(
+  envelope: StructuredEnvelope,
+  outputDir: string,
+): GeneratedFile[] | undefined {
+  if (!envelope.ok || !Array.isArray(envelope.files)) return undefined
+  const out: GeneratedFile[] = []
+  for (const entry of envelope.files) {
+    if (!entry || typeof entry !== 'object') continue
+    const abs = typeof entry.path === 'string' ? entry.path : null
+    if (!abs) continue
+    let size: number
+    try {
+      size = fs.statSync(abs).size
+    } catch {
+      continue
+    }
+    const name =
+      typeof entry.name === 'string' && entry.name.length > 0
+        ? entry.name
+        : path.relative(outputDir, abs).split(path.sep).join('/') || path.basename(abs)
+    const mime =
+      typeof entry.mime === 'string' && entry.mime.length > 0
+        ? entry.mime
+        : guessMime(abs)
+    out.push({ name, path: abs, mime, size })
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/** Cold-start flags for Python scripts. `frozen_modules=on` lets Python
+ *  serve stdlib imports from the precompiled frozen set (3.11+), shaving
+ *  tens of ms off every spawn. Added unconditionally — Python ignores the
+ *  flag on versions that don't support it. */
+export const PYTHON_COLD_START_FLAGS: readonly string[] = [
+  '-X',
+  'frozen_modules=on',
+]
 
 function interpreter(runtime: 'python' | 'node'): string {
   if (runtime === 'python') {
@@ -218,8 +315,9 @@ export async function runSkill(
     OPENHIVE_OUTPUT_DIR: outputDir,
     OPENHIVE_SKILL_NAME: skill.name,
   }
+  const pyFlags = skill.runtime === 'python' ? PYTHON_COLD_START_FLAGS : []
   const result = await runSubprocess({
-    cmd: [bin, skill.entrypoint],
+    cmd: [bin, ...pyFlags, skill.entrypoint],
     // cwd = outputDir so relative --out paths land in the artifact directory
     // and the before/after snapshot can actually register new files. Scripts
     // that need skill resources use OPENHIVE_SKILL_DIR or __file__-based
@@ -230,17 +328,25 @@ export async function runSkill(
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     outputDir,
   })
-  const files = collectNewFiles(outputDir, before)
+  const structured = parseFinalJsonLine(result.stdout)
+  const snapshotFiles = collectNewFiles(outputDir, before)
+  const envelopeFiles = structured ? filesFromEnvelope(structured, outputDir) : undefined
+  const files = envelopeFiles ?? snapshotFiles
   // Leave no trace when the subprocess produced nothing — keeps the
   // sessions/{uuid}/ layout clean ("artifacts/ only exists when files
   // were actually generated").
   if (files.length === 0 && before.size === 0) {
     try { fs.rmdirSync(outputDir) } catch { /* dir might have stray non-file entries */ }
   }
+  const structuredFailure = structured && structured.ok === false
   return {
     ...result,
     files,
-    ok: !result.timedOut && result.exitCode === 0,
+    // A structured `{ok:false}` envelope means the script ran to
+    // completion but self-reported failure; treat it as non-ok even if
+    // exit code happened to be 0.
+    ok: !result.timedOut && result.exitCode === 0 && !structuredFailure,
+    ...(structured ? { structured } : {}),
   }
 }
 
@@ -282,8 +388,9 @@ export async function runSkillScript(
     OPENHIVE_SKILL_NAME: skill.name,
     OPENHIVE_SKILL_DIR: skill.skillDir,
   }
+  const pyFlags = runtime === 'python' ? PYTHON_COLD_START_FLAGS : []
   const result = await runSubprocess({
-    cmd: [bin, resolved, ...(opts.args ?? [])],
+    cmd: [bin, ...pyFlags, resolved, ...(opts.args ?? [])],
     // cwd = outputDir: relative --out paths land in artifacts, snapshot works.
     cwd: outputDir,
     env,
@@ -291,17 +398,22 @@ export async function runSkillScript(
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     outputDir,
   })
-  const files = collectNewFiles(outputDir, before)
+  const structured = parseFinalJsonLine(result.stdout)
+  const snapshotFiles = collectNewFiles(outputDir, before)
+  const envelopeFiles = structured ? filesFromEnvelope(structured, outputDir) : undefined
+  const files = envelopeFiles ?? snapshotFiles
   // Leave no trace when the subprocess produced nothing — keeps the
   // sessions/{uuid}/ layout clean ("artifacts/ only exists when files
   // were actually generated").
   if (files.length === 0 && before.size === 0) {
     try { fs.rmdirSync(outputDir) } catch { /* dir might have stray non-file entries */ }
   }
+  const structuredFailure = structured && structured.ok === false
   return {
     ...result,
     files,
-    ok: !result.timedOut && result.exitCode === 0,
+    ok: !result.timedOut && result.exitCode === 0 && !structuredFailure,
+    ...(structured ? { structured } : {}),
   }
 }
 

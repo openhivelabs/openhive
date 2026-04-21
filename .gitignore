@@ -9,6 +9,7 @@ out/
 # Build outputs
 dist/
 build/
+*.tsbuildinfo
 
 # Misc
 .DS_Store
@@ -24,6 +25,10 @@ build/
 
 # OpenHive local data
 .openhive/
+
+# Python bytecode (bundled skills)
+__pycache__/
+*.pyc
 
 # Playwright MCP scratch output (snapshots, screenshots)
 .playwright-mcp/

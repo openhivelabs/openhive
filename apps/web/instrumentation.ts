@@ -37,7 +37,7 @@ export async function register() {
   } = await import('./lib/server/sessions')
 
   try {
-    const n = markOrphanedSessionsInterrupted()
+    const n = await markOrphanedSessionsInterrupted()
     if (n > 0) {
       console.log(`boot: marked ${n} orphaned session(s) as interrupted`)
     }
@@ -69,4 +69,23 @@ export async function register() {
   }
 
   startScheduler()
+
+  // Drain batched event writes on graceful shutdown so we don't lose the
+  // last ≤100ms worth of events. Spec: 2026-04-22-event-write-batching.md.
+  try {
+    const { flushAll } = await import('./lib/server/sessions/event-writer')
+    const shutdown = async (signal: string) => {
+      try {
+        await flushAll()
+      } catch (exc) {
+        console.error(`shutdown (${signal}): event flush failed`, exc)
+      }
+    }
+    process.once('SIGTERM', () => { void shutdown('SIGTERM') })
+    process.once('SIGINT', () => { void shutdown('SIGINT') })
+    // beforeExit fires when the loop is about to drain naturally.
+    process.once('beforeExit', () => { void shutdown('beforeExit') })
+  } catch (exc) {
+    console.error('boot: event-writer shutdown hook setup failed', exc)
+  }
 }

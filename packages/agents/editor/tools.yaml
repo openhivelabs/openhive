@@ -1,0 +1,7 @@
+skills: [docx]                 # editor can re-emit edited drafts as DOCX
+mcp: []
+team_data:
+  read: true
+  write: false
+knowledge_exposure: full
+notes: "Editor. Polishes drafts; preserves author intent; never invents facts behind [TK:] tags."
