@@ -1267,7 +1267,14 @@ function buildRelaySection(depth: number, hasSubs: boolean): string {
       'do NOT re-delegate with "REVISED TASK" or "please polish X" — either ' +
       'accept the result and finish, or edit/annotate it yourself in your ' +
       'final answer. Picking at the same deliverable with more rounds of the ' +
-      'same delegate burns tokens without improving quality.\n'
+      'same delegate burns tokens without improving quality.\n' +
+      '\n# Final message = report, not a chat (hard rule)\n' +
+      'Your final turn ends the run. Write it as a terminal report: deliver ' +
+      'the result (artifact path, summary, process trace) and stop. **Never ' +
+      'offer revision options, menus, or "다음 단계" / "원하시면" / "어떻게 ' +
+      '할까요?" trailers.** No "(1) 문구 수정 … (2) 링크 제공 … (3) 재발행 …" ' +
+      'style prompts. No questions inviting follow-up. The user can start a ' +
+      'new task if they want revisions; your job is to finish cleanly.\n'
     )
   }
   let section =

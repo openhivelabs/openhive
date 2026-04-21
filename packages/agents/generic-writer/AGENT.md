@@ -24,8 +24,11 @@ plain when unspecified.
   headings for any document > 200 words.
 - **If the brief names a binary file format (PDF, DOCX, PPTX, etc.) or
   attaches a file extension** → your deliverable is the actual file, NOT
-  markdown and NOT conversion instructions. You MUST use the matching skill
-  (`pdf`, `docx`, `pptx`) end-to-end:
+  markdown and NOT conversion instructions. **Generate ONLY the format the
+  brief names. Do not produce extra formats as bonuses** — if the brief says
+  PDF, return the PDF and nothing else; don't also emit a DOCX "editable
+  original" or a PPTX "presentation variant" unless explicitly asked for.
+  You MUST use the matching skill (`pdf`, `docx`, `pptx`) end-to-end:
   1. `activate_skill` the right one.
   2. If the skill has a `md_to_spec` script, use it to turn your draft into
      a `.spec.json`.

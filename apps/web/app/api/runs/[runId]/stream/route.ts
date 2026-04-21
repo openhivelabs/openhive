@@ -1,5 +1,6 @@
 import { attach, END, isActive } from '@/lib/server/engine/run-registry'
 import { eventsFor } from '@/lib/server/runs-store'
+import { getDb } from '@/lib/server/db'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -86,7 +87,8 @@ export async function GET(
       } else {
         // Replay from DB.
         try {
-          for (const row of eventsFor(runId)) {
+          const rows = eventsFor(runId)
+          for (const row of rows) {
             controller.enqueue(
               sseFrame({
                 kind: row.kind,
@@ -99,6 +101,36 @@ export async function GET(
                 data: row.data,
               }),
             )
+          }
+          // If the stored event log doesn't include a terminal marker (common
+          // for runs whose server process died mid-flight), synthesize one
+          // from the runs-table status so clients stop waiting on a stream
+          // that will never produce another real event.
+          const alreadyTerminal = rows.some(
+            (r) => r.kind === 'run_finished' || r.kind === 'run_error',
+          )
+          if (!alreadyTerminal) {
+            const row = getDb()
+              .prepare('SELECT status, output, error FROM runs WHERE id = ?')
+              .get(runId) as
+              | { status: string; output: string | null; error: string | null }
+              | undefined
+            if (row && row.status !== 'running') {
+              controller.enqueue(
+                sseFrame({
+                  kind: row.error ? 'run_error' : 'run_finished',
+                  ts: Date.now() / 1000,
+                  run_id: runId,
+                  depth: 0,
+                  node_id: null,
+                  tool_call_id: null,
+                  tool_name: null,
+                  data: row.error
+                    ? { error: row.error }
+                    : { output: row.output ?? '' },
+                }),
+              )
+            }
           }
         } catch {
           /* client gone, drop */
