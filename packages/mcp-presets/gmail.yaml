@@ -1,0 +1,13 @@
+id: gmail
+name: Gmail
+icon: "📧"
+brand: gmail
+icon_url: /brands/gmail.webp
+description: Read, search, and send Gmail messages. Coming soon — needs OAuth flow which is in development.
+# Stub — disables the Connect button until OAuth/HTTP MCP transport ships.
+# Remove this flag and fill in command/args/inputs once the OAuth path lands.
+coming_soon: true
+command: ""
+args: []
+env_template: {}
+inputs: []

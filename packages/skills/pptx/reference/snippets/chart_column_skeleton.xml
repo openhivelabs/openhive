@@ -1,0 +1,86 @@
+<!-- A column chart. This is a complete /ppt/charts/chartN.xml part.
+     To install:
+       1) Add this XML as a new part at /ppt/charts/chartN.xml with
+          content-type "application/vnd.openxmlformats-officedocument.drawingml.chart+xml".
+       2) Add a relationship on the slide part: RT_CHART → that partname
+          (returning e.g. "rId5").
+       3) Inside the slide's <p:spTree>, add a <p:graphicFrame> with a
+          <c:chart r:id="rId5"/> reference — see below.
+-->
+<c:chartSpace
+  xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <c:chart>
+    <c:plotArea>
+      <c:layout/>
+      <c:barChart>
+        <c:barDir val="col"/>
+        <c:grouping val="clustered"/>
+        <c:ser>
+          <c:idx val="0"/>
+          <c:order val="0"/>
+          <c:tx>
+            <c:strRef>
+              <c:f>Sheet1!$B$1</c:f>
+              <c:strCache>
+                <c:ptCount val="1"/>
+                <c:pt idx="0"><c:v>{SERIES_NAME}</c:v></c:pt>
+              </c:strCache>
+            </c:strRef>
+          </c:tx>
+          <c:cat>
+            <c:strRef>
+              <c:f>Sheet1!$A$2:$A$5</c:f>
+              <c:strCache>
+                <c:ptCount val="4"/>
+                <c:pt idx="0"><c:v>{CAT_1}</c:v></c:pt>
+                <c:pt idx="1"><c:v>{CAT_2}</c:v></c:pt>
+                <c:pt idx="2"><c:v>{CAT_3}</c:v></c:pt>
+                <c:pt idx="3"><c:v>{CAT_4}</c:v></c:pt>
+              </c:strCache>
+            </c:strRef>
+          </c:cat>
+          <c:val>
+            <c:numRef>
+              <c:f>Sheet1!$B$2:$B$5</c:f>
+              <c:numCache>
+                <c:formatCode>General</c:formatCode>
+                <c:ptCount val="4"/>
+                <c:pt idx="0"><c:v>{VAL_1}</c:v></c:pt>
+                <c:pt idx="1"><c:v>{VAL_2}</c:v></c:pt>
+                <c:pt idx="2"><c:v>{VAL_3}</c:v></c:pt>
+                <c:pt idx="3"><c:v>{VAL_4}</c:v></c:pt>
+              </c:numCache>
+            </c:numRef>
+          </c:val>
+        </c:ser>
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:barChart>
+      <c:catAx>
+        <c:axId val="1"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="b"/>
+        <c:crossAx val="2"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="2"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="l"/>
+        <c:crossAx val="1"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:plotVisOnly val="1"/>
+  </c:chart>
+</c:chartSpace>
+
+<!-- Adding multiple series: duplicate the <c:ser> block, increment <c:idx val>
+     and <c:order val>. Keep categories identical across series.
+
+     Other chart types: change <c:barChart> to <c:lineChart>, <c:pieChart>,
+     <c:areaChart>, <c:scatterChart>. <c:barChart> with barDir="bar" is a
+     horizontal bar chart.
+-->

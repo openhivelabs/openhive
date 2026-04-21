@@ -1,0 +1,7 @@
+skills: []
+mcp: []
+team_data:
+  read: true
+  write: false
+knowledge_exposure: full
+notes: "Reviewer. Reports issues; never modifies artifacts directly."

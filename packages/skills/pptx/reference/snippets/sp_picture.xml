@@ -1,0 +1,28 @@
+<!-- Picture shape. Requires:
+     1) An image part in /ppt/media/ added to the package.
+     2) A relationship on the slide part: RT_IMAGE → the image partname,
+        returning some rId (e.g. "rId7").
+     3) This <p:pic> appended to the slide's <p:spTree>.
+-->
+<p:pic xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+       xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:nvPicPr>
+    <p:cNvPr id="{SHAPE_ID}" name="Picture {N}"/>
+    <p:cNvPicPr>
+      <a:picLocks noChangeAspect="1"/>
+    </p:cNvPicPr>
+    <p:nvPr/>
+  </p:nvPicPr>
+  <p:blipFill>
+    <a:blip r:embed="{IMAGE_RID}"/>
+    <a:stretch><a:fillRect/></a:stretch>
+  </p:blipFill>
+  <p:spPr>
+    <a:xfrm>
+      <a:off x="{X_EMU}" y="{Y_EMU}"/>
+      <a:ext cx="{W_EMU}" cy="{H_EMU}"/>
+    </a:xfrm>
+    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+  </p:spPr>
+</p:pic>

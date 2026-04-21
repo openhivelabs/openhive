@@ -1,0 +1,37 @@
+<!-- Minimal text-bearing shape. Insert inside <p:spTree>. -->
+<!-- Namespaces: p=presentationml, a=drawingml main. Root must have both. -->
+<p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+      xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:nvSpPr>
+    <p:cNvPr id="{SHAPE_ID}" name="TextBox {N}"/>
+    <p:cNvSpPr txBox="1"/>
+    <p:nvPr/>
+  </p:nvSpPr>
+  <p:spPr>
+    <a:xfrm>
+      <a:off x="{X_EMU}" y="{Y_EMU}"/>
+      <a:ext cx="{W_EMU}" cy="{H_EMU}"/>
+    </a:xfrm>
+    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+    <a:noFill/>
+  </p:spPr>
+  <p:txBody>
+    <a:bodyPr wrap="square" rtlCol="0"/>
+    <a:lstStyle/>
+    <a:p>
+      <a:r>
+        <a:rPr lang="ko-KR" sz="{SIZE_X100}" b="{BOLD_0_OR_1}">
+          <a:solidFill><a:srgbClr val="{HEX_RRGGBB}"/></a:solidFill>
+          <a:latin typeface="{FONT_NAME}"/>
+        </a:rPr>
+        <a:t>{TEXT}</a:t>
+      </a:r>
+    </a:p>
+  </p:txBody>
+</p:sp>
+
+<!-- Units:
+     EMU = English Metric Unit. 914400 EMU = 1 inch. 12700 EMU = 1 pt.
+     Size: pt × 100  (e.g. 24pt → sz="2400")
+     Color: 6-hex, no # (e.g. "F9A825")
+-->

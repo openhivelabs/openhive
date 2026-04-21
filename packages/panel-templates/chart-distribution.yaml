@@ -1,0 +1,23 @@
+id: chart-distribution
+name: 분포 차트
+description: 특정 필드의 값 분포를 바 차트로 표시 (예 단계별 거래 수, 지역별 고객 분포).
+icon: "📈"
+category: analytics
+block:
+  type: chart
+  colSpan: 2
+  rowSpan: 1
+  props:
+    kind: bars
+binding_skeleton:
+  source:
+    kind: team_data
+    config:
+      sql: "SELECT * FROM customer"
+  map:
+    group_by: stage
+    value: value
+  refresh_seconds: 120
+ai_prompts:
+  goal: "한 필드의 값별로 데이터를 집계해 바 차트로 보여준다."
+  requires: []
