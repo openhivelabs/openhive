@@ -184,11 +184,20 @@ function splitSystem(
 
 function toolsToAnthropic(tools: ToolSpec[] | undefined): unknown[] | null {
   if (!tools || tools.length === 0) return null
-  return tools.map((t) => ({
-    name: t.function.name,
-    description: t.function.description ?? '',
-    input_schema: t.function.parameters ?? { type: 'object', properties: {} },
-  }))
+  return tools.map((t, i) => {
+    const block: Record<string, unknown> = {
+      name: t.function.name,
+      description: t.function.description ?? '',
+      input_schema: t.function.parameters ?? { type: 'object', properties: {} },
+    }
+    // Anthropic cache_control applied to the LAST tool caches the entire
+    // tools + system prefix. Per-turn tool sets are stable within a node,
+    // so this hits hard on long conversations.
+    if (i === tools.length - 1) {
+      block.cache_control = { type: 'ephemeral' }
+    }
+    return block
+  })
 }
 
 // -------- streaming --------
@@ -242,8 +251,37 @@ export async function* streamMessages(
     max_tokens: opts.maxTokens ?? 4096,
     stream: true,
   }
-  if (system) payload.system = system
+  if (system) {
+    // Wrap system as a content-block array so we can attach cache_control.
+    // A single ephemeral marker here caches the full system-prompt prefix
+    // (persona + team outline + relay rules + skill index) across turns.
+    payload.system = [
+      { type: 'text', text: system, cache_control: { type: 'ephemeral' } },
+    ]
+  }
   if (tools) payload.tools = tools
+
+  // Mark the last conversation message as a cache breakpoint too. Next turn's
+  // prefix (…through this message) is identical to what we're sending now, so
+  // the prior turn's cache write becomes this turn's cache read. Anthropic
+  // allows 4 breakpoints; we use tools + system + last-message = 3.
+  if (out.length > 0) {
+    const last = out[out.length - 1]!
+    if (typeof last.content === 'string') {
+      last.content = [
+        {
+          type: 'text',
+          text: last.content,
+          cache_control: { type: 'ephemeral' },
+        } as AnthropicBlock & { cache_control: { type: 'ephemeral' } },
+      ]
+    } else if (Array.isArray(last.content) && last.content.length > 0) {
+      const tail = last.content[last.content.length - 1]!
+      ;(tail as AnthropicBlock & { cache_control?: unknown }).cache_control = {
+        type: 'ephemeral',
+      }
+    }
+  }
 
   const resp = await fetch(MESSAGES_URL, {
     method: 'POST',

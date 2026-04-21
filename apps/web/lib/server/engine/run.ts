@@ -57,7 +57,23 @@ interface RunState {
   askUser: Map<string, number>
   teamSlugs: Map<string, [string, string]>
   semaphore: Semaphore | null
+  // `{runId}:{fromId}->{toId}` → count. Phase C1 loop guard.
+  delegations: Map<string, number>
+  // runId → count of read_skill_file calls (any skill/path). Phase C3 cap.
+  readSkillFileTotal: Map<string, number>
+  // runId → set of `{skill}:{path}` already read. Phase C3 dedupe.
+  readSkillFileSeen: Map<string, Set<string>>
 }
+
+// Phase C1: Cap per-(parent→child) delegations within a run. A parent re-
+// delegating the same sub-agent 3+ times almost always means "REVISED TASK"
+// spam — the parent should accept the result or fix it itself.
+export const MAX_DELEGATIONS_PER_PAIR = 2
+
+// Phase C3: Cap read_skill_file. Once a skill is activated the LLM tends to
+// spelunk its entire tree looking for answers it already has. Same-file reads
+// are always redundant; total cap stops fan-out sprees mid-turn.
+export const MAX_READ_SKILL_FILE_PER_RUN = 8
 
 const globalForRun = globalThis as unknown as {
   __openhive_engine_run?: RunState
@@ -69,13 +85,83 @@ function state(): RunState {
       askUser: new Map(),
       teamSlugs: new Map(),
       semaphore: null,
+      delegations: new Map(),
+      readSkillFileTotal: new Map(),
+      readSkillFileSeen: new Map(),
     }
   }
-  return globalForRun.__openhive_engine_run
+  // HMR-safe: if an older incarnation initialised the global without a newer
+  // field, backfill it instead of crashing with "undefined.get".
+  const s = globalForRun.__openhive_engine_run
+  if (!s.delegations) s.delegations = new Map()
+  if (!s.readSkillFileTotal) s.readSkillFileTotal = new Map()
+  if (!s.readSkillFileSeen) s.readSkillFileSeen = new Map()
+  return s
 }
 
 function newId(prefix: string): string {
   return `${prefix}_${crypto.randomBytes(4).toString('hex')}`
+}
+
+// -------- history compaction helpers (Phase B token savings) --------
+
+/** Walk the history, build a tool_call_id → (name, args) map from assistant
+ *  messages. Used by the elision helpers below — the tool-role rows don't
+ *  carry the tool name themselves. */
+function indexToolCalls(
+  history: ChatMessage[],
+): Map<string, { name: string; args: string }> {
+  const out = new Map<string, { name: string; args: string }>()
+  for (const m of history) {
+    if (m.role !== 'assistant') continue
+    const calls = m.tool_calls
+    if (!Array.isArray(calls)) continue
+    for (const tc of calls) {
+      out.set(tc.id, {
+        name: tc.function.name,
+        args: tc.function.arguments ?? '',
+      })
+    }
+  }
+  return out
+}
+
+/** After a `run_skill_script` succeeds, previous `read_skill_file` results
+ *  for the same skill are no longer load-bearing — the LLM has already used
+ *  them to build the spec. Replace their content with a placeholder so they
+ *  don't balloon the prompt on subsequent turns. */
+function elideReadSkillFileResults(history: ChatMessage[], skill: string): number {
+  const meta = indexToolCalls(history)
+  let bytesSaved = 0
+  for (const m of history) {
+    if (m.role !== 'tool') continue
+    const info = meta.get(m.tool_call_id ?? '')
+    if (!info || info.name !== 'read_skill_file') continue
+    let argSkill: string | undefined
+    try {
+      argSkill = (JSON.parse(info.args || '{}') as { skill?: string }).skill
+    } catch {
+      /* ignore */
+    }
+    if (skill && argSkill && argSkill !== skill) continue
+    if (typeof m.content === 'string' && !m.content.startsWith('<elided')) {
+      bytesSaved += m.content.length
+      m.content = `<elided: read_skill_file(${argSkill ?? skill}) — skill script has since run successfully>`
+    }
+  }
+  return bytesSaved
+}
+
+/** Delegation tool_results can be multi-KB agent prose. The parent node only
+ *  needs the gist for its next decision; the full text is already persisted
+ *  in run_events. Replace oversize content with a short summary pointer. */
+function summarizeLargeDelegationResult(content: string): string {
+  const LIMIT = 2000
+  if (content.length <= LIMIT) return content
+  const head = content.slice(0, 600).trim()
+  return (
+    `${head}\n\n…[delegation result truncated — original ${content.length} chars, full text preserved in run_events]`
+  )
 }
 
 // -------- Semaphore (replaces asyncio.Semaphore) --------
@@ -176,6 +262,11 @@ export async function* runTeam(
   } finally {
     state().askUser.delete(runId)
     state().teamSlugs.delete(runId)
+    for (const k of state().delegations.keys()) {
+      if (k.startsWith(`${runId}:`)) state().delegations.delete(k)
+    }
+    state().readSkillFileTotal.delete(runId)
+    state().readSkillFileSeen.delete(runId)
     errors.clearRunFailures(runId)
     sem.release()
   }
@@ -264,7 +355,7 @@ async function* runNode(opts: RunNodeOpts): AsyncGenerator<Event> {
   }
   if (agentSkills.length > 0) {
     tools.push(skillActivateTool(agentSkills))
-    tools.push(skillReadTool(agentSkills))
+    tools.push(skillReadTool(agentSkills, runId))
     tools.push(skillRunTool(agentSkills, { runId, team, teamSlugs }))
   }
 
@@ -297,7 +388,14 @@ async function* runNode(opts: RunNodeOpts): AsyncGenerator<Event> {
   // descriptions. Bodies + file trees arrive via activate_skill once the LLM
   // picks one.
   const personaBody = composePersonaBody(persona)
-  const systemPrompt = composeSystemPrompt(personaBody, agentSkills)
+  const teamSection = describeTeamForAgent(team, node.id)
+  const hasSubs = subs.length > 0
+  const relaySection = buildRelaySection(depth, hasSubs)
+  const systemPrompt = composeSystemPrompt(
+    personaBody,
+    agentSkills,
+    teamSection + (relaySection ? '\n' + relaySection : ''),
+  )
   tools.push(...makePersonaTools(persona))
 
   const history: ChatMessage[] = []
@@ -523,11 +621,37 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
         { content, is_error: isError },
         { depth, node_id: node.id, tool_call_id: tc.id, tool_name: tc.function.name },
       )
+
+      // B2: shrink oversize delegation results before they hit history.
+      // The full text is already persisted in the tool_result event above.
+      let historyContent = content
+      if (
+        !isError &&
+        (tc.function.name === 'delegate_to' ||
+          tc.function.name === 'delegate_parallel')
+      ) {
+        historyContent = summarizeLargeDelegationResult(content)
+      }
+
       history.push({
         role: 'tool',
         tool_call_id: tc.id,
-        content,
+        content: historyContent,
       })
+
+      // B1: once a skill script succeeds, reference docs read earlier are
+      // dead weight on the prompt. Elide them in-place.
+      if (!isError && tc.function.name === 'run_skill_script') {
+        let skillName = ''
+        try {
+          skillName = String(
+            (JSON.parse(tc.function.arguments || '{}') as { skill?: string }).skill ?? '',
+          )
+        } catch {
+          /* ignore */
+        }
+        if (skillName) elideReadSkillFileResults(history, skillName)
+      }
     }
   }
 
@@ -616,6 +740,27 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
     )
     return
   }
+
+  const pairKey = `${runId}:${fromNode.id}->${target.id}`
+  const prior = state().delegations.get(pairKey) ?? 0
+  if (prior >= MAX_DELEGATIONS_PER_PAIR) {
+    yield makeEvent(
+      'delegation_closed',
+      runId,
+      {
+        assignee_id: target.id,
+        assignee_role: target.role,
+        error: true,
+        result:
+          `ERROR: delegation cap reached (${MAX_DELEGATIONS_PER_PAIR} calls to ${target.role} ` +
+          `from this agent in this run). Do NOT re-delegate the same subtask. Accept the ` +
+          `prior result or fix remaining issues yourself, then end your turn.`,
+      },
+      { depth, node_id: fromNode.id, tool_call_id: toolCallId },
+    )
+    return
+  }
+  state().delegations.set(pairKey, prior + 1)
 
   if (errors.isAgentExcluded(runId, target.id)) {
     const msg = errors.renderError(
@@ -1084,10 +1229,90 @@ function teamDataTools(
 
 // -------- agent-skill plumbing (progressive disclosure) --------
 
-function composeSystemPrompt(base: string, agentSkills: SkillDef[]): string {
-  if (agentSkills.length === 0) return base
+// Shared sentinel. Sub-agents who need user clarification prefix their entire
+// message with it; managers re-emit it verbatim upward; Lead is instructed to
+// detect it and fire `ask_user`. One token, easy to grep for, and the LLM
+// treats prefix sentinels consistently across vendors.
+const CLARIFY_SENTINEL = 'CLARIFICATION_REQUEST:'
+
+function buildRelaySection(depth: number, hasSubs: boolean): string {
+  if (depth === 0) {
+    return (
+      '# User gateway (you only)\n' +
+      'Any ask for user input — yours or relayed ' +
+      `\`${CLARIFY_SENTINEL}\` from a delegate — MUST use the \`ask_user\` tool. ` +
+      'Never end a turn with plain text requesting something ("링크 주세요" etc.) — ' +
+      'that finalises the run. Never guess a default or re-delegate with an ' +
+      'assumption while a clarification is pending. Consolidate pending items ' +
+      'into ONE ask_user call.\n' +
+      '\n# One-shot delegation (hard rule)\n' +
+      `You may call \`delegate_to\` on each subordinate at most ${MAX_DELEGATIONS_PER_PAIR} times per run ` +
+      '(the engine enforces this). When a delegate returns a usable result, ' +
+      'do NOT re-delegate with "REVISED TASK" or "please polish X" — either ' +
+      'accept the result and finish, or edit/annotate it yourself in your ' +
+      'final answer. Picking at the same deliverable with more rounds of the ' +
+      'same delegate burns tokens without improving quality.\n'
+    )
+  }
+  let section =
+    '# User contact\n' +
+    'Only the Lead can talk to the user. If you need input, end your turn with ' +
+    `a message whose first line is exactly:\n  ${CLARIFY_SENTINEL} <question>\n` +
+    'then 2–4 option lines: `- <label>: <description>`. No other content. ' +
+    'Parent relays upstream.\n'
+  if (hasSubs) {
+    section +=
+      '\n# Relaying from delegates\n' +
+      `If a delegate tool_result starts with \`${CLARIFY_SENTINEL}\`, forward ` +
+      'verbatim as your own next output. Do NOT answer it, pick defaults, or ' +
+      're-delegate with an assumption. Only the Lead surfaces to the user.\n'
+  }
+  return section
+}
+
+function describeTeamForAgent(team: TeamSpec, agentId: string): string {
+  // Recursively walks the delegation tree rooted at this agent and produces a
+  // markdown outline. Lets the LLM see past its immediate reports so it can
+  // pick the right direct delegate even when the actual specialist lives
+  // two+ levels down (direct delegation is still limited to one hop — the
+  // intermediate manager must relay).
+  const direct = teamSubordinates(team, agentId)
+  if (direct.length === 0) return ''
+  const lines: string[] = []
+  const visited = new Set<string>([agentId])
+  const walk = (parentId: string, indent: number) => {
+    for (const sub of teamSubordinates(team, parentId)) {
+      if (visited.has(sub.id)) continue
+      visited.add(sub.id)
+      const label = sub.label && sub.label !== sub.role ? ` (${sub.label})` : ''
+      lines.push(`${'  '.repeat(indent)}- ${sub.role}${label}`)
+      walk(sub.id, indent + 1)
+    }
+  }
+  walk(agentId, 0)
+  if (lines.length === 0) return ''
+  return (
+    '# Your team\n' +
+    '`delegate_to` reaches DIRECT reports only (top-level bullets). For deeper ' +
+    'specialists, delegate to the branch parent and have them relay.\n\n' +
+    lines.join('\n') +
+    '\n'
+  )
+}
+
+function composeSystemPrompt(
+  base: string,
+  agentSkills: SkillDef[],
+  teamSection: string,
+): string {
+  if (agentSkills.length === 0 && !teamSection) return base
   const parts: string[] = []
   if (base) parts.push(base.trimEnd())
+  if (teamSection) {
+    parts.push('\n\n')
+    parts.push(teamSection)
+  }
+  if (agentSkills.length === 0) return parts.join('')
   parts.push('\n\n# Skills available to you\n')
   parts.push(
     'You have access to the skills listed below. For each, you only see the ' +
@@ -1150,7 +1375,7 @@ function skillActivateTool(agentSkills: SkillDef[]): Tool {
   }
 }
 
-function skillReadTool(agentSkills: SkillDef[]): Tool {
+function skillReadTool(agentSkills: SkillDef[], runId: string): Tool {
   const byName = new Map(agentSkills.map((s) => [s.name, s]))
   const names = [...byName.keys()].sort()
   return {
@@ -1185,8 +1410,41 @@ function skillReadTool(agentSkills: SkillDef[]): Tool {
           error: `unknown or unauthorized skill: ${JSON.stringify(skillName)}`,
         })
       }
+
+      // Phase C3: refuse duplicates and hard-cap total.
+      const key = `${skillName}:${path}`
+      let seen = state().readSkillFileSeen.get(runId)
+      if (!seen) {
+        seen = new Set<string>()
+        state().readSkillFileSeen.set(runId, seen)
+      }
+      if (seen.has(key)) {
+        return JSON.stringify({
+          ok: false,
+          error:
+            `already read ${JSON.stringify(key)} in this run. The prior tool_result ` +
+            `is still in your conversation history — scroll back instead of re-reading.`,
+        })
+      }
+      const total = state().readSkillFileTotal.get(runId) ?? 0
+      if (total >= MAX_READ_SKILL_FILE_PER_RUN) {
+        return JSON.stringify({
+          ok: false,
+          error:
+            `read_skill_file cap reached (${MAX_READ_SKILL_FILE_PER_RUN} per run). ` +
+            `Stop exploring the skill tree — commit to run_skill_script with what you already have ` +
+            `or report the blocker upstream.`,
+        })
+      }
+
       const { content, error } = readSkillFile(skill, path)
       if (error) return JSON.stringify({ ok: false, error })
+
+      // Only count successful, novel reads so binary-refusals and errors
+      // don't burn the budget.
+      seen.add(key)
+      state().readSkillFileTotal.set(runId, total + 1)
+
       return JSON.stringify({ ok: true, path, content })
     },
     hint: 'Reading skill file…',

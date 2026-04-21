@@ -286,6 +286,14 @@ export async function runSkillScript(
   }
 }
 
+const BINARY_EXTS = new Set([
+  '.pdf', '.docx', '.pptx', '.xlsx', '.doc', '.ppt', '.xls',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.bmp', '.tiff',
+  '.zip', '.tar', '.gz', '.7z', '.rar',
+  '.mp3', '.mp4', '.wav', '.mov', '.avi',
+  '.woff', '.woff2', '.ttf', '.otf',
+])
+
 export function readSkillFile(
   skill: SkillDef,
   relPath: string,
@@ -295,6 +303,23 @@ export function readSkillFile(
     return {
       content: null,
       error: `file not found or outside skill: ${JSON.stringify(relPath)}`,
+    }
+  }
+  const ext = path.extname(resolved).toLowerCase()
+  if (BINARY_EXTS.has(ext)) {
+    let size = 0
+    try {
+      size = fs.statSync(resolved).size
+    } catch {
+      /* ignore */
+    }
+    return {
+      content: null,
+      error:
+        `refusing to read binary file ${JSON.stringify(relPath)} (${ext}, ${size} bytes). ` +
+        `Generated binary artifacts (PDF, DOCX, PPTX, images, etc.) must not be read back into the prompt — ` +
+        `they balloon context with no usable text. Trust the run_skill_script success response; ` +
+        `the file is already registered as an artifact. Use extract_doc / inspect_doc scripts instead if you need to verify content.`,
     }
   }
   let raw: Buffer
