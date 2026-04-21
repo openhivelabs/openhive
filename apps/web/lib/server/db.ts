@@ -137,6 +137,21 @@ function initConnection(file: string): BetterSqliteDatabase {
   if (!cols.some((c) => c.name === 'account_id')) {
     conn.exec('ALTER TABLE oauth_tokens ADD COLUMN account_id TEXT')
   }
+  // Phase G1: char-count breakdown of the prompt payload per call.
+  // Lets us attribute input-token spend to system/tools/history regions.
+  const usageCols = conn
+    .prepare('PRAGMA table_info(usage_logs)')
+    .all() as { name: string }[]
+  const usageColSet = new Set(usageCols.map((c) => c.name))
+  if (!usageColSet.has('system_chars')) {
+    conn.exec('ALTER TABLE usage_logs ADD COLUMN system_chars INTEGER DEFAULT 0')
+  }
+  if (!usageColSet.has('tools_chars')) {
+    conn.exec('ALTER TABLE usage_logs ADD COLUMN tools_chars INTEGER DEFAULT 0')
+  }
+  if (!usageColSet.has('history_chars')) {
+    conn.exec('ALTER TABLE usage_logs ADD COLUMN history_chars INTEGER DEFAULT 0')
+  }
   return conn
 }
 

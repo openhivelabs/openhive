@@ -47,6 +47,20 @@
 - 같은 프롬프트에서도 Lead가 경로를 다양하게 잡음 (Lead→Writer 직결 vs Lead→Boss→researcher 우회). 경로 다양성 자체가 가장 큰 분산 원인. Phase F(provider/model 권장 조합)나 Lead 프롬프트 더 엄격화가 다음 후보.
 - baseline 대비 input +80%는 주로 가드레일 rule이 system prompt에 들어간 영향. prompt caching 46% 덕분에 실제 비용 증분은 작음.
 
+### Phase G 측정 결과 — run_9510c692 (2026-04-21 17:15)
+`usage_logs`에 `system_chars` / `tools_chars` / `history_chars` 컬럼 추가 완료.
+단일 run 집계 (19 calls):
+| 영역 | chars | 비중 |
+|---|---:|---:|
+| system | 18,324 | 12% |
+| tools schema | 47,281 | 31% |
+| history | 88,918 | 58% |
+
+**레버 우선순위 (분포 기반)**:
+1. **history (58%)** — 가장 큰 비중. B1/B2 연장 여지: 같은 파일 read 결과 history 완전 제거 (지금은 2회차 "이미 읽음" 에러만), 오래된 delegation 요약 (2KB→1KB).
+2. **tools (31%)** — Writer 같은 단말 노드에는 delegate_to 불필요. 에이전트별 tool allow-list 타이트하게. ask_user 설명 축약.
+3. **system (12%)** — 이미 작음. 여기 더 다이어트하는 건 ROI 낮음.
+
 ---
 
 ## 이미 완료 ✅

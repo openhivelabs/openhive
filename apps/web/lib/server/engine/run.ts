@@ -456,6 +456,18 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
   const messages = buildMessages(systemPrompt, history)
   const openaiTools = tools.length > 0 ? toolsToOpenAI(tools) : undefined
 
+  // Phase G1: attribute payload size to system vs tools vs history so we can
+  // later rank which region is driving spend. Char counts, not tokens — a
+  // cheap proxy that doesn't need a tokenizer.
+  const systemChars = systemPrompt.length
+  const toolsChars = openaiTools ? JSON.stringify(openaiTools).length : 0
+  let historyChars = 0
+  for (const m of history) {
+    if (typeof m.content === 'string') historyChars += m.content.length
+    else if (Array.isArray(m.content)) historyChars += JSON.stringify(m.content).length
+    if (Array.isArray(m.tool_calls)) historyChars += JSON.stringify(m.tool_calls).length
+  }
+
   const textBuf: string[] = []
   interface Pending {
     id: string | null
@@ -504,6 +516,9 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
           outputTokens: delta.output_tokens ?? 0,
           cacheReadTokens: delta.cache_read_tokens ?? 0,
           cacheWriteTokens: delta.cache_write_tokens ?? 0,
+          systemChars,
+          toolsChars,
+          historyChars,
         })
       } catch {
         /* swallow */

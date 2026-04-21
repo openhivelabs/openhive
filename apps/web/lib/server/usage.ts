@@ -51,6 +51,12 @@ export interface RecordUsageInput {
   outputTokens: number
   cacheReadTokens?: number
   cacheWriteTokens?: number
+  // Phase G1 — char counts of the prompt payload regions we built.
+  // Not tokens; a cheap attribution proxy. char/token ratio is model-stable
+  // enough (≈3–4 for latin, ≈1–2 for CJK) to rank spend by region.
+  systemChars?: number
+  toolsChars?: number
+  historyChars?: number
 }
 
 export function recordUsage(input: RecordUsageInput): void {
@@ -61,8 +67,9 @@ export function recordUsage(input: RecordUsageInput): void {
         (ts, run_id, company_id, team_id, agent_id, agent_role,
          provider_id, model,
          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-         cost_usd_cents)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         cost_usd_cents,
+         system_chars, tools_chars, history_chars)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       Date.now(),
@@ -78,6 +85,9 @@ export function recordUsage(input: RecordUsageInput): void {
       Math.trunc(input.cacheReadTokens ?? 0),
       Math.trunc(input.cacheWriteTokens ?? 0),
       cost,
+      Math.trunc(input.systemChars ?? 0),
+      Math.trunc(input.toolsChars ?? 0),
+      Math.trunc(input.historyChars ?? 0),
     )
 }
 
