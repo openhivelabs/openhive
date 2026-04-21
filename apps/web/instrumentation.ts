@@ -12,7 +12,7 @@ export async function register() {
   // Dynamic imports so the edge runtime never loads better-sqlite3 etc.
   const { startScheduler } = await import('./lib/server/scheduler/scheduler')
   const { markOrphanedRunsInterrupted } = await import('./lib/server/runs-store')
-  const { backfillSessions } = await import('./lib/server/sessions')
+  const { backfillSessions, repairSessions } = await import('./lib/server/sessions')
 
   try {
     const n = markOrphanedRunsInterrupted()
@@ -27,6 +27,10 @@ export async function register() {
     const n = backfillSessions()
     if (n > 0) {
       console.log(`boot: backfilled ${n} session directory/directories`)
+    }
+    const r = repairSessions()
+    if (r > 0) {
+      console.log(`boot: repaired ${r} session(s) (regenerated transcript)`)
     }
   } catch (exc) {
     console.error('boot: session backfill failed', exc)

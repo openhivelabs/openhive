@@ -112,6 +112,73 @@ export function artifactDirForRun(runId: string): string {
   return sessionArtifactDir(uuid)
 }
 
+/** Build the distilled transcript lines from a full event list. */
+function buildTranscript(
+  goal: string,
+  startedAt: number,
+  events: ReturnType<typeof eventsFor>,
+): Record<string, unknown>[] {
+  const lines: Record<string, unknown>[] = [
+    { kind: 'goal', text: goal, ts: startedAt / 1000 },
+  ]
+  for (const ev of events) {
+    if (ev.kind === 'user_question') {
+      lines.push({
+        kind: 'ask_user',
+        ts: ev.ts,
+        agent_role: (ev.data as Record<string, unknown>)?.agent_role,
+        questions: (ev.data as Record<string, unknown>)?.questions,
+      })
+    } else if (ev.kind === 'user_answered') {
+      lines.push({
+        kind: 'user_answer',
+        ts: ev.ts,
+        result: (ev.data as Record<string, unknown>)?.result,
+      })
+    } else if (ev.kind === 'tool_called') {
+      lines.push({
+        kind: 'tool_call',
+        ts: ev.ts,
+        node_id: ev.node_id,
+        tool: ev.tool_name,
+        args: (ev.data as Record<string, unknown>)?.arguments,
+      })
+    } else if (ev.kind === 'node_finished') {
+      const output = (ev.data as Record<string, unknown>)?.output
+      if (typeof output === 'string' && output.trim()) {
+        lines.push({
+          kind: 'agent_message',
+          ts: ev.ts,
+          node_id: ev.node_id,
+          text: output,
+        })
+      }
+    }
+  }
+  return lines
+}
+
+function writeTranscriptAndEvents(
+  uuid: string,
+  goal: string,
+  startedAt: number,
+  events: ReturnType<typeof eventsFor>,
+): void {
+  if (events.length > 0) {
+    fs.writeFileSync(
+      path.join(sessionDir(uuid), 'events.jsonl'),
+      events.map((e) => JSON.stringify(e)).join('\n') + '\n',
+      'utf8',
+    )
+  }
+  const lines = buildTranscript(goal, startedAt, events)
+  fs.writeFileSync(
+    path.join(sessionDir(uuid), 'transcript.jsonl'),
+    lines.map((t) => JSON.stringify(t)).join('\n') + '\n',
+    'utf8',
+  )
+}
+
 /** End-of-run dump: meta update + transcript + full event log. No-op if
  *  the session was never created (shouldn't happen in normal flow). */
 export function finalizeSession(
@@ -130,53 +197,7 @@ export function finalizeSession(
     : 'finished'
 
   const events = eventsFor(runId)
-  const eventsLines = events.map((e) => JSON.stringify(e)).join('\n') + '\n'
-  fs.writeFileSync(path.join(sessionDir(uuid), 'events.jsonl'), eventsLines, 'utf8')
-
-  // Transcript: distilled chat view — user goal, ask_user turns, agent
-  // final outputs, tool calls. One JSON line per entry, chronological.
-  const transcript: Record<string, unknown>[] = [
-    { kind: 'goal', text: meta.goal, ts: meta.started_at },
-  ]
-  for (const ev of events) {
-    if (ev.kind === 'user_question') {
-      transcript.push({
-        kind: 'ask_user',
-        ts: ev.ts,
-        agent_role: (ev.data as Record<string, unknown>)?.agent_role,
-        questions: (ev.data as Record<string, unknown>)?.questions,
-      })
-    } else if (ev.kind === 'user_answered') {
-      transcript.push({
-        kind: 'user_answer',
-        ts: ev.ts,
-        result: (ev.data as Record<string, unknown>)?.result,
-      })
-    } else if (ev.kind === 'tool_called') {
-      transcript.push({
-        kind: 'tool_call',
-        ts: ev.ts,
-        node_id: ev.node_id,
-        tool: ev.tool_name,
-        args: (ev.data as Record<string, unknown>)?.arguments,
-      })
-    } else if (ev.kind === 'node_finished') {
-      const output = (ev.data as Record<string, unknown>)?.output
-      if (typeof output === 'string' && output.trim()) {
-        transcript.push({
-          kind: 'agent_message',
-          ts: ev.ts,
-          node_id: ev.node_id,
-          text: output,
-        })
-      }
-    }
-  }
-  fs.writeFileSync(
-    path.join(sessionDir(uuid), 'transcript.jsonl'),
-    transcript.map((t) => JSON.stringify(t)).join('\n') + '\n',
-    'utf8',
-  )
+  writeTranscriptAndEvents(uuid, meta.goal, meta.started_at, events)
 
   // Drop the artifacts subdir if nothing was written. Keeps the layout
   // "only present when generated" as the user specified.
@@ -303,11 +324,7 @@ export function backfillSessions(): number {
     // Write transcript + events.jsonl for this historical run too.
     try {
       const events = eventsFor(run.id)
-      fs.writeFileSync(
-        path.join(sessionDir(uuid), 'events.jsonl'),
-        events.map((e) => JSON.stringify(e)).join('\n') + (events.length ? '\n' : ''),
-        'utf8',
-      )
+      writeTranscriptAndEvents(uuid, run.goal, run.started_at, events)
     } catch {
       /* events dump is best-effort */
     }
@@ -324,6 +341,47 @@ export function backfillSessions(): number {
   return created
 }
 
+/** Idempotent repair pass: regenerate missing transcript.jsonl for any
+ *  session that was backfilled before this helper existed, and retry the
+ *  legacy-artifacts pruning now that junk files are removed. Safe to call
+ *  on every boot. */
+export function repairSessions(): number {
+  const db = getDb()
+  const rows = db
+    .prepare(
+      `SELECT id, team_id, goal, started_at, session_uuid
+         FROM runs WHERE session_uuid IS NOT NULL`,
+    )
+    .all() as {
+    id: string
+    team_id: string
+    goal: string
+    started_at: number
+    session_uuid: string
+  }[]
+  let fixed = 0
+  for (const run of rows) {
+    const uuid = run.session_uuid
+    const dir = sessionDir(uuid)
+    if (!fs.existsSync(dir)) continue
+    const transcript = path.join(dir, 'transcript.jsonl')
+    if (fs.existsSync(transcript)) continue
+    try {
+      const events = eventsFor(run.id)
+      writeTranscriptAndEvents(uuid, run.goal, run.started_at, events)
+      fixed += 1
+    } catch {
+      /* best-effort */
+    }
+  }
+  try { pruneEmptyTree(artifactsRoot()) } catch { /* ignore */ }
+  return fixed
+}
+
+// Junk files macOS (and some other OSes) drop into every directory. They
+// shouldn't keep otherwise-empty legacy folders alive after migration.
+const JUNK_FILENAMES = new Set(['.DS_Store', 'Thumbs.db', '.localized'])
+
 function pruneEmptyTree(root: string): void {
   if (!fs.existsSync(root)) return
   const walk = (dir: string): boolean => {
@@ -334,6 +392,8 @@ function pruneEmptyTree(root: string): void {
       if (e.isDirectory()) {
         const childEmpty = walk(abs)
         if (!childEmpty) allEmpty = false
+      } else if (JUNK_FILENAMES.has(e.name)) {
+        try { fs.unlinkSync(abs) } catch { /* ignore */ }
       } else {
         allEmpty = false
       }
@@ -345,6 +405,14 @@ function pruneEmptyTree(root: string): void {
   }
   walk(root)
   try {
-    if (fs.readdirSync(root).length === 0) fs.rmdirSync(root)
+    const remaining = fs
+      .readdirSync(root)
+      .filter((n) => !JUNK_FILENAMES.has(n))
+    if (remaining.length === 0) {
+      for (const n of fs.readdirSync(root)) {
+        try { fs.unlinkSync(path.join(root, n)) } catch { /* ignore */ }
+      }
+      fs.rmdirSync(root)
+    }
   } catch { /* keep */ }
 }
