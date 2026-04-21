@@ -239,6 +239,46 @@ export interface SessionTeamOpts {
   locale?: string
 }
 
+/** Per-session queue of follow-up user messages. The chat loop pops from this
+ *  after each Lead turn finishes; the HTTP route pushes into it. Kept on
+ *  globalThis to survive Next HMR. */
+interface ChatInboxState {
+  queues: Map<string, PromiseQueue<string>>
+}
+const globalForInbox = globalThis as unknown as {
+  __openhive_chat_inbox?: ChatInboxState
+}
+function inboxState(): ChatInboxState {
+  if (!globalForInbox.__openhive_chat_inbox) {
+    globalForInbox.__openhive_chat_inbox = { queues: new Map() }
+  }
+  return globalForInbox.__openhive_chat_inbox
+}
+function ensureQueue(sessionId: string): PromiseQueue<string> {
+  const s = inboxState()
+  let q = s.queues.get(sessionId)
+  if (!q) {
+    q = new PromiseQueue<string>()
+    s.queues.set(sessionId, q)
+  }
+  return q
+}
+/** External entry point — the HTTP route calls this when the user sends a
+ *  follow-up. Returns false if the session is not live. */
+export function pushUserMessage(sessionId: string, text: string): boolean {
+  const q = inboxState().queues.get(sessionId)
+  if (!q) return false
+  q.push(text)
+  return true
+}
+
+/** Called by the registry when a session is being aborted — wakes any pending
+ *  inbox.pop() so the generator can observe the abort and exit cleanly. */
+export function closeUserInbox(sessionId: string): void {
+  const q = inboxState().queues.get(sessionId)
+  if (q) q.close()
+}
+
 export async function* runTeam(
   team: TeamSpec,
   goal: string,
@@ -283,24 +323,69 @@ async function* runTeamBody(
 ): AsyncGenerator<Event> {
   yield makeEvent('run_started', sessionId, { team_id: team.id, goal })
   const entry = entryAgent(team)
-  let final = ''
+  // The Lead's history persists across turns — this is what makes the session
+  // a chat rather than a one-shot run. Each follow-up user message pushes a
+  // new `user` entry and re-enters runNode with the accumulated context.
+  const leadHistory: ChatMessage[] = []
+  const inbox = ensureQueue(sessionId)
+  let currentTask = goal
+  let lastFinal = ''
   try {
-    for await (const ev of runNode({
-      sessionId,
-      team,
-      node: entry,
-      task: goal,
-      depth: 0,
-    })) {
-      if (ev.kind === 'node_finished' && ev.depth === 0) {
-        final = (ev.data.output as string | undefined) ?? ''
+    while (true) {
+      for await (const ev of runNode({
+        sessionId,
+        team,
+        node: entry,
+        task: currentTask,
+        depth: 0,
+        externalHistory: leadHistory,
+      })) {
+        if (ev.kind === 'node_finished' && ev.depth === 0) {
+          lastFinal = (ev.data.output as string | undefined) ?? ''
+        }
+        yield ev
       }
-      yield ev
+      // Lead finished a turn — park until the user sends another message.
+      yield makeEvent('turn_finished', sessionId, { output: lastFinal })
+      const next = await inbox.pop()
+      // null = session being torn down.
+      if (next === null) break
+      yield makeEvent('user_message', sessionId, { text: next })
+      currentTask = next
     }
-    yield makeEvent('run_finished', sessionId, { output: final })
+    yield makeEvent('run_finished', sessionId, { output: lastFinal })
   } catch (exc) {
     const message = exc instanceof Error ? exc.message : String(exc)
     yield makeEvent('run_error', sessionId, { error: message })
+  } finally {
+    inboxState().queues.delete(sessionId)
+  }
+}
+
+/** Minimal cancellable queue — pop() resolves on push or on close() (with null). */
+class PromiseQueue<T> {
+  private buffer: T[] = []
+  private waiters: Array<(v: T | null) => void> = []
+  private closed = false
+
+  push(value: T): void {
+    if (this.closed) return
+    const w = this.waiters.shift()
+    if (w) w(value)
+    else this.buffer.push(value)
+  }
+
+  close(): void {
+    this.closed = true
+    for (const w of this.waiters.splice(0)) w(null)
+  }
+
+  async pop(): Promise<T | null> {
+    if (this.buffer.length > 0) return this.buffer.shift()!
+    if (this.closed) return null
+    return new Promise<T | null>((resolve) => {
+      this.waiters.push(resolve)
+    })
   }
 }
 
@@ -312,10 +397,13 @@ interface SessionNodeOpts {
   node: AgentSpec
   task: string
   depth: number
+  /** If provided, the caller owns history across turns (chat mode). runNode
+   *  appends to this array instead of building its own. */
+  externalHistory?: ChatMessage[]
 }
 
 async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
-  const { sessionId, team, node, task, depth } = opts
+  const { sessionId, team, node, task, depth, externalHistory } = opts
   const teamSlugs = state().teamSlugs.get(sessionId) ?? null
 
   yield makeEvent(
@@ -344,11 +432,17 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   }
 
   // Skills: typed get a structured tool; agent-format go through activate/read/run.
-  const allowed = new Set(team.allowed_skills ?? [])
+  // team.allowed_skills is an OPTIONAL whitelist. If it's undefined or empty,
+  // trust the agent's own declared skills — a fresh team shouldn't have to
+  // re-declare every skill at the team level just to make its own agents work.
+  // Only filter when the team explicitly narrowed the set.
+  const rawAllowed = team.allowed_skills ?? []
+  const hasAllowlist = rawAllowed.length > 0
+  const allowed = new Set(rawAllowed)
   const typedSkills: SkillDef[] = []
   const agentSkills: SkillDef[] = []
   for (const name of effectiveSkills(node, persona)) {
-    if (!allowed.has(name)) continue
+    if (hasAllowlist && !allowed.has(name)) continue
     const skill = getSkill(name)
     if (!skill) continue
     if (skill.kind === 'typed') typedSkills.push(skill)
@@ -402,7 +496,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   )
   tools.push(...makePersonaTools(persona))
 
-  const history: ChatMessage[] = []
+  const history: ChatMessage[] = externalHistory ?? []
   history.push({ role: 'user', content: task })
 
   let rounds = 0

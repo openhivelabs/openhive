@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import type { Agent, ReportingEdge } from '../types'
+import { saveTeam } from '../api/companies'
+import type { Agent, ReportingEdge, Team } from '../types'
 import { useAppStore } from './useAppStore'
 
 interface CanvasState {
@@ -13,55 +14,84 @@ interface CanvasState {
   setActiveEdges: (edgeIds: string[]) => void
 }
 
-function updateCurrentTeam(updater: (team: import('../types').Team) => import('../types').Team) {
+type Updater = (team: Team) => Team
+
+function mutate(updater: Updater, persist: boolean) {
   const state = useAppStore.getState()
+  let savedTeam: Team | null = null
+  let savedCompanySlug: string | null = null
   const companies = state.companies.map((company) => {
     if (company.id !== state.currentCompanyId) return company
     return {
       ...company,
-      teams: company.teams.map((team) => (team.id === state.currentTeamId ? updater(team) : team)),
+      teams: company.teams.map((team) => {
+        if (team.id !== state.currentTeamId) return team
+        const next = updater(team)
+        savedTeam = next
+        savedCompanySlug = company.slug
+        return next
+      }),
     }
   })
   useAppStore.setState({ companies })
+  if (persist && savedTeam && savedCompanySlug) {
+    void saveTeam(savedCompanySlug, savedTeam).catch((e) => console.error('saveTeam failed', e))
+  }
 }
 
 export const useCanvasStore = create<CanvasState>(() => ({
   addAgent: (agent) =>
-    updateCurrentTeam((team) => ({ ...team, agents: [...team.agents, agent] })),
+    mutate((team) => ({ ...team, agents: [...team.agents, agent] }), true),
 
   updateAgent: (agentId, patch) =>
-    updateCurrentTeam((team) => ({
-      ...team,
-      agents: team.agents.map((a) => (a.id === agentId ? { ...a, ...patch } : a)),
-    })),
+    mutate(
+      (team) => ({
+        ...team,
+        agents: team.agents.map((a) => (a.id === agentId ? { ...a, ...patch } : a)),
+      }),
+      true,
+    ),
 
   moveAgent: (agentId, position) =>
-    updateCurrentTeam((team) => ({
-      ...team,
-      agents: team.agents.map((a) => (a.id === agentId ? { ...a, position } : a)),
-    })),
+    mutate(
+      (team) => ({
+        ...team,
+        agents: team.agents.map((a) => (a.id === agentId ? { ...a, position } : a)),
+      }),
+      true,
+    ),
 
   removeAgent: (agentId) =>
-    updateCurrentTeam((team) => ({
-      ...team,
-      agents: team.agents.filter((a) => a.id !== agentId),
-      edges: team.edges.filter((e) => e.source !== agentId && e.target !== agentId),
-    })),
+    mutate(
+      (team) => ({
+        ...team,
+        agents: team.agents.filter((a) => a.id !== agentId),
+        edges: team.edges.filter((e) => e.source !== agentId && e.target !== agentId),
+      }),
+      true,
+    ),
 
-  addEdge: (edge) => updateCurrentTeam((team) => ({ ...team, edges: [...team.edges, edge] })),
+  addEdge: (edge) => mutate((team) => ({ ...team, edges: [...team.edges, edge] }), true),
 
   removeEdge: (edgeId) =>
-    updateCurrentTeam((team) => ({ ...team, edges: team.edges.filter((e) => e.id !== edgeId) })),
+    mutate((team) => ({ ...team, edges: team.edges.filter((e) => e.id !== edgeId) }), true),
 
+  // Transient highlights — not persisted.
   setActiveAgents: (agentIds) =>
-    updateCurrentTeam((team) => ({
-      ...team,
-      agents: team.agents.map((a) => ({ ...a, isActive: agentIds.includes(a.id) })),
-    })),
+    mutate(
+      (team) => ({
+        ...team,
+        agents: team.agents.map((a) => ({ ...a, isActive: agentIds.includes(a.id) })),
+      }),
+      false,
+    ),
 
   setActiveEdges: (edgeIds) =>
-    updateCurrentTeam((team) => ({
-      ...team,
-      edges: team.edges.map((e) => ({ ...e, isActive: edgeIds.includes(e.id) })),
-    })),
+    mutate(
+      (team) => ({
+        ...team,
+        edges: team.edges.map((e) => ({ ...e, isActive: edgeIds.includes(e.id) })),
+      }),
+      false,
+    ),
 }))
