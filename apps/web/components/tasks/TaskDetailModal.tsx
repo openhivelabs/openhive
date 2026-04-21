@@ -27,6 +27,18 @@ interface TaskDetailModalProps {
   onClose: () => void
 }
 
+interface SessionArtifact {
+  id: string
+  filename: string
+  size: number | null
+  mime: string | null
+}
+
+interface SessionSummary {
+  output: string | null
+  artifacts: SessionArtifact[]
+}
+
 export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
   const t = useT()
   const team = useCurrentTeam()
@@ -37,6 +49,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
   const [showAsk, setShowAsk] = useState(false)
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
+  const [summary, setSummary] = useState<SessionSummary | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEscapeClose(task, onClose)
@@ -59,6 +72,44 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
   useEffect(() => {
     if (pendingAsk) setShowAsk(true)
   }, [pendingAsk?.toolCallId])
+
+  // For runs that have ended (done / failed / interrupted), pull the final
+  // Lead output + any generated artifacts from the session store so each
+  // done card shows that run's unique deliverable. Re-fetched per run so
+  // switching cards doesn't leak previous data.
+  const endedRunId =
+    latest && latest.status !== 'running' && latest.backendRunId
+      ? latest.backendRunId
+      : null
+  useEffect(() => {
+    if (!endedRunId) {
+      setSummary(null)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const [sess, arts] = await Promise.all([
+          fetch(`/api/sessions?run_id=${encodeURIComponent(endedRunId)}`).then((r) =>
+            r.ok ? r.json() : null,
+          ),
+          fetch(`/api/artifacts?run_id=${encodeURIComponent(endedRunId)}`).then((r) =>
+            r.ok ? r.json() : [],
+          ),
+        ])
+        if (cancelled) return
+        setSummary({
+          output: sess?.output ?? null,
+          artifacts: Array.isArray(arts) ? arts : [],
+        })
+      } catch {
+        if (!cancelled) setSummary(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [endedRunId])
   const isRunning = status === 'running' || status === 'needs_input'
   const now = useTicker(isRunning && !!latest && !latest.endedAt)
   const elapsedMs = latest ? runElapsedMs(latest, now) : 0
@@ -278,14 +329,55 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
             )}
           </div>
 
-          {/* Failure reason only — step-by-step trace lives in the drawer.
-              Done tasks show deliverables via the Artifacts tab, not here. */}
+          {/* Failure reason (if any) */}
           {latest?.status === 'failed' && latest.error && (
             <div className="px-4 py-3">
               <div className="rounded bg-red-50 border border-red-200 text-red-700 text-[14px] px-2.5 py-2">
                 <Warning className="inline w-3.5 h-3.5 mr-1" />
                 {latest.error}
               </div>
+            </div>
+          )}
+
+          {/* Session result — unique per run. Pulled from sessions/{uuid}/:
+              the Lead's final output plus whatever files the run produced. */}
+          {endedRunId && summary && (summary.output || summary.artifacts.length > 0) && (
+            <div className="px-4 py-3 border-t border-neutral-200 space-y-3">
+              {summary.artifacts.length > 0 && (
+                <div>
+                  <div className="text-[12px] font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
+                    {t('tasks.artifactsHeader') || '생성된 파일'}
+                  </div>
+                  <div className="space-y-1">
+                    {summary.artifacts.map((a) => (
+                      <a
+                        key={a.id}
+                        href={`/api/artifacts/${encodeURIComponent(a.id)}/download`}
+                        className="flex items-center gap-2 text-[13px] text-neutral-800 hover:text-neutral-950 hover:underline"
+                        download
+                      >
+                        <FileText className="w-3.5 h-3.5 text-neutral-500" />
+                        <span className="flex-1 truncate">{a.filename}</span>
+                        {a.size != null && (
+                          <span className="text-[11px] font-mono text-neutral-400">
+                            {(a.size / 1024).toFixed(1)} KB
+                          </span>
+                        )}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {summary.output && (
+                <div>
+                  <div className="text-[12px] font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
+                    {t('tasks.finalOutputHeader') || '최종 결과'}
+                  </div>
+                  <div className="rounded bg-neutral-50 border border-neutral-200 text-[13px] text-neutral-800 px-3 py-2 whitespace-pre-wrap leading-relaxed max-h-[320px] overflow-y-auto">
+                    {summary.output}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
