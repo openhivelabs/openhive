@@ -1,0 +1,18 @@
+id: brave
+name: Brave Search
+icon: "🦁"
+brand: brave
+description: Independent web index with no user tracking. Good for general web queries and privacy-conscious research.
+command: npx
+args: ["-y", "@modelcontextprotocol/server-brave-search"]
+env_template:
+  BRAVE_API_KEY: "{{api_key}}"
+inputs:
+  - key: api_key
+    label: Brave Search API Key
+    type: secret
+    placeholder: BSA-xxxxxxxxxxxxxxxxxxxx
+    help_text: |
+      Create an API key at https://brave.com/search/api.
+      The free tier allows up to 2,000 queries/month.
+    required: true
