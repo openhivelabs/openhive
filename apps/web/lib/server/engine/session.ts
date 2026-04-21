@@ -261,6 +261,7 @@ export function activeRunCapacity(): { inUse: number; total: number } {
 
 import * as mcpManagerImpl from '../mcp/manager'
 import type { getTools as getMcpTools } from '../mcp/manager'
+import { getTeamMcpTools } from './mcp-tools-cache'
 
 type ToolInfo = Awaited<ReturnType<typeof getMcpTools>>[number]
 
@@ -406,23 +407,22 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   }
 
   // MCP: per-server get_tools, wrap each as <server>__<tool>. A misconfigured
-  // server surfaces a tool_result error but doesn't kill the run.
+  // server surfaces a tool_result error but doesn't kill the run. The
+  // (teamId, sorted servers) cache means sibling/descendant nodes in the
+  // same session reuse the already-resolved tool list instead of re-wrapping.
   const effectiveMcp = effectiveMcpServers(
     team.allowed_mcp_servers ?? [],
     persona,
   )
-  for (const serverName of effectiveMcp) {
-    let mcpTools: ToolInfo[]
-    try {
-      mcpTools = await mcpManager().getTools(serverName)
-    } catch (exc) {
+  const teamMcp = await getTeamMcpTools(team.id, effectiveMcp, (s) =>
+    mcpManager().getTools(s),
+  )
+  for (const { serverName, tools: mcpTools, error } of teamMcp) {
+    if (error) {
       yield makeEvent(
         'tool_result',
         sessionId,
-        {
-          content: `MCP server '${serverName}' unavailable: ${exc instanceof Error ? exc.message : String(exc)}`,
-          is_error: true,
-        },
+        { content: `MCP server '${serverName}' unavailable: ${error}`, is_error: true },
         { depth, node_id: node.id, tool_name: `${serverName}__init` },
       )
       continue
