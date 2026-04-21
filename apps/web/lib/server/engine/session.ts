@@ -53,6 +53,34 @@ export const MAX_ASK_USER_PER_RUN = 3
 export const HARD_MAX_TOOL_ROUNDS = 30
 export const HARD_MAX_DEPTH = 8
 
+/** Tool names that mutate run-scoped state (delegation tree, ask_user
+ *  counter, todos) — these must execute serially. Every other tool (MCP,
+ *  skill helpers, custom handlers) is parallel-safe in a single turn. */
+export const SERIAL_TOOL_NAMES = new Set<string>([
+  'delegate_to',
+  'delegate_parallel',
+  'ask_user',
+  'set_todos',
+  'add_todo',
+  'complete_todo',
+])
+
+/** Partition tool_calls into consecutive serial/parallel runs. Adjacent
+ *  same-kind calls collapse into one run; the order inside each run is
+ *  preserved so provider history remains deterministic. */
+export function splitToolRuns<T extends { function: { name: string } }>(
+  calls: T[],
+): { serial: boolean; items: T[] }[] {
+  const runs: { serial: boolean; items: T[] }[] = []
+  for (const tc of calls) {
+    const serial = SERIAL_TOOL_NAMES.has(tc.function.name)
+    const last = runs[runs.length - 1]
+    if (last && last.serial === serial) last.items.push(tc)
+    else runs.push({ serial, items: [tc] })
+  }
+  return runs
+}
+
 // session_id → counters kept on globalThis so HMR doesn't drop in-flight runs.
 interface RunState {
   askUser: Map<string, number>
@@ -551,7 +579,15 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       tool_calls: toolCallsForHistory,
     })
 
-    for (const tc of toolCallsForHistory) {
+    // Split tool_calls into serial-vs-parallel runs. Tools that mutate
+    // run-scoped state (delegation, ask_user, todo) stay serial; everything
+    // else (MCP, skills, custom) runs concurrently. History is always pushed
+    // in original tool_call order so provider payloads stay deterministic.
+    type ExecResult = { content: string; isError: boolean }
+    type TC = (typeof toolCallsForHistory)[number]
+    const runs = splitToolRuns<TC>(toolCallsForHistory)
+
+    const executeOne = async function* (tc: TC): AsyncGenerator<Event, ExecResult> {
       let parsedArgs: Record<string, unknown> = {}
       try {
         parsedArgs = tc.function.arguments
@@ -640,27 +676,28 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
         { content, is_error: isError },
         { depth, node_id: node.id, tool_call_id: tc.id, tool_name: tc.function.name },
       )
+      return { content, isError }
+    }
 
-      // B2: shrink oversize delegation results before they hit history.
-      // The full text is already persisted in the tool_result event above.
-      let historyContent = content
+    const applyResult = (tc: TC, res: ExecResult) => {
+      // B2: shrink oversize delegation results before they hit history. The
+      // full text is already persisted in the tool_result event above.
+      let historyContent = res.content
       if (
-        !isError &&
+        !res.isError &&
         (tc.function.name === 'delegate_to' ||
           tc.function.name === 'delegate_parallel')
       ) {
-        historyContent = summarizeLargeDelegationResult(content)
+        historyContent = summarizeLargeDelegationResult(res.content)
       }
-
       history.push({
         role: 'tool',
         tool_call_id: tc.id,
         content: historyContent,
       })
-
       // B1: once a skill script succeeds, reference docs read earlier are
       // dead weight on the prompt. Elide them in-place.
-      if (!isError && tc.function.name === 'run_skill_script') {
+      if (!res.isError && tc.function.name === 'run_skill_script') {
         let skillName = ''
         try {
           skillName = String(
@@ -670,6 +707,69 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
           /* ignore */
         }
         if (skillName) elideReadSkillFileResults(history, skillName)
+      }
+    }
+
+    for (const run of runs) {
+      if (run.serial || run.items.length === 1) {
+        for (const tc of run.items) {
+          const gen = executeOne(tc)
+          let step = await gen.next()
+          while (!step.done) {
+            yield step.value
+            step = await gen.next()
+          }
+          applyResult(tc, step.value)
+        }
+      } else {
+        // Parallel: kick off every tc concurrently; interleave their events
+        // via AsyncQueue so the caller sees them as they arrive. Results are
+        // collected into a slot array so history.push remains in index order.
+        const n = run.items.length
+        type Item =
+          | { kind: 'event'; event: Event }
+          | { kind: 'done'; index: number; result: ExecResult }
+        const queue = new AsyncQueue<Item>()
+        const results: Array<ExecResult | null> = new Array(n).fill(null)
+
+        for (let i = 0; i < n; i++) {
+          const tc = run.items[i]!
+          const idx = i
+          void (async () => {
+            try {
+              const gen = executeOne(tc)
+              let step = await gen.next()
+              while (!step.done) {
+                queue.push({ kind: 'event', event: step.value })
+                step = await gen.next()
+              }
+              queue.push({ kind: 'done', index: idx, result: step.value })
+            } catch (exc) {
+              queue.push({
+                kind: 'done',
+                index: idx,
+                result: {
+                  content: `ERROR: ${exc instanceof Error ? exc.message : String(exc)}`,
+                  isError: true,
+                },
+              })
+            }
+          })()
+        }
+
+        let completed = 0
+        while (completed < n) {
+          const item = await queue.pop()
+          if (item.kind === 'event') {
+            yield item.event
+          } else {
+            results[item.index] = item.result
+            completed += 1
+          }
+        }
+        for (let i = 0; i < n; i++) {
+          applyResult(run.items[i]!, results[i] as ExecResult)
+        }
       }
     }
   }
