@@ -10,14 +10,14 @@ export interface MessageRecord {
   team_id: string
   from_id: string
   text: string
-  run_id: string | null
+  session_id: string | null
   created_at: number
 }
 
 export function saveMessage(record: MessageRecord): void {
   getDb()
     .prepare(
-      `INSERT INTO messages (id, team_id, from_id, text, run_id, created_at)
+      `INSERT INTO messages (id, team_id, from_id, text, session_id, created_at)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET text = excluded.text`,
     )
@@ -26,7 +26,7 @@ export function saveMessage(record: MessageRecord): void {
       record.team_id,
       record.from_id,
       record.text,
-      record.run_id,
+      record.session_id,
       record.created_at,
     )
 }
@@ -34,7 +34,7 @@ export function saveMessage(record: MessageRecord): void {
 export function listForTeam(teamId: string, limit = 500): MessageRecord[] {
   return getDb()
     .prepare(
-      `SELECT id, team_id, from_id, text, run_id, created_at
+      `SELECT id, team_id, from_id, text, session_id, created_at
          FROM messages
         WHERE team_id = ?
         ORDER BY created_at ASC

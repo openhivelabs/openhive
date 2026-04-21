@@ -1,6 +1,6 @@
 /**
  * Engine runner — async orchestrator.
- * Ports apps/server/openhive/engine/run.py (~1400 LOC).
+ * Ports apps/server/openhi../engine/session.py (~1400 LOC).
  *
  * Pipeline per run:
  *   1. Start at the entry agent (Lead) with the user's goal.
@@ -53,16 +53,16 @@ export const MAX_ASK_USER_PER_RUN = 3
 export const HARD_MAX_TOOL_ROUNDS = 30
 export const HARD_MAX_DEPTH = 8
 
-// run_id → counters kept on globalThis so HMR doesn't drop in-flight runs.
+// session_id → counters kept on globalThis so HMR doesn't drop in-flight runs.
 interface RunState {
   askUser: Map<string, number>
   teamSlugs: Map<string, [string, string]>
   semaphore: Semaphore | null
-  // `{runId}:{fromId}->{toId}` → count. Phase C1 loop guard.
+  // `{sessionId}:{fromId}->{toId}` → count. Phase C1 loop guard.
   delegations: Map<string, number>
-  // runId → count of read_skill_file calls (any skill/path). Phase C3 cap.
+  // sessionId → count of read_skill_file calls (any skill/path). Phase C3 cap.
   readSkillFileTotal: Map<string, number>
-  // runId → set of `{skill}:{path}` already read. Phase C3 dedupe.
+  // sessionId → set of `{skill}:{path}` already read. Phase C3 dedupe.
   readSkillFileSeen: Map<string, Set<string>>
 }
 
@@ -231,7 +231,7 @@ function mcpManager() {
 
 // -------- top-level run_team generator --------
 
-export interface RunTeamOpts {
+export interface SessionTeamOpts {
   teamSlugs?: [string, string] | null
   locale?: string
 }
@@ -239,36 +239,36 @@ export interface RunTeamOpts {
 export async function* runTeam(
   team: TeamSpec,
   goal: string,
-  opts: RunTeamOpts = {},
+  opts: SessionTeamOpts = {},
 ): AsyncGenerator<Event> {
-  const runId = newId('run')
+  const sessionId = newId('session')
   const sem = getRunSemaphore()
 
   const queued = sem.locked()
   if (queued) {
     const { inUse, total } = activeRunCapacity()
-    yield makeEvent('run_queued', runId, { team_id: team.id, goal, in_use: inUse, limit: total })
+    yield makeEvent('run_queued', sessionId, { team_id: team.id, goal, in_use: inUse, limit: total })
   }
   await sem.acquire()
 
   try {
-    state().askUser.set(runId, 0)
-    if (opts.teamSlugs) state().teamSlugs.set(runId, opts.teamSlugs)
+    state().askUser.set(sessionId, 0)
+    if (opts.teamSlugs) state().teamSlugs.set(sessionId, opts.teamSlugs)
 
     // Wrap the entire run in the locale context so error formatter sees it.
     const iter = errors.withRunLocale(opts.locale ?? 'en', () =>
-      runTeamBody(team, goal, runId),
+      runTeamBody(team, goal, sessionId),
     )
     for await (const ev of iter) yield ev
   } finally {
-    state().askUser.delete(runId)
-    state().teamSlugs.delete(runId)
+    state().askUser.delete(sessionId)
+    state().teamSlugs.delete(sessionId)
     for (const k of state().delegations.keys()) {
-      if (k.startsWith(`${runId}:`)) state().delegations.delete(k)
+      if (k.startsWith(`${sessionId}:`)) state().delegations.delete(k)
     }
-    state().readSkillFileTotal.delete(runId)
-    state().readSkillFileSeen.delete(runId)
-    errors.clearRunFailures(runId)
+    state().readSkillFileTotal.delete(sessionId)
+    state().readSkillFileSeen.delete(sessionId)
+    errors.clearSessionFailures(sessionId)
     sem.release()
   }
 }
@@ -276,14 +276,14 @@ export async function* runTeam(
 async function* runTeamBody(
   team: TeamSpec,
   goal: string,
-  runId: string,
+  sessionId: string,
 ): AsyncGenerator<Event> {
-  yield makeEvent('run_started', runId, { team_id: team.id, goal })
+  yield makeEvent('run_started', sessionId, { team_id: team.id, goal })
   const entry = entryAgent(team)
   let final = ''
   try {
     for await (const ev of runNode({
-      runId,
+      sessionId,
       team,
       node: entry,
       task: goal,
@@ -294,30 +294,30 @@ async function* runTeamBody(
       }
       yield ev
     }
-    yield makeEvent('run_finished', runId, { output: final })
+    yield makeEvent('run_finished', sessionId, { output: final })
   } catch (exc) {
     const message = exc instanceof Error ? exc.message : String(exc)
-    yield makeEvent('run_error', runId, { error: message })
+    yield makeEvent('run_error', sessionId, { error: message })
   }
 }
 
 // -------- per-node driver --------
 
-interface RunNodeOpts {
-  runId: string
+interface SessionNodeOpts {
+  sessionId: string
   team: TeamSpec
   node: AgentSpec
   task: string
   depth: number
 }
 
-async function* runNode(opts: RunNodeOpts): AsyncGenerator<Event> {
-  const { runId, team, node, task, depth } = opts
-  const teamSlugs = state().teamSlugs.get(runId) ?? null
+async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
+  const { sessionId, team, node, task, depth } = opts
+  const teamSlugs = state().teamSlugs.get(sessionId) ?? null
 
   yield makeEvent(
     'node_started',
-    runId,
+    sessionId,
     { role: node.role, task },
     { depth, node_id: node.id },
   )
@@ -352,12 +352,12 @@ async function* runNode(opts: RunNodeOpts): AsyncGenerator<Event> {
     else agentSkills.push(skill)
   }
   for (const skill of typedSkills) {
-    tools.push(skillTool(skill, { runId, team, teamSlugs }))
+    tools.push(skillTool(skill, { sessionId, team, teamSlugs }))
   }
   if (agentSkills.length > 0) {
     tools.push(skillActivateTool(agentSkills))
-    tools.push(skillReadTool(agentSkills, runId))
-    tools.push(skillRunTool(agentSkills, { runId, team, teamSlugs }))
+    tools.push(skillReadTool(agentSkills, sessionId))
+    tools.push(skillRunTool(agentSkills, { sessionId, team, teamSlugs }))
   }
 
   // MCP: per-server get_tools, wrap each as <server>__<tool>. A misconfigured
@@ -373,7 +373,7 @@ async function* runNode(opts: RunNodeOpts): AsyncGenerator<Event> {
     } catch (exc) {
       yield makeEvent(
         'tool_result',
-        runId,
+        sessionId,
         {
           content: `MCP server '${serverName}' unavailable: ${exc instanceof Error ? exc.message : String(exc)}`,
           is_error: true,
@@ -409,7 +409,7 @@ async function* runNode(opts: RunNodeOpts): AsyncGenerator<Event> {
 
     let turnDone = false
     for await (const ev of streamTurn({
-      runId,
+      sessionId,
       team,
       node,
       systemPrompt,
@@ -428,7 +428,7 @@ async function* runNode(opts: RunNodeOpts): AsyncGenerator<Event> {
         }
         yield makeEvent(
           'node_finished',
-          runId,
+          sessionId,
           { output: ev.data.output ?? '' },
           { depth, node_id: node.id },
         )
@@ -443,7 +443,7 @@ async function* runNode(opts: RunNodeOpts): AsyncGenerator<Event> {
 // -------- provider turn --------
 
 interface StreamTurnOpts {
-  runId: string
+  sessionId: string
   team: TeamSpec
   node: AgentSpec
   systemPrompt: string
@@ -453,7 +453,7 @@ interface StreamTurnOpts {
 }
 
 async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
-  const { runId, team, node, systemPrompt, history, tools, depth } = opts
+  const { sessionId, team, node, systemPrompt, history, tools, depth } = opts
   const messages = buildMessages(systemPrompt, history)
   const openaiTools = tools.length > 0 ? toolsToOpenAI(tools) : undefined
 
@@ -488,7 +488,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       textBuf.push(delta.text)
       yield makeEvent(
         'token',
-        runId,
+        sessionId,
         { text: delta.text },
         { depth, node_id: node.id },
       )
@@ -504,9 +504,9 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
     } else if (delta.kind === 'usage') {
       // Logging shouldn't kill the run — catch-all.
       try {
-        const slugs = state().teamSlugs.get(runId) ?? null
+        const slugs = state().teamSlugs.get(sessionId) ?? null
         recordUsage({
-          runId,
+          sessionId,
           companyId: slugs ? slugs[0] : null,
           teamId: team.id,
           agentId: node.id,
@@ -559,7 +559,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       }
       yield makeEvent(
         'tool_called',
-        runId,
+        sessionId,
         { arguments: parsedArgs },
         { depth, node_id: node.id, tool_call_id: tc.id, tool_name: tc.function.name },
       )
@@ -575,7 +575,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
         try {
           if (tc.function.name === 'delegate_to') {
             for await (const subEv of runDelegation({
-              runId,
+              sessionId,
               team,
               fromNode: node,
               args: parsedArgs,
@@ -590,7 +590,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
             }
           } else if (tc.function.name === 'delegate_parallel') {
             for await (const subEv of runParallelDelegation({
-              runId,
+              sessionId,
               team,
               fromNode: node,
               args: parsedArgs,
@@ -608,7 +608,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
             }
           } else if (tc.function.name === 'ask_user') {
             for await (const subEv of runAskUser({
-              runId,
+              sessionId,
               node,
               args: parsedArgs,
               toolCallId: tc.id,
@@ -633,7 +633,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
 
       yield makeEvent(
         'tool_result',
-        runId,
+        sessionId,
         { content, is_error: isError },
         { depth, node_id: node.id, tool_call_id: tc.id, tool_name: tc.function.name },
       )
@@ -673,7 +673,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
 
   yield makeEvent(
     'node_finished',
-    runId,
+    sessionId,
     {
       _turn_marker: true,
       output: assembledText,
@@ -723,7 +723,7 @@ function delegateTool(team: TeamSpec, node: AgentSpec): Tool {
 }
 
 interface DelegationOpts {
-  runId: string
+  sessionId: string
   team: TeamSpec
   fromNode: AgentSpec
   args: Record<string, unknown>
@@ -732,7 +732,7 @@ interface DelegationOpts {
 }
 
 async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
-  const { runId, team, fromNode, args, toolCallId, depth } = opts
+  const { sessionId, team, fromNode, args, toolCallId, depth } = opts
   const assigneeKey = String(args.assignee ?? '')
   const task = String(args.task ?? '')
 
@@ -750,19 +750,19 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
   if (!target) {
     yield makeEvent(
       'delegation_closed',
-      runId,
+      sessionId,
       { error: true, result: `No such subordinate: ${assigneeKey}` },
       { depth, node_id: fromNode.id, tool_call_id: toolCallId },
     )
     return
   }
 
-  const pairKey = `${runId}:${fromNode.id}->${target.id}`
+  const pairKey = `${sessionId}:${fromNode.id}->${target.id}`
   const prior = state().delegations.get(pairKey) ?? 0
   if (prior >= MAX_DELEGATIONS_PER_PAIR) {
     yield makeEvent(
       'delegation_closed',
-      runId,
+      sessionId,
       {
         assignee_id: target.id,
         assignee_role: target.role,
@@ -778,7 +778,7 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
   }
   state().delegations.set(pairKey, prior + 1)
 
-  if (errors.isAgentExcluded(runId, target.id)) {
+  if (errors.isAgentExcluded(sessionId, target.id)) {
     const msg = errors.renderError(
       { kind: 'agent_excluded', statusCode: null, detail: '' },
       {
@@ -790,7 +790,7 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
     )
     yield makeEvent(
       'delegation_closed',
-      runId,
+      sessionId,
       {
         assignee_id: target.id,
         assignee_role: target.role,
@@ -804,7 +804,7 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
 
   yield makeEvent(
     'delegation_opened',
-    runId,
+    sessionId,
     {
       assignee_id: target.id,
       assignee_role: target.role,
@@ -816,7 +816,7 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
   let subOutput = ''
   try {
     for await (const ev of runNode({
-      runId,
+      sessionId,
       team,
       node: target,
       task,
@@ -832,7 +832,7 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
       yield ev
     }
   } catch (exc) {
-    errors.noteAgentFailure(runId, target.id)
+    errors.noteAgentFailure(sessionId, target.id)
     const classified = errors.classify(exc)
     const msg = errors.renderError(classified, {
       role: target.role,
@@ -842,7 +842,7 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
     })
     yield makeEvent(
       'delegation_closed',
-      runId,
+      sessionId,
       {
         assignee_id: target.id,
         assignee_role: target.role,
@@ -856,7 +856,7 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
 
   yield makeEvent(
     'delegation_closed',
-    runId,
+    sessionId,
     {
       assignee_id: target.id,
       assignee_role: target.role,
@@ -923,7 +923,7 @@ function delegateParallelTool(team: TeamSpec, node: AgentSpec): Tool {
 async function* runParallelDelegation(
   opts: DelegationOpts,
 ): AsyncGenerator<Event> {
-  const { runId, team, fromNode, args, toolCallId, depth } = opts
+  const { sessionId, team, fromNode, args, toolCallId, depth } = opts
   const assigneeKey = String(args.assignee ?? '')
   const tasks = Array.isArray(args.tasks) ? (args.tasks as unknown[]) : []
 
@@ -940,7 +940,7 @@ async function* runParallelDelegation(
   if (!target) {
     yield makeEvent(
       'delegation_closed',
-      runId,
+      sessionId,
       {
         group_final: true,
         error: true,
@@ -955,7 +955,7 @@ async function* runParallelDelegation(
   if (maxN <= 1) {
     yield makeEvent(
       'delegation_closed',
-      runId,
+      sessionId,
       {
         group_final: true,
         error: true,
@@ -970,7 +970,7 @@ async function* runParallelDelegation(
   if (!Array.isArray(tasks) || tasks.length < 2 || tasks.length > maxN) {
     yield makeEvent(
       'delegation_closed',
-      runId,
+      sessionId,
       {
         group_final: true,
         error: true,
@@ -992,7 +992,7 @@ async function* runParallelDelegation(
   const runOne = async (i: number, taskText: string): Promise<void> => {
     try {
       for await (const ev of runNode({
-        runId,
+        sessionId,
         team,
         node: capturedTarget,
         task: taskText,
@@ -1008,7 +1008,7 @@ async function* runParallelDelegation(
         }
       }
     } catch (exc) {
-      errors.noteAgentFailure(runId, capturedTarget.id)
+      errors.noteAgentFailure(sessionId, capturedTarget.id)
       const classified = errors.classify(exc)
       errs[i] = errors.renderError(classified, {
         role: capturedTarget.role,
@@ -1023,7 +1023,7 @@ async function* runParallelDelegation(
 
   yield makeEvent(
     'delegation_opened',
-    runId,
+    sessionId,
     {
       assignee_id: target.id,
       assignee_role: target.role,
@@ -1058,7 +1058,7 @@ async function* runParallelDelegation(
 
   yield makeEvent(
     'delegation_closed',
-    runId,
+    sessionId,
     {
       assignee_id: target.id,
       assignee_role: target.role,
@@ -1120,7 +1120,7 @@ function askUserTool(): Tool {
 }
 
 interface AskUserOpts {
-  runId: string
+  sessionId: string
   node: AgentSpec
   args: Record<string, unknown>
   toolCallId: string
@@ -1128,14 +1128,14 @@ interface AskUserOpts {
 }
 
 async function* runAskUser(opts: AskUserOpts): AsyncGenerator<Event> {
-  const { runId, node, args, toolCallId, depth } = opts
+  const { sessionId, node, args, toolCallId, depth } = opts
   const questions = Array.isArray(args.questions) ? args.questions : []
 
-  const count = state().askUser.get(runId) ?? 0
+  const count = state().askUser.get(sessionId) ?? 0
   if (count >= MAX_ASK_USER_PER_RUN) {
     yield makeEvent(
       'user_answered',
-      runId,
+      sessionId,
       {
         error: true,
         result: `ERROR: ask_user cap reached (${MAX_ASK_USER_PER_RUN} per run). Proceed with best-effort assumptions.`,
@@ -1144,11 +1144,11 @@ async function* runAskUser(opts: AskUserOpts): AsyncGenerator<Event> {
     )
     return
   }
-  state().askUser.set(runId, count + 1)
+  state().askUser.set(sessionId, count + 1)
 
   yield makeEvent(
     'user_question',
-    runId,
+    sessionId,
     { questions, agent_role: node.role },
     { depth, node_id: node.id, tool_call_id: toolCallId },
   )
@@ -1159,7 +1159,7 @@ async function* runAskUser(opts: AskUserOpts): AsyncGenerator<Event> {
   } catch {
     yield makeEvent(
       'user_answered',
-      runId,
+      sessionId,
       { error: true, result: 'ERROR: question cancelled.' },
       { depth, node_id: node.id, tool_call_id: toolCallId },
     )
@@ -1172,7 +1172,7 @@ async function* runAskUser(opts: AskUserOpts): AsyncGenerator<Event> {
 
   yield makeEvent(
     'user_answered',
-    runId,
+    sessionId,
     { result: resultText, skipped },
     { depth, node_id: node.id, tool_call_id: toolCallId },
   )
@@ -1405,7 +1405,7 @@ function skillActivateTool(agentSkills: SkillDef[]): Tool {
   }
 }
 
-function skillReadTool(agentSkills: SkillDef[], runId: string): Tool {
+function skillReadTool(agentSkills: SkillDef[], sessionId: string): Tool {
   const byName = new Map(agentSkills.map((s) => [s.name, s]))
   const names = [...byName.keys()].sort()
   return {
@@ -1443,10 +1443,10 @@ function skillReadTool(agentSkills: SkillDef[], runId: string): Tool {
 
       // Phase C3: refuse duplicates and hard-cap total.
       const key = `${skillName}:${path}`
-      let seen = state().readSkillFileSeen.get(runId)
+      let seen = state().readSkillFileSeen.get(sessionId)
       if (!seen) {
         seen = new Set<string>()
-        state().readSkillFileSeen.set(runId, seen)
+        state().readSkillFileSeen.set(sessionId, seen)
       }
       if (seen.has(key)) {
         return JSON.stringify({
@@ -1456,7 +1456,7 @@ function skillReadTool(agentSkills: SkillDef[], runId: string): Tool {
             `is still in your conversation history — scroll back instead of re-reading.`,
         })
       }
-      const total = state().readSkillFileTotal.get(runId) ?? 0
+      const total = state().readSkillFileTotal.get(sessionId) ?? 0
       if (total >= MAX_READ_SKILL_FILE_PER_RUN) {
         return JSON.stringify({
           ok: false,
@@ -1473,7 +1473,7 @@ function skillReadTool(agentSkills: SkillDef[], runId: string): Tool {
       // Only count successful, novel reads so binary-refusals and errors
       // don't burn the budget.
       seen.add(key)
-      state().readSkillFileTotal.set(runId, total + 1)
+      state().readSkillFileTotal.set(sessionId, total + 1)
 
       return JSON.stringify({ ok: true, path, content })
     },
@@ -1482,7 +1482,7 @@ function skillReadTool(agentSkills: SkillDef[], runId: string): Tool {
 }
 
 interface SkillToolContext {
-  runId: string
+  sessionId: string
   team: TeamSpec
   teamSlugs: [string, string] | null
 }
@@ -1492,7 +1492,7 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
   const names = [...byName.keys()].sort()
   const companySlug = ctx.teamSlugs ? ctx.teamSlugs[0] : null
   const teamSlug = ctx.teamSlugs ? ctx.teamSlugs[1] : null
-  const outputDir = sessionsStore.artifactDirForRun(ctx.runId)
+  const outputDir = sessionsStore.artifactDirForSession(ctx.sessionId)
 
   return {
     name: 'run_skill_script',
@@ -1548,7 +1548,7 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
         stdinText: typeof stdinText === 'string' ? stdinText : null,
       })
       const registered = registerSkillArtifacts(result.files, {
-        runId: ctx.runId,
+        sessionId: ctx.sessionId,
         teamId: ctx.team.id,
         companySlug,
         teamSlug,
@@ -1572,7 +1572,7 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
 function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
   const companySlug = ctx.teamSlugs ? ctx.teamSlugs[0] : null
   const teamSlug = ctx.teamSlugs ? ctx.teamSlugs[1] : null
-  const outputDir = sessionsStore.artifactDirForRun(ctx.runId)
+  const outputDir = sessionsStore.artifactDirForSession(ctx.sessionId)
 
   return {
     name: skill.name,
@@ -1581,7 +1581,7 @@ function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
     handler: async (args) => {
       const result = await runSkill(skill, args, outputDir)
       const registered = registerSkillArtifacts(result.files, {
-        runId: ctx.runId,
+        sessionId: ctx.sessionId,
         teamId: ctx.team.id,
         companySlug,
         teamSlug,
@@ -1627,7 +1627,7 @@ function mcpTool(serverName: string, toolMeta: Record<string, unknown>): Tool {
 function registerSkillArtifacts(
   files: { name: string; path: string; mime: string; size: number }[],
   ctx: {
-    runId: string
+    sessionId: string
     teamId: string
     companySlug: string | null
     teamSlug: string | null
@@ -1638,7 +1638,7 @@ function registerSkillArtifacts(
   for (const f of files) {
     try {
       const rec = artifactsStore.recordArtifact({
-        run_id: ctx.runId,
+        session_id: ctx.sessionId,
         team_id: ctx.teamId,
         company_slug: ctx.companySlug,
         team_slug: ctx.teamSlug,

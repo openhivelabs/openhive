@@ -3,17 +3,18 @@
 import {
   FilePlus,
   FileText,
-  Lightning,
   PencilSimple,
+  Play,
   Question,
   Stop,
+  Trash,
   Warning,
   X,
 } from '@phosphor-icons/react'
 import { useEffect, useRef, useState } from 'react'
 import { AskUserModal } from '@/components/modals/AskUserModal'
 import { readAsReference } from '@/components/modals/referenceUpload'
-import { type AskUserQuestion, postAnswer } from '@/lib/api/runs'
+import { type AskUserQuestion, postAnswer } from '@/lib/api/sessions'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { useT } from '@/lib/i18n'
 import { useCurrentTeam } from '@/lib/stores/useAppStore'
@@ -106,57 +107,85 @@ interface TranscriptEntry {
   args?: Record<string, unknown>
 }
 
+interface SessionUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read: number
+  cache_write: number
+  cost_cents: number
+  n: number
+}
+
 interface SessionSummary {
   output: string | null
   artifacts: SessionArtifact[]
   transcript: TranscriptEntry[]
   status: string
+  usage: SessionUsage | null
+}
+
+function fmtK(n: number): string {
+  if (n < 1000) return String(n)
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}k`
+  return `${Math.round(n / 1000)}k`
 }
 
 export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
   const t = useT()
   const team = useCurrentTeam()
-  const runTaskNow = useTasksStore((s) => s.runTaskNow)
-  const stopRun = useTasksStore((s) => s.stopRun)
+  const startSessionFromTask = useTasksStore((s) => s.startSessionFromTask)
+  const stopSession = useTasksStore((s) => s.stopSession)
   const updateRun = useTasksStore((s) => s.updateRun)
   const updateTask = useTasksStore((s) => s.updateTask)
+  const removeTask = useTasksStore((s) => s.removeTask)
   const [showAsk, setShowAsk] = useState(false)
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
   const [summary, setSummary] = useState<SessionSummary | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const selectedSessionId = useTasksStore((s) => s.selectedSessionId)
+  const selectedAsDraft = useTasksStore((s) => s.selectedAsDraft)
 
   useEscapeClose(task, onClose)
 
   const status = task ? taskStatus(task) : 'idle'
-  // Prefer an "active" run (pending ask, then running, then needs_input) over
-  // the array-last run — concurrent runs can leave a short-lived cancel/done
-  // at the end of the list that masks a still-active older run.
-  const latest = task
-    ? task.runs.find((r) => r.status === 'running' && r.pendingAsk) ??
-      task.runs.find((r) => r.status === 'running') ??
-      task.runs.find((r) => r.status === 'needs_input') ??
-      task.runs[task.runs.length - 1]
+  // If the user opened a specific session card (Running/Done column), honor that
+  // choice — otherwise multiple session cards for the same task would all collapse
+  // to the same "latest" session, and per-session output/artifacts look blank.
+  // Fallback heuristic: prefer an active session (pending ask, then running, then
+  // needs_input) over array-last, since concurrent sessions can leave a short-lived
+  // cancel/done at the end that masks a still-active older session.
+  const pickedRun = task && selectedSessionId
+    ? task.sessions.find((r) => r.id === selectedSessionId)
     : undefined
+  const latest = pickedRun
+    ?? (task
+      ? task.sessions.find((r) => r.status === 'running' && r.pendingAsk) ??
+        task.sessions.find((r) => r.status === 'running') ??
+        task.sessions.find((r) => r.status === 'needs_input') ??
+        task.sessions[task.sessions.length - 1]
+      : undefined)
   const pendingAsk = latest?.pendingAsk
 
-  // Auto-surface the answer UI as soon as a pending question arrives — the
-  // whole point of "답변 대기" is that the user reacts. Requiring them to
-  // click "답변" first just hides the question and feels broken.
+  // Auto-surface the answer UI only when the user explicitly opened a
+  // specific session (selectedSessionId set) — e.g. clicked a 답변 대기
+  // card in the inbox. Opening the modal via template-edit must NOT auto-
+  // pop the question dialog; the user is editing the template, not trying
+  // to answer the Lead.
   useEffect(() => {
-    if (pendingAsk) setShowAsk(true)
-  }, [pendingAsk?.toolCallId])
+    if (pendingAsk && selectedSessionId) setShowAsk(true)
+  }, [pendingAsk?.toolCallId, selectedSessionId])
 
-  // For runs that have ended (done / failed / interrupted), pull the final
+  // For sessions that have ended (done / failed / interrupted), pull the final
   // Lead output + any generated artifacts from the session store so each
-  // done card shows that run's unique deliverable. Re-fetched per run so
+  // done card shows that session's unique deliverable. Re-fetched per session so
   // switching cards doesn't leak previous data.
-  const endedRunId =
-    latest && latest.status !== 'running' && latest.backendRunId
-      ? latest.backendRunId
+  const endedSessionId =
+    latest && latest.status !== 'running' && latest.id
+      ? latest.id
       : null
   useEffect(() => {
-    if (!endedRunId) {
+    if (!endedSessionId) {
       setSummary(null)
       return
     }
@@ -164,10 +193,10 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
     void (async () => {
       try {
         const [sess, arts] = await Promise.all([
-          fetch(`/api/sessions?run_id=${encodeURIComponent(endedRunId)}`).then((r) =>
+          fetch(`/api/sessions?session_id=${encodeURIComponent(endedSessionId)}`).then((r) =>
             r.ok ? r.json() : null,
           ),
-          fetch(`/api/artifacts?run_id=${encodeURIComponent(endedRunId)}`).then((r) =>
+          fetch(`/api/artifacts?session_id=${encodeURIComponent(endedSessionId)}`).then((r) =>
             r.ok ? r.json() : [],
           ),
         ])
@@ -177,6 +206,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
           artifacts: Array.isArray(arts) ? arts : [],
           transcript: Array.isArray(sess?.transcript) ? sess.transcript : [],
           status: sess?.status ?? '',
+          usage: sess?.usage ?? null,
         })
       } catch {
         if (!cancelled) setSummary(null)
@@ -185,7 +215,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
     return () => {
       cancelled = true
     }
-  }, [endedRunId])
+  }, [endedSessionId])
   const isRunning = status === 'running' || status === 'needs_input'
   const now = useTicker(isRunning && !!latest && !latest.endedAt)
   const elapsedMs = latest ? runElapsedMs(latest, now) : 0
@@ -415,13 +445,44 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
             </div>
           )}
 
-          {/* Session result — unique per run. Pulled from sessions/{uuid}/:
+          {/* Session result — unique per session. Pulled from sessions/{id}/:
               generated files, the Lead's final output, and a distilled
-              trace of what each agent actually did during the run. The
+              trace of what each agent actually did during the session. The
               trace makes each card visually distinct even for failed /
-              stopped runs where no artifact or output was produced. */}
-          {endedRunId && summary && (
+              stopped sessions where no artifact or output was produced. */}
+          {!selectedAsDraft && endedSessionId && summary && (
             <div className="px-4 py-3 border-t border-neutral-200 space-y-3">
+              {summary.usage && summary.usage.n > 0 && (
+                <div>
+                  <div className="text-[12px] font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
+                    {t('tasks.usageHeader') || '사용 토큰'}
+                  </div>
+                  <div className="rounded bg-neutral-50 border border-neutral-200 px-3 py-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[12.5px] font-mono text-neutral-700">
+                    <div className="flex justify-between">
+                      <span className="text-neutral-500">input</span>
+                      <span>{fmtK(summary.usage.input_tokens)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-neutral-500">output</span>
+                      <span>{fmtK(summary.usage.output_tokens)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-neutral-500">cache read</span>
+                      <span>{fmtK(summary.usage.cache_read)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-neutral-500">cache write</span>
+                      <span>{fmtK(summary.usage.cache_write)}</span>
+                    </div>
+                    {summary.usage.cost_cents > 0 && (
+                      <div className="col-span-2 flex justify-between pt-1 border-t border-neutral-200">
+                        <span className="text-neutral-500">cost</span>
+                        <span>${(summary.usage.cost_cents / 100).toFixed(4)}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
               {summary.artifacts.length > 0 && (
                 <div>
                   <div className="text-[12px] font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
@@ -488,24 +549,37 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
               size="sm"
               variant={latest ? 'outline' : 'primary'}
               onClick={() => {
-                void runTaskNow(task, team)
+                void startSessionFromTask(task, team)
               }}
             >
-              <Lightning className="w-3.5 h-3.5" />
-              {latest ? t('tasks.runAgain') : t('tasks.runNow')}
+              <Play weight="fill" className="w-3.5 h-3.5" />
+              {t('tasks.runNow')}
             </Button>
           )}
           {status === 'running' && latest && (
             <Button
               size="sm"
               variant="outline"
-              onClick={() => stopRun(latest.id)}
+              onClick={() => stopSession(latest.id)}
             >
               <Stop className="w-3.5 h-3.5" />
               {t('tasks.stop')}
             </Button>
           )}
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                const id = task.id
+                onClose()
+                removeTask(id)
+              }}
+              className="text-neutral-500 hover:text-red-600"
+            >
+              <Trash className="w-3.5 h-3.5" />
+              {t('tasks.delete')}
+            </Button>
             <Button size="sm" variant="ghost" onClick={onClose}>
               {t('tasks.close')}
             </Button>

@@ -5,7 +5,7 @@
  * - Wakes every settings.schedulerTickSeconds and scans tasks for scheduled
  *   entries. For each, decides whether its cron expression has fired since
  *   the last anchor (lastFiredAt or createdAt).
- * - If due, dispatches through the engine (same path /api/runs uses) and
+ * - If due, dispatches through the engine (same pat../api/sessions uses) and
  *   stamps lastFiredAt on completion.
  * - Panel bindings are refreshed in the same tick — declarative block data
  *   shouldn't wait for a task run.
@@ -19,16 +19,16 @@
 
 import { CronExpressionParser } from 'cron-parser'
 import { getSettings } from '../config'
-import { runTeam } from '../engine/run'
+import { runTeam } from '../engine/session'
 import { toTeamSpec, type TeamSpec } from '../engine/team'
 import { listCompanies } from '../companies'
 import { refreshDuePanels } from '../panels/refresher'
 import { listTasks, saveTask } from '../tasks'
 import {
-  appendRunEvent,
-  finishRun,
-  startRun,
-} from '../runs-store'
+  appendSessionEvent,
+  finishSession,
+  startSession,
+} from '../sessions'
 
 interface SchedulerState {
   inflight: Set<string>
@@ -157,18 +157,18 @@ async function fire(task: Record<string, unknown>): Promise<void> {
 
   const prompt = composePrompt(task)
   let seq = 0
-  let capturedRunId: string | null = null
+  let capturedSessionId: string | null = null
   try {
     for await (const event of runTeam(teamSpec, prompt, {
       teamSlugs: [resolved.companySlug, resolved.teamSlug],
       locale: 'en',
     })) {
       if (event.kind === 'run_started') {
-        capturedRunId = event.run_id
-        startRun(event.run_id, teamSpec.id, prompt)
+        capturedSessionId = event.session_id
+        startSession(event.session_id, teamSpec.id, prompt, taskId || null)
       }
-      appendRunEvent({
-        runId: event.run_id,
+      appendSessionEvent({
+        sessionId: event.session_id,
         seq,
         ts: event.ts,
         kind: event.kind,
@@ -180,22 +180,22 @@ async function fire(task: Record<string, unknown>): Promise<void> {
       })
       seq += 1
       if (event.kind === 'run_finished') {
-        finishRun(event.run_id, {
+        finishSession(event.session_id, {
           output:
             typeof event.data.output === 'string'
               ? (event.data.output as string)
               : null,
         })
       } else if (event.kind === 'run_error') {
-        finishRun(event.run_id, {
+        finishSession(event.session_id, {
           error: String(event.data.error ?? 'error'),
         })
       }
     }
   } catch (exc) {
     console.error(`scheduler: runTeam raised for task ${taskId}`, exc)
-    if (capturedRunId) {
-      finishRun(capturedRunId, { error: 'scheduler exception' })
+    if (capturedSessionId) {
+      finishSession(capturedSessionId, { error: 'scheduler exception' })
     }
   }
 

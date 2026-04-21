@@ -28,18 +28,23 @@ export interface StoredEventRow {
   data: Record<string, unknown>
 }
 
-export function startRun(runId: string, teamId: string, goal: string): void {
+export function startSession(
+  sessionId: string,
+  teamId: string,
+  goal: string,
+  taskId: string | null = null,
+): void {
   const now = Date.now()
   getDb()
     .prepare(
-      `INSERT OR REPLACE INTO runs (id, team_id, goal, status, started_at)
-       VALUES (?, ?, ?, 'running', ?)`,
+      `INSERT OR REPLACE INTO runs (id, team_id, goal, status, started_at, task_id)
+       VALUES (?, ?, ?, 'running', ?, ?)`,
     )
-    .run(runId, teamId, goal, now)
+    .run(sessionId, teamId, goal, now, taskId)
 }
 
-export function finishRun(
-  runId: string,
+export function finishSession(
+  sessionId: string,
   opts: { output?: string | null; error?: string | null } = {},
 ): void {
   const now = Date.now()
@@ -49,11 +54,11 @@ export function finishRun(
       `UPDATE runs SET status = ?, output = ?, error = ?, finished_at = ?
         WHERE id = ?`,
     )
-    .run(status, opts.output ?? null, opts.error ?? null, now, runId)
+    .run(status, opts.output ?? null, opts.error ?? null, now, sessionId)
 }
 
 export interface AppendEventInput {
-  runId: string
+  sessionId: string
   seq: number
   ts: number
   kind: string
@@ -64,15 +69,15 @@ export interface AppendEventInput {
   data: Record<string, unknown>
 }
 
-export function appendRunEvent(input: AppendEventInput): void {
+export function appendSessionEvent(input: AppendEventInput): void {
   getDb()
     .prepare(
       `INSERT INTO run_events
-        (run_id, seq, ts, kind, depth, node_id, tool_call_id, tool_name, data_json)
+        (session_id, seq, ts, kind, depth, node_id, tool_call_id, tool_name, data_json)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
-      input.runId,
+      input.sessionId,
       input.seq,
       input.ts,
       input.kind,
@@ -93,13 +98,13 @@ export function listForTeam(teamId: string, limit = 50): RunRow[] {
     .all(teamId, limit) as RunRow[]
 }
 
-export function eventsFor(runId: string): StoredEventRow[] {
+export function eventsForSession(sessionId: string): StoredEventRow[] {
   const rows = getDb()
     .prepare(
       `SELECT seq, ts, kind, depth, node_id, tool_call_id, tool_name, data_json
-         FROM run_events WHERE run_id = ? ORDER BY seq ASC`,
+         FROM run_events WHERE session_id = ? ORDER BY seq ASC`,
     )
-    .all(runId) as (Omit<StoredEventRow, 'data'> & { data_json: string | null })[]
+    .all(sessionId) as (Omit<StoredEventRow, 'data'> & { data_json: string | null })[]
   return rows.map((r) => ({
     seq: r.seq,
     ts: r.ts,
@@ -114,7 +119,7 @@ export function eventsFor(runId: string): StoredEventRow[] {
 
 /** Boot-time cleanup: runs that were still "running" when the server died
  *  must be marked interrupted so the UI doesn't show zombie active runs. */
-export function markOrphanedRunsInterrupted(): number {
+export function markOrphanedSessionsInterrupted(): number {
   const info = getDb()
     .prepare(
       `UPDATE runs SET status = 'error', error = 'interrupted', finished_at = ?

@@ -5,7 +5,7 @@
  * When the Lead's LLM calls the `ask_user` tool, the engine emits a
  * `user_question` event, registers a pending Promise keyed by tool_call_id,
  * and awaits it. The run stays paused (SSE stream open) until
- * POST /api/runs/:id/answer resolves the Promise and the answer feeds back
+ * POS../api/sessions/:id/answer resolves the Promise and the answer feeds back
  * as a `tool_result`.
  */
 

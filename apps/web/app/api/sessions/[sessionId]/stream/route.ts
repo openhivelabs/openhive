@@ -1,6 +1,5 @@
-import { attach, END, forceEvict, isActive } from '@/lib/server/engine/run-registry'
-import { eventsFor, finishRun } from '@/lib/server/runs-store'
-import { finalizeSession } from '@/lib/server/sessions'
+import { attach, END, forceEvict, isActive } from '@/lib/server/engine/session-registry'
+import { eventsForSession, finishSession } from '@/lib/server/sessions'
 import { getDb } from '@/lib/server/db'
 
 // An "active" run with no event for this long is a zombie — the engine
@@ -29,10 +28,10 @@ function doneFrame(): Uint8Array {
 
 export async function GET(
   req: Request,
-  ctx: { params: Promise<{ runId: string }> },
+  ctx: { params: Promise<{ sessionId: string }> },
 ) {
-  const { runId } = await ctx.params
-  if (isActive(runId)) {
+  const { sessionId } = await ctx.params
+  if (isActive(sessionId)) {
     // Staleness sniff: if the registry thinks this run is live but no
     // event has been appended in >120s and the last event wasn't an
     // ask_user, the engine generator is effectively dead. Evict so the
@@ -40,23 +39,23 @@ export async function GET(
     try {
       const latest = getDb()
         .prepare(
-          `SELECT ts, kind FROM run_events WHERE run_id = ?
+          `SELECT ts, kind FROM session_events WHERE session_id = ?
              ORDER BY seq DESC LIMIT 1`,
         )
-        .get(runId) as { ts: number; kind: string } | undefined
+        .get(sessionId) as { ts: number; kind: string } | undefined
       if (latest) {
         const ageMs = Date.now() - latest.ts * 1000
         if (ageMs > ZOMBIE_THRESHOLD_MS && latest.kind !== 'user_question') {
-          forceEvict(runId)
+          forceEvict(sessionId)
         }
       }
     } catch {
       /* best-effort */
     }
   }
-  if (!isActive(runId)) {
+  if (!isActive(sessionId)) {
     // Finished or unknown — replay from DB. 404 only when neither.
-    const events = eventsFor(runId)
+    const events = eventsForSession(sessionId)
     if (events.length === 0) {
       return new Response(JSON.stringify({ detail: 'run not found' }), {
         status: 404,
@@ -77,7 +76,7 @@ export async function GET(
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const attached = attach(runId)
+      const attached = attach(sessionId)
       if (attached) {
         detach = attached.detach
         for (const ev of attached.snapshot) {
@@ -117,13 +116,13 @@ export async function GET(
       } else {
         // Replay from DB.
         try {
-          const rows = eventsFor(runId)
+          const rows = eventsForSession(sessionId)
           for (const row of rows) {
             controller.enqueue(
               sseFrame({
                 kind: row.kind,
                 ts: row.ts,
-                run_id: runId,
+                session_id: sessionId,
                 depth: row.depth,
                 node_id: row.node_id,
                 tool_call_id: row.tool_call_id,
@@ -141,8 +140,8 @@ export async function GET(
           )
           if (!alreadyTerminal) {
             let row = getDb()
-              .prepare('SELECT status, output, error FROM runs WHERE id = ?')
-              .get(runId) as
+              .prepare('SELECT status, output, error FROM sessions WHERE id = ?')
+              .get(sessionId) as
               | { status: string; output: string | null; error: string | null }
               | undefined
             // Zombie reconciliation: the engine isn't running this run
@@ -152,8 +151,7 @@ export async function GET(
             // the UI stops spinning forever.
             if (row && row.status === 'running') {
               try {
-                finishRun(runId, { error: 'interrupted' })
-                finalizeSession(runId, { error: 'interrupted' })
+                finishSession(sessionId, { error: 'interrupted' })
               } catch { /* best-effort */ }
               row = { status: 'error', output: null, error: 'interrupted' }
             }
@@ -162,7 +160,7 @@ export async function GET(
                 sseFrame({
                   kind: row.error ? 'run_error' : 'run_finished',
                   ts: Date.now() / 1000,
-                  run_id: runId,
+                  session_id: sessionId,
                   depth: 0,
                   node_id: null,
                   tool_call_id: null,

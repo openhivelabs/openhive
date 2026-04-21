@@ -1,28 +1,26 @@
 /**
- * Live-run registry: decouples engine execution from SSE client lifecycle.
- * Ports apps/server/openhive/engine/run_registry.py.
+ * Live-session registry: decouples engine execution from SSE client lifecycle.
  *
- * A run is driven as a background async task. Clients attach via SSE to
- * receive events; detach/refresh/close doesn't affect the run. Multiple
- * clients can watch the same run. The run only ends when the engine does
- * (success / error / explicit stop). Every event is persisted to run_events
+ * A session is driven as a background async task. Clients attach via SSE to
+ * receive events; detach/refresh/close doesn't affect the session. Multiple
+ * clients can watch the same session. The session only ends when the engine does
+ * (success / error / explicit stop). Every event is persisted to session_events
  * as it fires so late attachers can replay history.
  *
  * All state is in-process and cached on globalThis to survive Next.js HMR.
  */
 
-import * as runsStore from '../runs-store'
 import * as sessionsStore from '../sessions'
-import { runTeam } from './run'
+import { runTeam } from './session'
 import type { Event } from '../events/schema'
 import type { TeamSpec } from './team'
 
 /** Sentinel pushed into a listener queue when the run is over. */
-const END = Symbol('run-end')
+const END = Symbol('session-end')
 type Envelope = Event | typeof END
 
-interface RunHandle {
-  runId: string
+export interface SessionHandle {
+  sessionId: string
   events: Event[]
   listeners: Set<AsyncPushQueue<Envelope>>
   finished: boolean
@@ -31,51 +29,51 @@ interface RunHandle {
 }
 
 interface RegistryState {
-  active: Map<string, RunHandle>
+  active: Map<string, SessionHandle>
 }
 
 const globalForRegistry = globalThis as unknown as {
-  __openhive_run_registry?: RegistryState
+  __openhive_session_registry?: RegistryState
 }
 
 function state(): RegistryState {
-  if (!globalForRegistry.__openhive_run_registry) {
-    globalForRegistry.__openhive_run_registry = { active: new Map() }
+  if (!globalForRegistry.__openhive_session_registry) {
+    globalForRegistry.__openhive_session_registry = { active: new Map() }
   }
-  return globalForRegistry.__openhive_run_registry
+  return globalForRegistry.__openhive_session_registry
 }
 
-export function getHandle(runId: string): RunHandle | null {
-  return state().active.get(runId) ?? null
+export function getHandle(sessionId: string): SessionHandle | null {
+  return state().active.get(sessionId) ?? null
 }
 
-export function isActive(runId: string): boolean {
-  return state().active.has(runId)
+export function isActive(sessionId: string): boolean {
+  return state().active.has(sessionId)
 }
 
 /** Forcibly evict a handle from the registry. Used when the stream handler
  *  detects a zombie (registry says active but no event in a long time —
  *  engine generator died from HMR or an uncaught rejection). After this,
  *  `isActive()` flips to false so the replay/reconcile path takes over. */
-export function forceEvict(runId: string): void {
-  const h = state().active.get(runId)
+export function forceEvict(sessionId: string): void {
+  const h = state().active.get(sessionId)
   if (!h) return
   h.finished = true
   for (const q of h.listeners) q.push(END)
-  state().active.delete(runId)
+  state().active.delete(sessionId)
 }
 
-/** Attach to a run: snapshot past events + subscribe to future ones.
+/** Attach to a session: snapshot past events + subscribe to future ones.
  *  `detach()` removes the listener queue from the handle so it stops receiving
  *  pushes — callers MUST invoke it when their consumer goes away (client
  *  disconnect, error, etc.), otherwise event buffers leak memory for every
  *  browser tab that ever connected. */
-export function attach(runId: string): {
+export function attach(sessionId: string): {
   snapshot: Event[]
   queue: AsyncPushQueue<Envelope>
   detach: () => void
 } | null {
-  const h = getHandle(runId)
+  const h = getHandle(sessionId)
   if (!h) return null
   const q = new AsyncPushQueue<Envelope>()
   const snapshot = [...h.events]
@@ -92,78 +90,78 @@ export function attach(runId: string): {
   return { snapshot, queue: q, detach }
 }
 
-export async function stop(runId: string): Promise<boolean> {
-  const h = getHandle(runId)
+export async function stop(sessionId: string): Promise<boolean> {
+  const h = getHandle(sessionId)
   if (!h || h.finished) return false
   h.abort.abort()
   return true
 }
 
 /** Launch the engine in the background. Resolves with the engine-assigned
- *  run_id once the first event has been emitted. */
+ *  session_id once the first event has been emitted. */
 export async function start(
   team: TeamSpec,
   goal: string,
   teamSlugs: [string, string] | null,
   locale: string,
+  taskId: string | null = null,
 ): Promise<string> {
-  let ready: (runId: string) => void = () => {}
+  let ready: (sessionId: string) => void = () => {}
   let readyErr: (err: unknown) => void = () => {}
   const readyPromise = new Promise<string>((resolve, reject) => {
     ready = resolve
     readyErr = reject
   })
 
-  const handle: RunHandle = {
-    runId: '',
+  const handle: SessionHandle = {
+    sessionId: '',
     events: [],
     listeners: new Set(),
     finished: false,
     abort: new AbortController(),
   }
 
-  void driveRun(handle, team, goal, teamSlugs, locale, ready, readyErr)
+  void driveSession(handle, team, goal, teamSlugs, locale, taskId, ready, readyErr)
   return readyPromise
 }
 
-async function driveRun(
-  handle: RunHandle,
+async function driveSession(
+  handle: SessionHandle,
   team: TeamSpec,
   goal: string,
   teamSlugs: [string, string] | null,
   locale: string,
-  ready: (runId: string) => void,
+  taskId: string | null,
+  ready: (sessionId: string) => void,
   readyErr: (err: unknown) => void,
 ): Promise<void> {
   let seq = 0
-  let capturedRunId: string | null = null
+  let capturedSessionId: string | null = null
   let dbStarted = false
 
   try {
     for await (const event of runTeam(team, goal, { teamSlugs, locale })) {
       if (handle.abort.signal.aborted) {
-        if (capturedRunId && dbStarted) {
-          runsStore.finishRun(capturedRunId, { error: 'cancelled' })
-          sessionsStore.finalizeSession(capturedRunId, { error: 'cancelled' })
+        if (capturedSessionId && dbStarted) {
+          sessionsStore.finishSession(capturedSessionId, { error: 'cancelled' })
         }
         return
       }
 
-      if (capturedRunId === null) {
-        capturedRunId = event.run_id
-        handle.runId = capturedRunId
-        state().active.set(capturedRunId, handle)
-        ready(capturedRunId)
+      if (capturedSessionId === null) {
+        capturedSessionId = event.session_id
+        handle.sessionId = capturedSessionId
+        state().active.set(capturedSessionId, handle)
+        ready(capturedSessionId)
       }
 
       if (event.kind === 'run_started' && !dbStarted) {
-        runsStore.startRun(event.run_id, team.id, goal)
-        sessionsStore.createSession(event.run_id, team.id, goal)
+        sessionsStore.startSession(event.session_id, team.id, goal, taskId)
         dbStarted = true
       }
 
-      runsStore.appendRunEvent({
-        runId: event.run_id,
+      sessionsStore.appendSessionEvent({
+        sessionId: event.session_id,
         seq,
         ts: event.ts,
         kind: event.kind,
@@ -183,29 +181,26 @@ async function driveRun(
           typeof event.data.output === 'string'
             ? (event.data.output as string)
             : null
-        runsStore.finishRun(event.run_id, { output })
-        sessionsStore.finalizeSession(event.run_id, { output })
+        sessionsStore.finishSession(event.session_id, { output })
       } else if (event.kind === 'run_error') {
         const err = String(event.data.error ?? 'error')
-        runsStore.finishRun(event.run_id, { error: err })
-        sessionsStore.finalizeSession(event.run_id, { error: err })
+        sessionsStore.finishSession(event.session_id, { error: err })
       }
     }
   } catch (exc) {
-    if (capturedRunId && dbStarted) {
+    if (capturedSessionId && dbStarted) {
       const err = exc instanceof Error ? exc.message : String(exc)
-      runsStore.finishRun(capturedRunId, { error: err })
-      sessionsStore.finalizeSession(capturedRunId, { error: err })
+      sessionsStore.finishSession(capturedSessionId, { error: err })
     }
-    if (!capturedRunId) {
+    if (!capturedSessionId) {
       readyErr(exc)
       return
     }
   } finally {
     handle.finished = true
     for (const q of handle.listeners) q.push(END)
-    if (capturedRunId) state().active.delete(capturedRunId)
-    if (!handle.runId) {
+    if (capturedSessionId) state().active.delete(capturedSessionId)
+    if (!handle.sessionId) {
       readyErr(new Error('engine exited before emitting any event'))
     }
   }

@@ -3,14 +3,12 @@
  * Reads/writes the same `artifacts` table as the Python side.
  */
 
-import path from 'node:path'
 import crypto from 'node:crypto'
-import { artifactsRoot } from './paths'
 import { getDb } from './db'
 
 export interface ArtifactRecord {
   id: string
-  run_id: string
+  session_id: string
   team_id: string
   company_slug: string | null
   team_slug: string | null
@@ -22,25 +20,12 @@ export interface ArtifactRecord {
   created_at: number
 }
 
-export function artifactDirFor(
-  companySlug: string | null,
-  teamSlug: string | null,
-  runId: string,
-): string {
-  return path.join(
-    artifactsRoot(),
-    companySlug ?? '_orphan',
-    teamSlug ?? '_orphan',
-    runId,
-  )
-}
-
 function newId(): string {
   return `art_${crypto.randomBytes(6).toString('hex')}`
 }
 
 export interface RecordInput {
-  run_id: string
+  session_id: string
   team_id: string
   company_slug: string | null
   team_slug: string | null
@@ -57,13 +42,13 @@ export function recordArtifact(input: RecordInput): ArtifactRecord {
   getDb()
     .prepare(
       `INSERT INTO artifacts
-         (id, run_id, team_id, company_slug, team_slug,
+         (id, session_id, team_id, company_slug, team_slug,
           skill_name, filename, path, mime, size, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
-      input.run_id,
+      input.session_id,
       input.team_id,
       input.company_slug,
       input.team_slug,
@@ -76,7 +61,7 @@ export function recordArtifact(input: RecordInput): ArtifactRecord {
     )
   return {
     id,
-    run_id: input.run_id,
+    session_id: input.session_id,
     team_id: input.team_id,
     company_slug: input.company_slug,
     team_slug: input.team_slug,
@@ -97,12 +82,12 @@ export function listForTeam(teamId: string): ArtifactRecord[] {
     .all(teamId) as ArtifactRecord[]
 }
 
-export function listForRun(runId: string): ArtifactRecord[] {
+export function listForSession(sessionId: string): ArtifactRecord[] {
   return getDb()
     .prepare(
-      'SELECT * FROM artifacts WHERE run_id = ? ORDER BY created_at ASC',
+      'SELECT * FROM artifacts WHERE session_id = ? ORDER BY created_at ASC',
     )
-    .all(runId) as ArtifactRecord[]
+    .all(sessionId) as ArtifactRecord[]
 }
 
 export function getArtifact(id: string): ArtifactRecord | null {

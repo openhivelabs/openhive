@@ -200,38 +200,38 @@ export function renderError(err: ClassifiedError, opts: RenderOpts): string {
 export const AGENT_FAILURE_CAP = 3
 
 interface FailureState {
-  byRun: Map<string, Map<string, number>>
+  bySession: Map<string, Map<string, number>>
 }
 
 const globalForFailures = globalThis as unknown as {
-  __openhive_engine_failures?: FailureState
+  __openhive_engine_session_failures?: FailureState
 }
 
 function failures(): FailureState {
-  if (!globalForFailures.__openhive_engine_failures) {
-    globalForFailures.__openhive_engine_failures = { byRun: new Map() }
+  if (!globalForFailures.__openhive_engine_session_failures) {
+    globalForFailures.__openhive_engine_session_failures = { bySession: new Map() }
   }
-  return globalForFailures.__openhive_engine_failures
+  return globalForFailures.__openhive_engine_session_failures
 }
 
-export function noteAgentFailure(runId: string, agentId: string): number {
-  const byRun = failures().byRun
-  let bucket = byRun.get(runId)
+export function noteAgentFailure(sessionId: string, agentId: string): number {
+  const bySession = failures().bySession
+  let bucket = bySession.get(sessionId)
   if (!bucket) {
     bucket = new Map()
-    byRun.set(runId, bucket)
+    bySession.set(sessionId, bucket)
   }
   const next = (bucket.get(agentId) ?? 0) + 1
   bucket.set(agentId, next)
   return next
 }
 
-export function isAgentExcluded(runId: string, agentId: string): boolean {
-  const bucket = failures().byRun.get(runId)
+export function isAgentExcluded(sessionId: string, agentId: string): boolean {
+  const bucket = failures().bySession.get(sessionId)
   if (!bucket) return false
   return (bucket.get(agentId) ?? 0) >= AGENT_FAILURE_CAP
 }
 
-export function clearRunFailures(runId: string): void {
-  failures().byRun.delete(runId)
+export function clearSessionFailures(sessionId: string): void {
+  failures().bySession.delete(sessionId)
 }

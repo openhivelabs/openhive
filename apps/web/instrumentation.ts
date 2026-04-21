@@ -2,7 +2,7 @@
  * Next.js instrumentation hook. Runs once per server process start (dev
  * reload + prod boot).
  *
- * We use it to launch the scheduler + clean up runs left mid-flight by a
+ * We use it to launch the scheduler + clean up sessions left mid-flight by a
  * crash, mirroring apps/server/openhive/main.py's lifespan hook. Lives in
  * the Node runtime; skipped when Next runs in the edge runtime (we don't).
  */
@@ -11,29 +11,34 @@ export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
   // Dynamic imports so the edge runtime never loads better-sqlite3 etc.
   const { startScheduler } = await import('./lib/server/scheduler/scheduler')
-  const { markOrphanedRunsInterrupted } = await import('./lib/server/runs-store')
-  const { backfillSessions, repairSessions } = await import('./lib/server/sessions')
+  const {
+    markOrphanedSessionsInterrupted,
+    pruneLegacyArtifactsRoot,
+  } = await import('./lib/server/sessions')
 
   try {
-    const n = markOrphanedRunsInterrupted()
+    const n = markOrphanedSessionsInterrupted()
     if (n > 0) {
-      console.log(`boot: marked ${n} orphaned run(s) as interrupted`)
+      console.log(`boot: marked ${n} orphaned session(s) as interrupted`)
     }
   } catch (exc) {
     console.error('boot: orphan cleanup failed', exc)
   }
 
   try {
-    const n = backfillSessions()
-    if (n > 0) {
-      console.log(`boot: backfilled ${n} session directory/directories`)
-    }
-    const r = repairSessions()
-    if (r > 0) {
-      console.log(`boot: repaired ${r} session(s) (regenerated transcript)`)
+    pruneLegacyArtifactsRoot()
+  } catch (exc) {
+    console.error('boot: legacy artifact cleanup failed', exc)
+  }
+
+  try {
+    const { migrateTaskYamls } = await import('./lib/server/tasks')
+    const { migrated, scanned } = migrateTaskYamls()
+    if (migrated > 0) {
+      console.log(`boot: migrated ${migrated}/${scanned} task YAML(s) runs→sessions`)
     }
   } catch (exc) {
-    console.error('boot: session backfill failed', exc)
+    console.error('boot: task YAML migration failed', exc)
   }
 
   startScheduler()

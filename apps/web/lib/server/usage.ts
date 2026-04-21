@@ -40,7 +40,7 @@ export function estimateCostCents(
 }
 
 export interface RecordUsageInput {
-  runId: string | null
+  sessionId: string | null
   companyId: string | null
   teamId: string | null
   agentId: string | null
@@ -64,7 +64,7 @@ export function recordUsage(input: RecordUsageInput): void {
   getDb()
     .prepare(
       `INSERT INTO usage_logs
-        (ts, run_id, company_id, team_id, agent_id, agent_role,
+        (ts, session_id, company_id, team_id, agent_id, agent_role,
          provider_id, model,
          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
          cost_usd_cents,
@@ -73,7 +73,7 @@ export function recordUsage(input: RecordUsageInput): void {
     )
     .run(
       Date.now(),
-      input.runId,
+      input.sessionId,
       input.companyId,
       input.teamId,
       input.agentId,
@@ -146,6 +146,55 @@ function group(by: string, since: number): UsageGroupRow[] {
        ORDER BY (SUM(input_tokens) + SUM(output_tokens)) DESC`,
     )
     .all(since) as UsageGroupRow[]
+}
+
+export interface SessionUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read: number
+  cache_write: number
+  cost_cents: number
+  n: number
+}
+
+export function usageForSession(sessionId: string): SessionUsage {
+  return getDb()
+    .prepare(
+      `SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
+              COALESCE(SUM(output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(cache_read_tokens), 0) AS cache_read,
+              COALESCE(SUM(cache_write_tokens), 0) AS cache_write,
+              COALESCE(SUM(cost_usd_cents), 0) AS cost_cents,
+              COUNT(*) AS n
+       FROM usage_logs
+       WHERE session_id = ?`,
+    )
+    .get(sessionId) as SessionUsage
+}
+
+export function usageForSessions(sessionIds: string[]): Record<string, SessionUsage> {
+  if (sessionIds.length === 0) return {}
+  const placeholders = sessionIds.map(() => '?').join(',')
+  const rows = getDb()
+    .prepare(
+      `SELECT session_id,
+              COALESCE(SUM(input_tokens), 0) AS input_tokens,
+              COALESCE(SUM(output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(cache_read_tokens), 0) AS cache_read,
+              COALESCE(SUM(cache_write_tokens), 0) AS cache_write,
+              COALESCE(SUM(cost_usd_cents), 0) AS cost_cents,
+              COUNT(*) AS n
+       FROM usage_logs
+       WHERE session_id IN (${placeholders})
+       GROUP BY session_id`,
+    )
+    .all(...sessionIds) as (SessionUsage & { session_id: string })[]
+  const out: Record<string, SessionUsage> = {}
+  for (const r of rows) {
+    const { session_id, ...rest } = r
+    out[session_id] = rest
+  }
+  return out
 }
 
 export function summary(period: UsagePeriod = 'all'): UsageSummary {

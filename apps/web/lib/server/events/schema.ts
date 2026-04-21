@@ -2,7 +2,7 @@
  * Typed event schema. Every engine step emits one or more of these.
  * Ports apps/server/openhive/events/schema.py.
  *
- * Events are persisted to SQLite `run_events` AND fanned out via SSE. The
+ * Events are persisted to SQLite `session_events` AND fanned out via SSE. The
  * Run-mode canvas and the Timeline tab read from the same stream — no side
  * channels.
  */
@@ -26,7 +26,7 @@ export type EventKind =
 export interface Event {
   kind: EventKind
   ts: number
-  run_id: string
+  session_id: string
   depth: number
   node_id: string | null
   tool_call_id: string | null
@@ -43,14 +43,14 @@ export interface MakeEventOpts {
 
 export function makeEvent(
   kind: EventKind,
-  runId: string,
+  sessionId: string,
   data: Record<string, unknown>,
   opts: MakeEventOpts = {},
 ): Event {
   return {
     kind,
     ts: Date.now() / 1000,
-    run_id: runId,
+    session_id: sessionId,
     depth: opts.depth ?? 0,
     node_id: opts.node_id ?? null,
     tool_call_id: opts.tool_call_id ?? null,

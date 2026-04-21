@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { resolveTeamSlugs } from '@/lib/server/companies'
 import { validateTeam } from '@/lib/server/engine/preflight'
-import { start as startRegistryRun } from '@/lib/server/engine/run-registry'
+import { start as startRegistryRun } from '@/lib/server/engine/session-registry'
 import { toTeamSpec } from '@/lib/server/engine/team'
 
 export const runtime = 'nodejs'
@@ -11,6 +11,7 @@ interface StartBody {
   team?: Record<string, unknown>
   goal?: string
   locale?: string
+  task_id?: string
 }
 
 export async function POST(req: Request) {
@@ -34,13 +35,14 @@ export async function POST(req: Request) {
     ? [resolved.companySlug, resolved.teamSlug]
     : null
   try {
-    const runId = await startRegistryRun(
+    const sessionId = await startRegistryRun(
       team,
       body.goal,
       teamSlugs,
       body.locale ?? 'en',
+      typeof body.task_id === 'string' && body.task_id ? body.task_id : null,
     )
-    return NextResponse.json({ run_id: runId })
+    return NextResponse.json({ session_id: sessionId })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ detail: message }, { status: 500 })

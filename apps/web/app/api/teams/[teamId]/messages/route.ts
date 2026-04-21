@@ -22,7 +22,7 @@ interface AppendBody {
   id?: string
   from_id?: string
   text?: string
-  run_id?: string | null
+  session_id?: string | null
   created_at?: number | null
 }
 
@@ -43,7 +43,7 @@ export async function POST(
     team_id: teamId,
     from_id: body.from_id,
     text: body.text,
-    run_id: body.run_id ?? null,
+    session_id: body.session_id ?? null,
     created_at: body.created_at ?? nowTs(),
   }
   saveMessage(record)

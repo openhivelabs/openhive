@@ -1,6 +1,6 @@
 import { resolveTeamSlugs } from '@/lib/server/companies'
 import { validateTeam } from '@/lib/server/engine/preflight'
-import { attach, END, start } from '@/lib/server/engine/run-registry'
+import { attach, END, start } from '@/lib/server/engine/session-registry'
 import { toTeamSpec } from '@/lib/server/engine/team'
 
 export const runtime = 'nodejs'
@@ -25,7 +25,7 @@ function doneFrame(): Uint8Array {
 }
 
 /** Backwards-compat: launch the run and stream it in one call. New clients
- *  should prefer POST /start + GET /:run_id/stream so refreshes can reattach. */
+ *  should prefer POST /start + GET /:session_id/stream so refreshes can reattach. */
 export async function POST(req: Request) {
   const body = (await req.json()) as StreamBody
   if (!body.team || typeof body.team !== 'object') {
@@ -53,9 +53,9 @@ export async function POST(req: Request) {
     ? [resolved.companySlug, resolved.teamSlug]
     : null
 
-  let runId: string
+  let sessionId: string
   try {
-    runId = await start(team, body.goal, teamSlugs, body.locale ?? 'en')
+    sessionId = await start(team, body.goal, teamSlugs, body.locale ?? 'en')
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return new Response(JSON.stringify({ detail: message }), {
@@ -75,7 +75,7 @@ export async function POST(req: Request) {
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const attached = attach(runId)
+      const attached = attach(sessionId)
       if (!attached) {
         controller.enqueue(doneFrame())
         controller.close()

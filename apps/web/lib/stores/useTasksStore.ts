@@ -1,18 +1,19 @@
 import { create } from 'zustand'
 import {
   type AskUserQuestion,
-  type RunEvent,
-  attachRun,
-  startRun,
-  stopBackendRun,
-} from '../api/runs'
+  type SessionEvent,
+  attachSession,
+  startSession,
+  stopBackendSession,
+} from '../api/sessions'
 import { deleteTask as apiDeleteTask, fetchTasks, saveTask as apiSaveTask } from '../api/tasks'
 import { t as translate } from '../i18n'
 import { mockTasks } from '../mock/tasks'
-import type { Message, PendingAsk, Task, TaskRun, TaskStatus, Team } from '../types'
+import type { Message, PendingAsk, Session, Task, TaskStatus, Team } from '../types'
 import { useAppStore } from './useAppStore'
 import { useCanvasStore } from './useCanvasStore'
 import { useDrawerStore } from './useDrawerStore'
+import { useSessionsStore } from './useSessionsStore'
 
 function makeId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 9)}`
@@ -37,23 +38,23 @@ function composePrompt(task: Task): string {
 }
 
 export function taskStatus(task: Task): TaskStatus {
-  if (task.runs.length === 0) {
+  if (task.sessions.length === 0) {
     return task.mode === 'scheduled' ? 'scheduled' : 'draft'
   }
-  // Concurrency: a task can have multiple live runs (user hits Play twice, or
-  // cron fires while a manual run is mid-flight). Prioritise active states
-  // across ALL runs rather than defaulting to `runs[last]`, otherwise a fresh
-  // short-lived run (e.g. a cancellation) can mask an older run that's still
+  // Concurrency: a task can have multiple live sessions (user hits Play twice, or
+  // cron fires while a manual session is mid-flight). Prioritise active states
+  // across ALL sessions rather than defaulting to `sessions[last]`, otherwise a fresh
+  // short-lived session (e.g. a cancellation) can mask an older session that's still
   // waiting on the user.
-  const hasPendingAsk = task.runs.some(
+  const hasPendingAsk = task.sessions.some(
     (r) => r.status === 'running' && r.pendingAsk,
   )
   if (hasPendingAsk) return 'needs_input'
-  if (task.runs.some((r) => r.status === 'needs_input')) return 'needs_input'
-  if (task.runs.some((r) => r.status === 'running')) return 'running'
-  const latest = task.runs[task.runs.length - 1]!
+  if (task.sessions.some((r) => r.status === 'needs_input')) return 'needs_input'
+  if (task.sessions.some((r) => r.status === 'running')) return 'running'
+  const latest = task.sessions[task.sessions.length - 1]!
   if (latest.status === 'failed') return 'failed'
-  // done — cron tasks loop back to scheduled after a successful run
+  // done — cron tasks loop back to scheduled after a successful session
   return task.mode === 'scheduled' ? 'scheduled' : 'done'
 }
 
@@ -92,6 +93,11 @@ function persistNow(task: Task) {
 interface TasksState {
   tasks: Task[]
   selectedTaskId: string | null
+  selectedSessionId: string | null
+  /** True when the detail modal was opened via the Draft column — meaning
+   *  the user wants the bare-bones "about to session" view, not a past-session
+   *  summary, even if the task has previous sessions. */
+  selectedAsDraft: boolean
   hydrated: boolean
 
   hydrate: () => Promise<void>
@@ -100,39 +106,44 @@ interface TasksState {
   removeTask: (id: string) => void
   updateTask: (id: string, patch: Partial<Task>) => void
   selectTask: (id: string | null) => void
+  selectTaskAsDraft: (id: string) => void
+  selectRun: (taskId: string, sessionId: string) => void
 
-  addRun: (taskId: string, run: TaskRun) => void
-  updateRun: (taskId: string, runId: string, patch: Partial<TaskRun>) => void
-  markRunViewed: (taskId: string, runId: string) => void
-  addRunMessage: (taskId: string, runId: string, msg: Message) => void
+  addRun: (taskId: string, session: Session) => void
+  updateRun: (taskId: string, sessionId: string, patch: Partial<Session>) => void
+  markRunViewed: (taskId: string, sessionId: string) => void
+  addRunMessage: (taskId: string, sessionId: string, msg: Message) => void
   updateRunMessage: (
     taskId: string,
-    runId: string,
+    sessionId: string,
     msgId: string,
     patch: Partial<Message>,
   ) => void
 
-  /** Run a task via the streaming engine. Creates a new TaskRun and drives events. */
-  runTaskNow: (task: Task, team: Team) => Promise<void>
-  /** Reconnect to any in-flight backend runs (survives reload/navigation). */
-  reattachRuns: (team: Team) => void
-  /** Abort an active run. Safe to call when no run is active (no-op). */
-  stopRun: (runId: string) => void
+  /** Session a task via the streaming engine. Creates a new Session and drives events. */
+  startSessionFromTask: (task: Task, team: Team) => Promise<void>
+  /** Reconnect to any in-flight backend sessions (survives reload/navigation). */
+  reattachSessions: (team: Team) => void
+  /** Abort an active session. Safe to call when no session is active (no-op). */
+  stopSession: (sessionId: string) => void
 }
 
-/** Shared event-stream consumer — used both by a fresh `runTaskNow` (after
- *  POSTing /start) and by `reattachRuns` (after reload / navigation). The
- *  backend owns the run lifetime now; this function just renders its events
- *  into the local TaskRun. Re-attach is idempotent because the server replays
+/** Shared event-stream consumer — used both by a fresh `startSessionFromTask` (after
+ *  POSTing /start) and by `reattachSessions` (after reload / navigation). The
+ *  backend owns the session lifetime now; this function just renders its events
+ *  into the local Session. Re-attach is idempotent because the server replays
  *  every persisted event before tailing live ones. */
 async function consumeRunStream(
   get: () => TasksState,
   _set: (partial: Partial<TasksState> | ((s: TasksState) => Partial<TasksState>)) => void,
   task: Task,
   team: Team,
-  runId: string,
-  backendRunId: string,
+  localSessionId: string,
+  backendSessionId: string,
 ) {
+  const syncSession = (patch: Partial<Session>) => {
+    useSessionsStore.getState().updateSession(backendSessionId, patch)
+  }
   const setActiveAgents = useCanvasStore.getState().setActiveAgents
   const setActiveEdges = useCanvasStore.getState().setActiveEdges
 
@@ -147,7 +158,7 @@ async function consumeRunStream(
     const bubbleId = makeId('m')
     bubbleByNode[nodeId] = bubbleId
     outputByNode[nodeId] = ''
-    get().addRunMessage(task.id, runId, {
+    get().addRunMessage(task.id, localSessionId, {
       id: bubbleId,
       teamId: task.teamId,
       from: nodeId,
@@ -158,7 +169,7 @@ async function consumeRunStream(
   }
 
   const pushSystem = (text: string) => {
-    get().addRunMessage(task.id, runId, {
+    get().addRunMessage(task.id, localSessionId, {
       id: makeId('m'),
       teamId: task.teamId,
       from: 'system',
@@ -168,14 +179,14 @@ async function consumeRunStream(
   }
 
   const abort = new AbortController()
-  activeAborts.set(runId, abort)
+  activeAborts.set(localSessionId, abort)
   let sawTerminal = false
   try {
-    const iter = attachRun(backendRunId, { signal: abort.signal })
+    const iter = attachSession(backendSessionId, { signal: abort.signal })
     for (;;) {
       const step = await iter.next()
       if (step.done) break
-      const ev: RunEvent = step.value
+      const ev: SessionEvent = step.value
       switch (ev.kind) {
         case 'node_started':
           if (ev.node_id) {
@@ -194,7 +205,7 @@ async function consumeRunStream(
           const bubbleId = ensureBubble(ev.node_id)
           const delta = String((ev.data as { text?: string }).text ?? '')
           outputByNode[ev.node_id] = (outputByNode[ev.node_id] ?? '') + delta
-          get().updateRunMessage(task.id, runId, bubbleId, {
+          get().updateRunMessage(task.id, localSessionId, bubbleId, {
             text: outputByNode[ev.node_id],
           })
           break
@@ -257,7 +268,7 @@ async function consumeRunStream(
               questions: qs,
               agentRole: agentRole || undefined,
             }
-            get().updateRun(task.id, runId, { pendingAsk: pending })
+            get().updateRun(task.id, localSessionId, { pendingAsk: pending })
             pushSystem(
               translate(useAppStore.getState().locale, 'trace.askOpen', {
                 role: agentRole || 'agent',
@@ -268,7 +279,7 @@ async function consumeRunStream(
           break
         }
         case 'user_answered':
-          get().updateRun(task.id, runId, { pendingAsk: undefined })
+          get().updateRun(task.id, localSessionId, { pendingAsk: undefined })
           pushSystem(
             translate(
               useAppStore.getState().locale,
@@ -278,67 +289,76 @@ async function consumeRunStream(
             ),
           )
           break
-        case 'run_error':
+        case 'run_error': {
+          const errMsg = String((ev.data as Record<string, unknown>).error ?? 'session failed')
           pushSystem(
             translate(useAppStore.getState().locale, 'trace.runError', {
-              error: String((ev.data as Record<string, unknown>).error ?? 'run failed'),
+              error: errMsg,
             }),
           )
-          get().updateRun(task.id, runId, {
+          const endedAt = new Date().toISOString()
+          get().updateRun(task.id, localSessionId, {
             status: 'failed',
-            endedAt: new Date().toISOString(),
-            error: String((ev.data as Record<string, unknown>).error ?? 'run failed'),
+            endedAt,
+            error: errMsg,
+          })
+          syncSession({
+            status: errMsg === 'interrupted' || errMsg === 'cancelled' ? 'interrupted' : 'failed',
+            endedAt,
+            error: errMsg,
           })
           sawTerminal = true
           break
+        }
         case 'run_finished':
           sawTerminal = true
           break
       }
     }
-    // Stream closed. Only mark `done` if the server actually told us the run
+    // Stream closed. Only mark `done` if the server actually told us the session
     // finished — otherwise this could be a page refresh / network blip on a
-    // still-live run, and the next reattach will sync the real status. The
-    // old code marked done unconditionally, which flipped interrupted runs
+    // still-live session, and the next reattach will sync the real status. The
+    // old code marked done unconditionally, which flipped interrupted sessions
     // to "done" on refresh.
     if (sawTerminal) {
       const current = get().tasks.find((t) => t.id === task.id)
-      const cr = current?.runs.find((r) => r.id === runId)
+      const cr = current?.sessions.find((r) => r.id === localSessionId)
       if (cr && cr.status === 'running') {
-        get().updateRun(task.id, runId, {
-          status: 'done',
-          endedAt: new Date().toISOString(),
-        })
+        const endedAt = new Date().toISOString()
+        get().updateRun(task.id, localSessionId, { status: 'done', endedAt })
+        syncSession({ status: 'done', endedAt })
       }
     }
   } catch (e) {
     const aborted = abort.signal.aborted
     if (aborted) {
       // Stopped by user / navigated / unmounted — leave backend state alone.
-      // The backend run keeps going; a later reattach will sync up.
+      // The backend session keeps going; a later reattach will sync up.
       return
     }
     // Network errors (browser navigation killing fetch, SSE disconnects, HMR
-    // reloads) must NOT demote the run to failed — they routinely happen on
+    // reloads) must NOT demote the session to failed — they routinely happen on
     // page refreshes while the engine is fine server-side. Only status events
-    // from the server itself can move a run to a terminal state.
-    // Intentionally leaves the run as-is; the next reattach replays state.
+    // from the server itself can move a session to a terminal state.
+    // Intentionally leaves the session as-is; the next reattach replays state.
     return
   } finally {
-    activeAborts.delete(runId)
+    activeAborts.delete(localSessionId)
     setActiveAgents([])
     setActiveEdges([])
     void useDrawerStore.getState().refreshTeamArtifacts(team.id)
   }
 }
 
-// runId -> AbortController for currently-streaming runs. Lives outside the store so
+// sessionId -> AbortController for currently-streaming sessions. Lives outside the store so
 // AbortController instances aren't part of the serialized state.
 const activeAborts = new Map<string, AbortController>()
 
 export const useTasksStore = create<TasksState>((set, get) => ({
   tasks: [],
   selectedTaskId: null,
+  selectedSessionId: null,
+  selectedAsDraft: false,
   hydrated: false,
 
   hydrate: async () => {
@@ -346,23 +366,23 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     try {
       const fromServer = await fetchTasks()
       if (fromServer.length > 0) {
-        // Legacy healing: only runs that predate the persistent-run refactor
-        // (no backendRunId) are truly orphaned on reload — the old engine
-        // coupled the stream lifetime to the client. Modern runs keep going
+        // Legacy healing: only sessions that predate the persistent-session refactor
+        // (no sessionId) are truly orphaned on reload — the old engine
+        // coupled the stream lifetime to the client. Modern sessions keep going
         // server-side regardless, so we leave those as 'running' and let
-        // reattachRuns() reconnect when the team is loaded.
+        // reattachSessions() reconnect when the team is loaded.
         const now = new Date().toISOString()
         const healed = fromServer.map((t) => {
           let touched = false
-          const runs = t.runs.map((r) => {
-            if (r.status === 'running' && !r.endedAt && !r.backendRunId) {
+          const sessions = t.sessions.map((r) => {
+            if (r.status === 'running' && !r.endedAt && !r.id) {
               touched = true
               return { ...r, status: 'failed' as const, endedAt: now, error: 'interrupted' }
             }
             return r
           })
-          if (touched) persistNow({ ...t, runs })
-          return touched ? { ...t, runs } : t
+          if (touched) persistNow({ ...t, sessions })
+          return touched ? { ...t, sessions } : t
         })
         set({ tasks: healed, hydrated: true })
         return
@@ -403,20 +423,25 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     schedulePersist(() => get().tasks.find((t) => t.id === id), id)
   },
 
-  selectTask: (id) => set({ selectedTaskId: id }),
+  selectTask: (id) => set({ selectedTaskId: id, selectedSessionId: null, selectedAsDraft: false }),
 
-  markRunViewed: (taskId, runId) => {
+  selectTaskAsDraft: (id) => set({ selectedTaskId: id, selectedSessionId: null, selectedAsDraft: true }),
+
+  selectRun: (taskId, sessionId) =>
+    set({ selectedTaskId: taskId, selectedSessionId: sessionId, selectedAsDraft: false }),
+
+  markRunViewed: (taskId, sessionId) => {
     const now = new Date().toISOString()
     let changed = false
     set((s) => ({
       tasks: s.tasks.map((t) => {
         if (t.id !== taskId) return t
-        const runs = t.runs.map((r) => {
-          if (r.id !== runId || r.viewedAt) return r
+        const sessions = t.sessions.map((r) => {
+          if (r.id !== sessionId || r.viewedAt) return r
           changed = true
           return { ...r, viewedAt: now }
         })
-        return changed ? { ...t, runs } : t
+        return changed ? { ...t, sessions } : t
       }),
     }))
     if (changed) {
@@ -424,22 +449,22 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     }
   },
 
-  addRun: (taskId, run) => {
+  addRun: (taskId, session) => {
     set((s) => ({
       tasks: s.tasks.map((t) =>
-        t.id === taskId ? { ...t, runs: [...t.runs, run] } : t,
+        t.id === taskId ? { ...t, sessions: [...t.sessions, session] } : t,
       ),
     }))
     schedulePersist(() => get().tasks.find((t) => t.id === taskId), taskId)
   },
 
-  updateRun: (taskId, runId, patch) => {
+  updateRun: (taskId, sessionId, patch) => {
     set((s) => ({
       tasks: s.tasks.map((t) =>
         t.id === taskId
           ? {
               ...t,
-              runs: t.runs.map((r) => (r.id === runId ? { ...r, ...patch } : r)),
+              sessions: t.sessions.map((r) => (r.id === sessionId ? { ...r, ...patch } : r)),
             }
           : t,
       ),
@@ -454,14 +479,14 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     }
   },
 
-  addRunMessage: (taskId, runId, msg) => {
+  addRunMessage: (taskId, sessionId, msg) => {
     set((s) => ({
       tasks: s.tasks.map((t) =>
         t.id === taskId
           ? {
               ...t,
-              runs: t.runs.map((r) =>
-                r.id === runId ? { ...r, messages: [...r.messages, msg] } : r,
+              sessions: t.sessions.map((r) =>
+                r.id === sessionId ? { ...r, messages: [...r.messages, msg] } : r,
               ),
             }
           : t,
@@ -470,7 +495,7 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     schedulePersist(() => get().tasks.find((t) => t.id === taskId), taskId)
   },
 
-  updateRunMessage: (taskId, runId, msgId, patch) => {
+  updateRunMessage: (taskId, sessionId, msgId, patch) => {
     // Fires on every streamed token — can be dozens per second. We keep it
     // in-memory only; the authoritative event log lives in the backend's
     // `run_events` table, and the terminal `updateRun({status:'done'})`
@@ -480,8 +505,8 @@ export const useTasksStore = create<TasksState>((set, get) => ({
         t.id === taskId
           ? {
               ...t,
-              runs: t.runs.map((r) =>
-                r.id === runId
+              sessions: t.sessions.map((r) =>
+                r.id === sessionId
                   ? {
                       ...r,
                       messages: r.messages.map((m) =>
@@ -496,63 +521,84 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     }))
   },
 
-  runTaskNow: async (task, team) => {
+  startSessionFromTask: async (task, team) => {
     const fullPrompt = composePrompt(task)
-    const runId = makeId('run')
-    const run: TaskRun = {
-      id: runId,
+    const localSessionId = makeId('session')
+    const session: Session = {
+      id: localSessionId,
+      clientSessionId: localSessionId,
       taskId: task.id,
+      teamId: team.id,
+      goal: fullPrompt,
       status: 'running',
       startedAt: new Date().toISOString(),
       messages: [],
     }
-    get().addRun(task.id, run)
-    let backendRunId: string
+    get().addRun(task.id, session)
+    let backendSessionId: string
     try {
-      backendRunId = await startRun(team, fullPrompt, {
+      const r = await startSession(team, fullPrompt, {
         locale: useAppStore.getState().locale,
+        taskId: task.id,
       })
+      backendSessionId = r.sessionId
     } catch (e) {
-      get().updateRun(task.id, runId, {
+      get().updateRun(task.id, localSessionId, {
         status: 'failed',
         endedAt: new Date().toISOString(),
         error: e instanceof Error ? e.message : String(e),
       })
       return
     }
-    get().updateRun(task.id, runId, { backendRunId })
-    await consumeRunStream(get, set, task, team, runId, backendRunId)
+    get().updateRun(task.id, localSessionId, { id: backendSessionId, clientSessionId: localSessionId })
+    // Mirror into the sessions store — temporary bridge during the task/session
+    // decoupling refactor. The Done column reads from sessions store, so fresh
+    // sessions need to appear there as they finish.
+    {
+      const archiveSession: Session = {
+        id: backendSessionId,
+        clientSessionId: localSessionId,
+        taskId: task.id,
+        teamId: team.id,
+        goal: fullPrompt,
+        status: 'running',
+        startedAt: session.startedAt,
+        messages: [],
+      }
+      useSessionsStore.getState().upsertSession(archiveSession)
+    }
+    await consumeRunStream(get, set, task, team, backendSessionId, backendSessionId)
   },
 
-  reattachRuns: (team) => {
-    // For every task in this team whose latest run is still "running" and has
-    // a backend run id, attach a new stream. No-op if an attach is already
+  reattachSessions: (team) => {
+    // For every task in this team whose latest session is still "running" and has
+    // a backend session id, attach a new stream. No-op if an attach is already
     // live (identified by an entry in activeAborts).
     for (const t of get().tasks) {
       if (t.teamId !== team.id) continue
-      const run = t.runs[t.runs.length - 1]
-      if (!run) continue
-      if (run.status !== 'running' || !run.backendRunId) continue
-      if (activeAborts.has(run.id)) continue
-      void consumeRunStream(get, set, t, team, run.id, run.backendRunId)
+      const session = t.sessions[t.sessions.length - 1]
+      if (!session) continue
+      if (session.status !== 'running') continue
+      if (activeAborts.has(session.id)) continue
+      void consumeRunStream(get, set, t, team, session.id, session.id)
     }
   },
 
-  stopRun: (runId) => {
-    // Always tell the backend to stop its run too — the in-browser
+  stopSession: (sessionId) => {
+    // Always tell the backend to stop its session too — the in-browser
     // AbortController only closes OUR attached stream; the engine keeps
     // executing unless we explicitly cancel it server-side.
-    let backendRunId: string | undefined
+    let backendSessionId: string | undefined
     for (const t of get().tasks) {
-      const r = t.runs.find((x) => x.id === runId)
+      const r = t.sessions.find((x) => x.id === sessionId)
       if (r) {
-        backendRunId = r.backendRunId
+        backendSessionId = r.id
         break
       }
     }
-    const ctrl = activeAborts.get(runId)
+    const ctrl = activeAborts.get(sessionId)
     if (ctrl) ctrl.abort()
-    if (backendRunId) void stopBackendRun(backendRunId)
+    if (backendSessionId) void stopBackendSession(backendSessionId)
 
     // If no live attach owned this (reload / navigated tab), there's nothing
     // local to unwind — force the row to failed so the UI is honest.
@@ -561,12 +607,12 @@ export const useTasksStore = create<TasksState>((set, get) => ({
       let ownerTaskId: string | null = null
       set((s) => ({
         tasks: s.tasks.map((t) => {
-          if (!t.runs.some((r) => r.id === runId)) return t
+          if (!t.sessions.some((r) => r.id === sessionId)) return t
           ownerTaskId = t.id
           return {
             ...t,
-            runs: t.runs.map((r) =>
-              r.id === runId && r.status === 'running'
+            sessions: t.sessions.map((r) =>
+              r.id === sessionId && r.status === 'running'
                 ? { ...r, status: 'failed' as const, endedAt: now, error: 'stopped by user' }
                 : r,
             ),
