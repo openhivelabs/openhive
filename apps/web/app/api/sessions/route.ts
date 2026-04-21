@@ -29,7 +29,19 @@ export async function GET(req: Request) {
           return { name, size: st.size, path: full }
         })
       : []
-    return NextResponse.json({ ...meta, artifacts })
+    // Include the distilled transcript so the UI can show "what the run
+    // actually did" even when there's no output / artifacts (failed,
+    // stopped, etc.). Each card becomes unique because its trace is unique.
+    const tp = path.join(path.dirname(artDir), 'transcript.jsonl')
+    const transcript: Record<string, unknown>[] = []
+    if (fs.existsSync(tp)) {
+      for (const line of fs.readFileSync(tp, 'utf8').split('\n')) {
+        const s = line.trim()
+        if (!s) continue
+        try { transcript.push(JSON.parse(s) as Record<string, unknown>) } catch { /* skip */ }
+      }
+    }
+    return NextResponse.json({ ...meta, artifacts, transcript })
   }
   const limit = Number(url.searchParams.get('limit') ?? 100)
   return NextResponse.json(listSessions(Number.isFinite(limit) ? limit : 100))

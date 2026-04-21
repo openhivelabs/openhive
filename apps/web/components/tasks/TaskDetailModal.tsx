@@ -27,6 +27,66 @@ interface TaskDetailModalProps {
   onClose: () => void
 }
 
+function agentLabel(
+  team: ReturnType<typeof useCurrentTeam>,
+  nodeId: string | undefined,
+): string {
+  if (!nodeId) return 'agent'
+  const a = team?.agents.find((x) => x.id === nodeId)
+  return a?.role ?? a?.label ?? nodeId
+}
+
+function renderTranscriptEntry(
+  e: {
+    kind: string
+    text?: string
+    result?: unknown
+    agent_role?: string
+    tool?: string
+    node_id?: string
+    args?: Record<string, unknown>
+  },
+  team: ReturnType<typeof useCurrentTeam>,
+): string {
+  switch (e.kind) {
+    case 'goal':
+      return `목표: ${String(e.text ?? '').slice(0, 160)}`
+    case 'ask_user':
+      return `${e.agent_role ?? 'lead'} → 유저에게 질문`
+    case 'user_answer': {
+      const r = typeof e.result === 'string' ? e.result : JSON.stringify(e.result ?? '')
+      return `유저 응답: ${r.slice(0, 120)}`
+    }
+    case 'tool_call': {
+      const who = agentLabel(team, e.node_id)
+      const tool = e.tool ?? 'tool'
+      if (tool === 'delegate_to') {
+        const assignee = e.args?.assignee as string | undefined
+        return `${who} → ${assignee ?? '?'} 위임`
+      }
+      if (tool === 'run_skill_script') {
+        const skill = e.args?.skill as string | undefined
+        const script = e.args?.script as string | undefined
+        return `${who} → 스킬 실행 ${skill ?? ''}${script ? '/' + String(script) : ''}`
+      }
+      if (tool === 'activate_skill') {
+        return `${who} → 스킬 활성화 (${e.args?.name ?? '?'})`
+      }
+      if (tool === 'read_skill_file') {
+        return `${who} → 파일 읽기 (${e.args?.path ?? '?'})`
+      }
+      return `${who} → ${tool}`
+    }
+    case 'agent_message': {
+      const who = agentLabel(team, e.node_id)
+      const txt = String(e.text ?? '').replace(/\s+/g, ' ').slice(0, 160)
+      return `${who}: ${txt}`
+    }
+    default:
+      return e.kind
+  }
+}
+
 interface SessionArtifact {
   id: string
   filename: string
@@ -34,9 +94,23 @@ interface SessionArtifact {
   mime: string | null
 }
 
+interface TranscriptEntry {
+  kind: string
+  ts?: number
+  text?: string
+  result?: unknown
+  agent_role?: string
+  questions?: unknown
+  node_id?: string
+  tool?: string
+  args?: Record<string, unknown>
+}
+
 interface SessionSummary {
   output: string | null
   artifacts: SessionArtifact[]
+  transcript: TranscriptEntry[]
+  status: string
 }
 
 export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
@@ -101,6 +175,8 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
         setSummary({
           output: sess?.output ?? null,
           artifacts: Array.isArray(arts) ? arts : [],
+          transcript: Array.isArray(sess?.transcript) ? sess.transcript : [],
+          status: sess?.status ?? '',
         })
       } catch {
         if (!cancelled) setSummary(null)
@@ -340,8 +416,11 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
           )}
 
           {/* Session result — unique per run. Pulled from sessions/{uuid}/:
-              the Lead's final output plus whatever files the run produced. */}
-          {endedRunId && summary && (summary.output || summary.artifacts.length > 0) && (
+              generated files, the Lead's final output, and a distilled
+              trace of what each agent actually did during the run. The
+              trace makes each card visually distinct even for failed /
+              stopped runs where no artifact or output was produced. */}
+          {endedRunId && summary && (
             <div className="px-4 py-3 border-t border-neutral-200 space-y-3">
               {summary.artifacts.length > 0 && (
                 <div>
@@ -376,6 +455,21 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
                   <div className="rounded bg-neutral-50 border border-neutral-200 text-[13px] text-neutral-800 px-3 py-2 whitespace-pre-wrap leading-relaxed max-h-[320px] overflow-y-auto">
                     {summary.output}
                   </div>
+                </div>
+              )}
+              {summary.transcript.length > 0 && (
+                <div>
+                  <div className="text-[12px] font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
+                    {t('tasks.runTraceHeader') || '수행 과정'}
+                  </div>
+                  <ol className="rounded bg-neutral-50 border border-neutral-200 text-[12px] text-neutral-700 px-3 py-2 space-y-1 max-h-[320px] overflow-y-auto font-mono">
+                    {summary.transcript.map((e, i) => (
+                      <li key={i} className="flex gap-2">
+                        <span className="text-neutral-400 shrink-0">{i + 1}.</span>
+                        <span className="flex-1">{renderTranscriptEntry(e, team)}</span>
+                      </li>
+                    ))}
+                  </ol>
                 </div>
               )}
             </div>
