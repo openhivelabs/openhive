@@ -13,6 +13,7 @@ import {
   flushIntervalMs,
   flushSession,
   flushThreshold,
+  getEventWriterMetrics,
 } from './event-writer'
 
 let tmpRoot: string
@@ -133,6 +134,18 @@ describe('event-writer', () => {
 
     expect(readLines('a')).toHaveLength(1)
     expect(readLines('b')).toHaveLength(2)
+  })
+
+  it('tracks flush metrics', async () => {
+    __resetForTests()
+    enqueueEvent('s-metrics', JSON.stringify({ a: 1 }))
+    enqueueEvent('s-metrics', JSON.stringify({ a: 2 }))
+    await flushSession('s-metrics')
+    const m = getEventWriterMetrics()
+    expect(m.flushes).toBe(1)
+    expect(m.lines).toBe(2)
+    expect(m.bytes).toBeGreaterThan(0)
+    expect(m.errors).toBe(0)
   })
 
   it('preserves FIFO order across mixed timer and threshold triggers', async () => {

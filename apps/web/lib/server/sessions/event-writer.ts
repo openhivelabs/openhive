@@ -36,6 +36,18 @@ export function flushThreshold(): number {
   return Number.isFinite(v) && v > 0 ? v : 10
 }
 
+const metrics = { flushes: 0, lines: 0, bytes: 0, errors: 0 }
+
+/** Snapshot of flush metrics (flushes, total lines, total bytes, error count). */
+export function getEventWriterMetrics(): {
+  flushes: number
+  lines: number
+  bytes: number
+  errors: number
+} {
+  return { ...metrics }
+}
+
 interface Queue {
   buf: string[]
   timer: NodeJS.Timeout | null
@@ -111,12 +123,19 @@ async function doFlush(sessionId: string): Promise<void> {
   try {
     await fsp.mkdir(path.dirname(filePath), { recursive: true })
     await fsp.appendFile(filePath, payload, 'utf8')
+    metrics.flushes += 1
+    metrics.lines += lines.length
+    metrics.bytes += Buffer.byteLength(payload, 'utf8')
   } catch (exc) {
     // Fallback: try to write synchronously so we don't silently lose data.
     try {
       fs.mkdirSync(path.dirname(filePath), { recursive: true })
       fs.appendFileSync(filePath, payload, 'utf8')
+      metrics.flushes += 1
+      metrics.lines += lines.length
+      metrics.bytes += Buffer.byteLength(payload, 'utf8')
     } catch (exc2) {
+      metrics.errors += 1
       console.error('event-writer: flush failed', sessionId, exc, exc2)
     }
   }
@@ -148,4 +167,8 @@ export function __resetForTests(): void {
     if (q.timer) clearTimeout(q.timer)
   }
   queues.clear()
+  metrics.flushes = 0
+  metrics.lines = 0
+  metrics.bytes = 0
+  metrics.errors = 0
 }
