@@ -20,7 +20,6 @@ export async function registerNode() {
     console.error('boot: legacy DB migration failed', exc)
   }
 
-  const { startScheduler } = await import('./lib/server/scheduler/scheduler')
   const { backfillTranscripts, markOrphanedSessionsIdle, pruneLegacyArtifactsRoot } = await import(
     './lib/server/sessions'
   )
@@ -57,7 +56,64 @@ export async function registerNode() {
     console.error('boot: task YAML migration failed', exc)
   }
 
-  startScheduler()
+  // Lazy scheduler: instantiate, register persisted scheduled tasks + any
+  // team with panel bindings. Tick only runs if at least one routine is
+  // registered — an idle server with zero scheduled tasks and zero panels
+  // keeps no interval alive.
+  try {
+    const { getScheduler } = await import('./lib/server/scheduler/scheduler')
+    const { listTasks } = await import('./lib/server/tasks')
+    const { listCompanies } = await import('./lib/server/companies')
+    const { loadDashboard } = await import('./lib/server/dashboards')
+    const s = getScheduler()
+
+    let scheduledCount = 0
+    try {
+      for (const task of listTasks()) {
+        if (task.mode !== 'scheduled') continue
+        const taskId = typeof task.id === 'string' ? task.id : null
+        const cron = typeof task.cron === 'string' ? task.cron : undefined
+        if (!taskId || !cron) continue
+        s.addRoutine({ id: `task:${taskId}`, cron })
+        scheduledCount++
+      }
+    } catch (exc) {
+      console.error('boot: scheduled-task enumeration failed', exc)
+    }
+
+    let hasPanels = false
+    try {
+      outer: for (const company of listCompanies()) {
+        const companySlug = typeof company.slug === 'string' ? company.slug : null
+        if (!companySlug) continue
+        for (const team of company.teams ?? []) {
+          const teamSlug = typeof team.slug === 'string' ? team.slug : null
+          if (!teamSlug) continue
+          const layout = loadDashboard(companySlug, teamSlug)
+          if (!layout) continue
+          const blocks = Array.isArray(layout.blocks) ? layout.blocks : []
+          for (const raw of blocks) {
+            if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+            if ((raw as Record<string, unknown>).binding) {
+              hasPanels = true
+              break outer
+            }
+          }
+        }
+      }
+    } catch (exc) {
+      console.error('boot: panel binding scan failed', exc)
+    }
+    if (hasPanels) s.addRoutine({ id: 'panels:refresh' })
+
+    if (scheduledCount === 0 && !hasPanels) {
+      console.log('boot: scheduler idle (no scheduled tasks or panel bindings)')
+    } else {
+      console.log(`boot: scheduler armed — ${scheduledCount} task(s), panels=${hasPanels}`)
+    }
+  } catch (exc) {
+    console.error('boot: scheduler init failed', exc)
+  }
 
   try {
     const { registerEventWriterShutdown } = await import(
