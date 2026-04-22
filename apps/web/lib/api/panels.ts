@@ -5,6 +5,8 @@ export interface PanelCacheRow {
   error: string | null
   fetched_at: number | null
   duration_ms: number | null
+  shape_hash?: string
+  shape_changed?: boolean
 }
 
 export interface PanelTemplate {
@@ -82,6 +84,50 @@ export async function buildBinding(
       body: JSON.stringify({ team_id: teamId, template_id: templateId, user_goal: userGoal }),
     }),
   )
+}
+
+export interface ActionResult {
+  ok: boolean
+  result?: unknown
+  rows_changed?: number
+  detail?: string
+}
+
+export async function executePanelAction(
+  panelId: string,
+  actionId: string,
+  teamId: string,
+  values: Record<string, unknown>,
+): Promise<ActionResult> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 15_000)
+  let res: Response
+  try {
+    res = await fetch(
+      `/api/panels/${encodeURIComponent(panelId)}/actions/${encodeURIComponent(actionId)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teamId, values }),
+        signal: controller.signal,
+      },
+    )
+  } finally {
+    clearTimeout(timer)
+  }
+  const text = await res.text()
+  let body: ActionResult = { ok: res.ok }
+  if (text) {
+    try {
+      body = JSON.parse(text) as ActionResult
+    } catch {
+      body = { ok: res.ok, detail: text.slice(0, 300) }
+    }
+  }
+  if (!res.ok) {
+    throw new Error(body.detail ?? `action failed: ${res.status}`)
+  }
+  return body
 }
 
 /** Open an EventSource on the SSE stream for live block updates.

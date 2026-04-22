@@ -12,6 +12,76 @@ export type SourceKind = 'mcp' | 'team_data' | 'http' | 'file' | 'static'
 export interface PanelSource {
   kind: SourceKind
   config: Record<string, unknown>
+  /** Credential vault reference. Resolved server-side at fetch time to inject
+   *  `Authorization` / custom headers. Never sent back to the client in
+   *  responses. Used by `http` sources and (optionally) MCP servers that gate
+   *  on named credentials. */
+  auth_ref?: string
+}
+
+/** Inputs for an action form — typed palette kept small on purpose so that
+ *  AI-generated forms stay predictable and the renderer is one file. */
+export type FormFieldType =
+  | 'text'
+  | 'textarea'
+  | 'number'
+  | 'date'
+  | 'datetime'
+  | 'select'
+  | 'toggle'
+
+export interface FormField {
+  name: string
+  label: string
+  type: FormFieldType
+  required?: boolean
+  placeholder?: string
+  default?: unknown
+  /** `select` only. */
+  options?: string[]
+  /** `number` only. */
+  min?: number
+  max?: number
+}
+
+export interface FormSchema {
+  fields: FormField[]
+}
+
+/** Where an action lives on the panel UI. */
+export type ActionPlacement = 'toolbar' | 'row' | 'inline' | 'drag'
+
+/** What an action does when executed. Matches the source kinds except `static`
+ *  and adds `file` for note-style writes. */
+export type ActionTargetKind = 'team_data' | 'mcp' | 'http_recipe' | 'http_raw' | 'file'
+
+export interface ActionTarget {
+  kind: ActionTargetKind
+  /** Kind-specific fields:
+   *   - team_data: { sql: string } — parameterized with :name bindings
+   *   - mcp:       { server, tool, args_template }
+   *   - http_*:    { url, method, headers?, body_template? }
+   *   - file:      { path, format?: 'markdown' | 'text' }
+   */
+  config: Record<string, unknown>
+  auth_ref?: string
+}
+
+export interface PanelAction {
+  id: string
+  kind: 'create' | 'update' | 'delete' | 'custom'
+  label: string
+  placement: ActionPlacement
+  form?: FormSchema
+  /** Fields on the target that this action mutates. Used by inline/drag to
+   *  know which properties can be changed. */
+  fields?: string[]
+  target: ActionTarget
+  /** Show a confirm modal before executing. Delete/destructive: always true. */
+  confirm?: boolean
+  /** External writes that cannot be undone (send_email, create_invoice, …).
+   *  Forces a two-step confirm and a prominent warning. */
+  irreversible?: boolean
 }
 
 /** Declarative mapping from raw source response → the shape the block needs.
@@ -49,6 +119,9 @@ export interface PanelBinding {
   map: PanelMap
   /** Server polls source at this cadence. 0 = manual refresh only. */
   refresh_seconds: number
+  /** Write operations available on this panel. Rendered as toolbar buttons,
+   *  row hover icons, inline editors, or kanban drag handlers per `placement`. */
+  actions?: PanelAction[]
 }
 
 export interface PanelSpec {
@@ -83,4 +156,25 @@ export async function saveDashboard(teamId: string, layout: DashboardLayout): Pr
     body: JSON.stringify({ layout }),
   })
   if (!res.ok) throw new Error(`PUT dashboard ${res.status}`)
+}
+
+export interface DashboardBackup {
+  name: string
+  saved_at: number
+}
+
+export async function fetchDashboardBackups(teamId: string): Promise<DashboardBackup[]> {
+  const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}/dashboard/backups`)
+  if (!res.ok) throw new Error(`GET backups ${res.status}`)
+  const data = (await res.json()) as { backups: DashboardBackup[] }
+  return data.backups
+}
+
+export async function restoreDashboardBackup(teamId: string, name: string): Promise<void> {
+  const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}/dashboard/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) throw new Error(`POST restore ${res.status}`)
 }

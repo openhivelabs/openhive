@@ -32,6 +32,65 @@ export function DualSidebar() {
   const currentTeamId = useAppStore((s) => s.currentTeamId)
   const collapsed = useAppStore((s) => s.teamPanelCollapsed)
   const toggleTeamPanel = useAppStore((s) => s.toggleTeamPanel)
+  const reorderTeams = useAppStore((s) => s.reorderTeams)
+
+  const [draggingTeamId, setDraggingTeamId] = useState<string | null>(null)
+  const [teamDropTarget, setTeamDropTarget] = useState<
+    { id: string; position: 'before' | 'after' } | null
+  >(null)
+
+  function handleTeamDrop(companyId: string, teamIds: string[], targetId: string, position: 'before' | 'after') {
+    if (!draggingTeamId || draggingTeamId === targetId) {
+      setDraggingTeamId(null)
+      setTeamDropTarget(null)
+      return
+    }
+    const ids = teamIds.filter((id) => id !== draggingTeamId)
+    const idx = ids.indexOf(targetId)
+    if (idx === -1) {
+      setDraggingTeamId(null)
+      setTeamDropTarget(null)
+      return
+    }
+    ids.splice(position === 'before' ? idx : idx + 1, 0, draggingTeamId)
+    reorderTeams(companyId, ids)
+    setDraggingTeamId(null)
+    setTeamDropTarget(null)
+  }
+
+  function teamDragHandlers(teamId: string, axis: 'x' | 'y') {
+    return {
+      draggable: true,
+      onDragStart: (e: React.DragEvent) => {
+        setDraggingTeamId(teamId)
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('application/x-openhive-team', teamId)
+      },
+      onDragEnd: () => {
+        setDraggingTeamId(null)
+        setTeamDropTarget(null)
+      },
+      onDragOver: (e: React.DragEvent) => {
+        if (!draggingTeamId || draggingTeamId === teamId) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        const rect = e.currentTarget.getBoundingClientRect()
+        const position =
+          axis === 'y'
+            ? e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+            : e.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+        setTeamDropTarget((prev) =>
+          prev?.id === teamId && prev.position === position ? prev : { id: teamId, position },
+        )
+      },
+      onDragLeave: (e: React.DragEvent) => {
+        const next = e.relatedTarget as Node | null
+        if (!next || !(e.currentTarget as Node).contains(next)) {
+          setTeamDropTarget((prev) => (prev?.id === teamId ? null : prev))
+        }
+      },
+    }
+  }
 
   const [newTeamCompanyId, setNewTeamCompanyId] = useState<string | null>(null)
   const [teamSettings, setTeamSettings] = useState<{ companyId: string; teamId: string } | null>(
@@ -73,20 +132,45 @@ export function DualSidebar() {
             <div className="flex-1 overflow-y-auto py-2 flex flex-col items-center gap-1.5">
               {selectedCompany.teams.map((team) => {
                 const isActive = currentTeamId === team.id
+                const isDragging = draggingTeamId === team.id
+                const showBefore =
+                  teamDropTarget?.id === team.id && teamDropTarget.position === 'before'
+                const showAfter =
+                  teamDropTarget?.id === team.id && teamDropTarget.position === 'after'
+                const teamIds = selectedCompany.teams.map((x) => x.id)
                 return (
-                  <Link
-                    key={team.id}
-                    to={`/${selectedCompany.slug}/${team.slug}/${tab}`}
-                    title={team.name}
-                    className={clsx(
-                      'w-9 h-9 rounded-md flex items-center justify-center shrink-0 cursor-pointer',
-                      isActive
-                        ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200 ring-1 ring-amber-200 dark:ring-amber-800/60'
-                        : 'text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800',
+                  <div key={team.id} className="relative w-9">
+                    {showBefore && (
+                      <div className="absolute -top-0.5 left-0 right-0 h-0.5 bg-amber-500 rounded-full pointer-events-none" />
                     )}
-                  >
-                    <TeamIcon name={team.icon} className="w-4 h-4" />
-                  </Link>
+                    <Link
+                      to={`/${selectedCompany.slug}/${team.slug}/${tab}`}
+                      title={team.name}
+                      {...teamDragHandlers(team.id, 'y')}
+                      onDrop={(e) => {
+                        e.preventDefault()
+                        if (!teamDropTarget) return
+                        handleTeamDrop(
+                          selectedCompany.id,
+                          teamIds,
+                          teamDropTarget.id,
+                          teamDropTarget.position,
+                        )
+                      }}
+                      className={clsx(
+                        'w-9 h-9 rounded-md flex items-center justify-center shrink-0 cursor-pointer transition-opacity',
+                        isDragging && 'opacity-40',
+                        isActive
+                          ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200 ring-1 ring-amber-200 dark:ring-amber-800/60'
+                          : 'text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800',
+                      )}
+                    >
+                      <TeamIcon name={team.icon} className="w-4 h-4" />
+                    </Link>
+                    {showAfter && (
+                      <div className="absolute -bottom-0.5 left-0 right-0 h-0.5 bg-amber-500 rounded-full pointer-events-none" />
+                    )}
+                  </div>
                 )
               })}
               <button
@@ -133,11 +217,35 @@ export function DualSidebar() {
               <div className="px-1 space-y-0.5">
                 {selectedCompany.teams.map((team) => {
                   const isActive = currentTeamId === team.id
+                  const isDragging = draggingTeamId === team.id
+                  const showBefore =
+                    teamDropTarget?.id === team.id && teamDropTarget.position === 'before'
+                  const showAfter =
+                    teamDropTarget?.id === team.id && teamDropTarget.position === 'after'
+                  const teamIds = selectedCompany.teams.map((x) => x.id)
                   return (
+                    <div key={team.id} className="relative">
+                      {showBefore && (
+                        <div className="absolute -top-0.5 left-2 right-2 h-0.5 bg-amber-500 rounded-full pointer-events-none z-10" />
+                      )}
+                      {showAfter && (
+                        <div className="absolute -bottom-0.5 left-2 right-2 h-0.5 bg-amber-500 rounded-full pointer-events-none z-10" />
+                      )}
                     <div
-                      key={team.id}
+                      {...teamDragHandlers(team.id, 'y')}
+                      onDrop={(e) => {
+                        e.preventDefault()
+                        if (!teamDropTarget) return
+                        handleTeamDrop(
+                          selectedCompany.id,
+                          teamIds,
+                          teamDropTarget.id,
+                          teamDropTarget.position,
+                        )
+                      }}
                       className={clsx(
-                        'group flex items-center gap-1 rounded-sm',
+                        'group flex items-center gap-1 rounded-sm transition-opacity',
+                        isDragging && 'opacity-40',
                         isActive
                           ? 'bg-amber-50 dark:bg-amber-950/40 ring-1 ring-amber-200 dark:ring-amber-800/60'
                           : 'hover:bg-neutral-50 dark:hover:bg-neutral-800',
@@ -168,6 +276,7 @@ export function DualSidebar() {
                       >
                         <GearSix className="w-[18px] h-[18px]" />
                       </button>
+                    </div>
                     </div>
                   )
                 })}

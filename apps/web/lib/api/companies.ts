@@ -107,6 +107,27 @@ export async function deleteTeam(companySlug: string, teamSlug: string): Promise
   if (!res.ok && res.status !== 404) throw new Error(`DELETE team ${res.status}`)
 }
 
+export async function reorderCompaniesApi(slugs: string[]): Promise<void> {
+  const res = await fetch('/api/companies/reorder', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ order: slugs }),
+  })
+  if (!res.ok) throw new Error(`PUT companies/reorder ${res.status}`)
+}
+
+export async function reorderTeamsApi(companySlug: string, teamSlugs: string[]): Promise<void> {
+  const res = await fetch(
+    `/api/companies/${encodeURIComponent(companySlug)}/teams/reorder`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order: teamSlugs }),
+    },
+  )
+  if (!res.ok) throw new Error(`PUT teams/reorder ${res.status}`)
+}
+
 export async function deleteCompany(companySlug: string): Promise<void> {
   const res = await fetch(`/api/companies/${encodeURIComponent(companySlug)}`, {
     method: 'DELETE',

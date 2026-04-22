@@ -1,5 +1,11 @@
 import { create } from 'zustand'
-import { fetchCompanies, saveCompany, saveTeam } from '../api/companies'
+import {
+  fetchCompanies,
+  reorderCompaniesApi,
+  reorderTeamsApi,
+  saveCompany,
+  saveTeam,
+} from '../api/companies'
 import type { Locale } from '../i18n'
 // Note: mockCompanies is no longer auto-seeded into a fresh hive. First-session
 // users go through `/onboarding` to create their first company explicitly.
@@ -151,6 +157,8 @@ interface AppState {
   addCompany: (company: Company) => void
   addTeam: (companyId: string, team: Team) => void
   updateTeam: (companyId: string, team: Team) => void
+  reorderCompanies: (companyIds: string[]) => void
+  reorderTeams: (companyId: string, teamIds: string[]) => void
 
   hydrate: () => Promise<void>
 }
@@ -249,6 +257,50 @@ export const useAppStore = create<AppState>((set, get) => {
       if (company) {
         void saveTeam(company.slug, team).catch((e) => console.error('saveTeam failed', e))
       }
+    },
+
+    reorderCompanies: (companyIds) => {
+      const current = get().companies
+      const byId = new Map(current.map((c) => [c.id, c]))
+      const next: Company[] = []
+      const seen = new Set<string>()
+      for (const id of companyIds) {
+        const c = byId.get(id)
+        if (c && !seen.has(id)) {
+          next.push(c)
+          seen.add(id)
+        }
+      }
+      for (const c of current) if (!seen.has(c.id)) next.push(c)
+      set({ companies: next })
+      void reorderCompaniesApi(next.map((c) => c.slug)).catch((e) =>
+        console.error('reorderCompanies failed', e),
+      )
+    },
+
+    reorderTeams: (companyId, teamIds) => {
+      const current = get().companies
+      const company = current.find((c) => c.id === companyId)
+      if (!company) return
+      const byId = new Map(company.teams.map((t) => [t.id, t]))
+      const nextTeams: Team[] = []
+      const seen = new Set<string>()
+      for (const id of teamIds) {
+        const t = byId.get(id)
+        if (t && !seen.has(id)) {
+          nextTeams.push(t)
+          seen.add(id)
+        }
+      }
+      for (const t of company.teams) if (!seen.has(t.id)) nextTeams.push(t)
+      set({
+        companies: current.map((c) =>
+          c.id === companyId ? { ...c, teams: nextTeams } : c,
+        ),
+      })
+      void reorderTeamsApi(company.slug, nextTeams.map((t) => t.slug)).catch((e) =>
+        console.error('reorderTeams failed', e),
+      )
     },
 
     hydrate: async () => {

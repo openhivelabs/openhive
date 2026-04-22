@@ -2,6 +2,9 @@ import { AddPanelModal } from '@/components/dashboard/AddPanelModal'
 import { AiEditDrawer } from '@/components/dashboard/AiEditDrawer'
 import { Block } from '@/components/dashboard/Block'
 import { BoundPanel } from '@/components/dashboard/BoundPanel'
+import { DashboardAiDock } from '@/components/dashboard/DashboardAiDock'
+import { HistoryModal } from '@/components/dashboard/HistoryModal'
+import { RecipePickerModal } from '@/components/dashboard/RecipePickerModal'
 import {
   type DashboardLayout,
   type PanelSpec,
@@ -25,6 +28,7 @@ import {
   Kanban,
   Note,
   Package,
+  // Package is used both as icon and as recipe-picker trigger.
   PencilSimple,
   Plus,
   Sparkle,
@@ -65,6 +69,8 @@ export function Dashboard() {
   const [dragOverId, setDragOverId] = useState<string | null>(null)
   const [addPanelOpen, setAddPanelOpen] = useState(false)
   const [editingPanelId, setEditingPanelId] = useState<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [recipesOpen, setRecipesOpen] = useState(false)
 
   useEffect(() => {
     if (!teamId) return
@@ -209,6 +215,14 @@ export function Dashboard() {
                   <Plus weight="bold" className="w-3.5 h-3.5" />
                   {t('dashboard.addPanel')}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setRecipesOpen(true)}
+                  className="h-9 px-3 rounded-full bg-white dark:bg-neutral-900 ring-1 ring-neutral-200 dark:ring-neutral-800 text-[13px] font-medium text-neutral-700 dark:text-neutral-200 inline-flex items-center gap-1.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
+                >
+                  <Package className="w-3.5 h-3.5" />
+                  {t('recipes.open')}
+                </button>
                 <div className="inline-flex items-center h-9 rounded-full bg-white dark:bg-neutral-900 ring-1 ring-neutral-200 dark:ring-neutral-800 shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
                   <button
                     type="button"
@@ -221,6 +235,15 @@ export function Dashboard() {
                   >
                     <Sparkle weight="fill" className="w-3.5 h-3.5 text-amber-500" />
                     {t('dashboard.aiCustomize')}
+                  </button>
+                  <div className="w-px h-4 bg-neutral-200 dark:bg-neutral-800" />
+                  <button
+                    type="button"
+                    onClick={() => setHistoryOpen(true)}
+                    className="h-full px-3 text-[13px] font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-800 inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <ClockCounterClockwise className="w-3.5 h-3.5" />
+                    {t('history.open')}
                   </button>
                   <div className="w-px h-4 bg-neutral-200 dark:bg-neutral-800" />
                   <button
@@ -273,6 +296,7 @@ export function Dashboard() {
                     customerRows={customerRows}
                     totalValue={totalValue}
                     byStage={byStage}
+                    teamId={teamId}
                   />
                 ))}
               </div>
@@ -280,6 +304,35 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+      {teamId && (
+        <DashboardAiDock
+          teamId={teamId}
+          onApplied={async () => {
+            const fresh = await fetchDashboard(teamId).catch(() => null)
+            if (fresh) setLayout(fresh)
+          }}
+        />
+      )}
+      {recipesOpen && teamId && (
+        <RecipePickerModal
+          teamId={teamId}
+          onClose={() => setRecipesOpen(false)}
+          onInstalled={async () => {
+            const fresh = await fetchDashboard(teamId).catch(() => null)
+            if (fresh) setLayout(fresh)
+          }}
+        />
+      )}
+      {historyOpen && teamId && (
+        <HistoryModal
+          teamId={teamId}
+          onClose={() => setHistoryOpen(false)}
+          onRestored={async () => {
+            const fresh = await fetchDashboard(teamId).catch(() => null)
+            if (fresh) setLayout(fresh)
+          }}
+        />
+      )}
       <AiEditDrawer
         open={aiOpen}
         onClose={() => setAiOpen(false)}
@@ -325,6 +378,7 @@ function PanelCell({
   customerRows,
   totalValue,
   byStage,
+  teamId,
 }: {
   spec: PanelSpec
   editing: boolean
@@ -338,6 +392,7 @@ function PanelCell({
   customerRows: Record<string, unknown>[]
   totalValue: number
   byStage: { stage: string; rows: Record<string, unknown>[] }[]
+  teamId: string
 }) {
   const Icon = ICON[spec.type] ?? TrendUp
   const live = usePanelData(spec.id, !!spec.binding)
@@ -389,7 +444,7 @@ function PanelCell({
       }}
     >
       {spec.binding ? (
-        <BoundPanel spec={spec} />
+        <BoundPanel spec={spec} teamId={teamId} />
       ) : (
         <BlockContent
           spec={spec}

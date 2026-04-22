@@ -118,6 +118,52 @@ export interface SchemaDescription {
   recent_migrations: MigrationRow[]
 }
 
+/**
+ * Describe a single table with schema + row count + up to N sample rows.
+ * Used by the AI composer so the model can write SQL against a real shape
+ * instead of guessing. Samples are always limited and never include `deleted_at`-
+ * marked rows (when that convention is present) so they stay representative.
+ */
+export function describeTable(
+  companySlug: string,
+  teamSlug: string,
+  tableName: string,
+  sampleLimit = 3,
+): TableInfo & { samples: Record<string, unknown>[] } {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) {
+    throw new Error(`invalid table name: ${JSON.stringify(tableName)}`)
+  }
+  return withTeamDb(companySlug, teamSlug, (conn) => {
+    const rawCols = conn.prepare(`PRAGMA table_info(${tableName})`).all() as {
+      name: string
+      type: string
+      notnull: number
+      pk: number
+    }[]
+    if (rawCols.length === 0) {
+      throw new Error(`table not found: ${tableName}`)
+    }
+    const columns: ColumnInfo[] = rawCols.map((c) => ({
+      name: c.name,
+      type: c.type,
+      notnull: !!c.notnull,
+      pk: !!c.pk,
+    }))
+    const countRow = conn.prepare(`SELECT COUNT(*) AS n FROM ${tableName}`).get() as { n: number }
+    const hasSoftDelete = rawCols.some((c) => c.name === 'deleted_at')
+    const where = hasSoftDelete ? 'WHERE deleted_at IS NULL' : ''
+    const samples = conn
+      .prepare(`SELECT * FROM ${tableName} ${where} LIMIT ?`)
+      .all(Math.max(1, Math.min(10, sampleLimit))) as Record<string, unknown>[]
+    return {
+      name: tableName,
+      columns,
+      row_count: countRow.n,
+      samples,
+    }
+  })
+}
+
 export function describeSchema(
   companySlug: string,
   teamSlug: string,

@@ -4,6 +4,8 @@ import { agents } from './agents'
 import { ai } from './ai'
 import { artifacts } from './artifacts'
 import { companies } from './companies'
+import { composer } from './composer'
+import { credentials } from './credentials'
 import { frames } from './frames'
 import { health } from './health'
 import { mcp } from './mcp'
@@ -18,6 +20,8 @@ import { usage } from './usage'
 export const api = new Hono()
 api.route('/health', health)
 api.route('/companies', companies)
+api.route('/composer', composer)
+api.route('/credentials', credentials)
 api.route('/agents', agents)
 api.route('/agent-frames', agentFrames)
 api.route('/ai', ai)

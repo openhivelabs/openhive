@@ -1,0 +1,39 @@
+id: slack-recent
+label: "Slack 최근 메시지"
+icon: ChatCircleText
+category: messaging
+description: "Slack MCP 로 특정 채널의 최근 10 메시지."
+requires:
+  mcp_server: slack
+panel:
+  type: activity
+  title: "#{{channel}} 최근"
+  colSpan: 2
+  rowSpan: 2
+  binding:
+    source:
+      kind: mcp
+      config:
+        server: slack
+        tool: list_messages
+        args:
+          channel: "{{channel}}"
+          limit: 10
+    map:
+      rows: "$.messages[*]"
+      title: "text"
+      value: "ts"
+      on_click:
+        kind: detail
+    refresh_seconds: 120
+params:
+  - name: channel
+    label: "채널명"
+    type: text
+    default: "general"
+    required: true
+    injects:
+      - path: "binding.source.config.args.channel"
+        template: "{{channel}}"
+      - path: "title"
+        template: "#{{channel}} 최근"
