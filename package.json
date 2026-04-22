@@ -9,7 +9,8 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "fonts:fetch": "python3 packages/skills/_lib/fonts.py",
-    "fonts:fetch:all": "python3 packages/skills/_lib/fonts.py --all"
+    "fonts:fetch:all": "python3 packages/skills/_lib/fonts.py --all",
+    "openhive:ledger:backfill": "tsx apps/web/scripts/ledger-backfill.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import { buildAgentFrame, installAgentFrame } from '@/lib/server/agent-frames'
 import {
   type CompanyDict,
@@ -11,6 +12,9 @@ import {
   saveTeam,
 } from '@/lib/server/companies'
 import { buildFrame, installFrame } from '@/lib/server/frames'
+import { isLedgerDisabled } from '@/lib/server/ledger/db'
+import { readLedgerEntry, searchLedger } from '@/lib/server/ledger/read'
+import { companyDir } from '@/lib/server/paths'
 import { listConnected } from '@/lib/server/tokens'
 import { Hono } from 'hono'
 import yaml from 'js-yaml'
@@ -56,7 +60,9 @@ companies.put('/', async (c) => {
 // PUT /api/companies/reorder — { order: slug[] }
 companies.put('/reorder', async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { order?: unknown }
-  const order = Array.isArray(body.order) ? body.order.filter((s): s is string => typeof s === 'string') : null
+  const order = Array.isArray(body.order)
+    ? body.order.filter((s): s is string => typeof s === 'string')
+    : null
   if (!order) return c.json({ detail: 'order: string[] required' }, 400)
   reorderCompanies(order)
   return c.json({ ok: true })
@@ -66,7 +72,9 @@ companies.put('/reorder', async (c) => {
 companies.put('/:companySlug/teams/reorder', async (c) => {
   const companySlug = c.req.param('companySlug')
   const body = (await c.req.json().catch(() => ({}))) as { order?: unknown }
-  const order = Array.isArray(body.order) ? body.order.filter((s): s is string => typeof s === 'string') : null
+  const order = Array.isArray(body.order)
+    ? body.order.filter((s): s is string => typeof s === 'string')
+    : null
   if (!order) return c.json({ detail: 'order: string[] required' }, 400)
   reorderTeams(companySlug, order)
   return c.json({ ok: true })
@@ -194,4 +202,65 @@ companies.get('/:companySlug/teams/:teamSlug/agents/:agentId/frame', (c) => {
       'Content-Disposition': `attachment; filename="${filename}"`,
     },
   })
+})
+
+// ---------- S4: work ledger ----------
+
+function companyExists(companySlug: string): boolean {
+  try {
+    return fs.statSync(companyDir(companySlug)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+// GET /api/companies/:companySlug/ledger?q=...&domain=...&team_id=...&agent_role=...&since=...&limit=...
+companies.get('/:companySlug/ledger', (c) => {
+  const companySlug = c.req.param('companySlug')
+  if (!companyExists(companySlug)) {
+    return c.json({ detail: 'Company not found' }, 404)
+  }
+  if (isLedgerDisabled()) {
+    return c.json({ results: [], total_matched: 0 })
+  }
+  const q = c.req.query('q') ?? ''
+  if (!q) return c.json({ detail: 'query "q" required' }, 400)
+  const limitRaw = c.req.query('limit')
+  const limit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined
+  try {
+    const result = searchLedger(companySlug, {
+      query: q,
+      domain: c.req.query('domain') || undefined,
+      team_id: c.req.query('team_id') || undefined,
+      agent_role: c.req.query('agent_role') || undefined,
+      since: c.req.query('since') || undefined,
+      limit,
+    })
+    return c.json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    // Most common cause here is an FTS5 syntax error — treat as 400.
+    return c.json({ detail: message }, 400)
+  }
+})
+
+// GET /api/companies/:companySlug/ledger/:entryId
+companies.get('/:companySlug/ledger/:entryId', (c) => {
+  const companySlug = c.req.param('companySlug')
+  const entryId = c.req.param('entryId')
+  if (!companyExists(companySlug)) {
+    return c.json({ detail: 'Company not found' }, 404)
+  }
+  if (isLedgerDisabled()) {
+    return c.json({ detail: 'ledger disabled' }, 404)
+  }
+  try {
+    return c.json(readLedgerEntry(companySlug, entryId))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (message.startsWith('ledger entry not found')) {
+      return c.json({ detail: message }, 404)
+    }
+    return c.json({ detail: message }, 500)
+  }
 })

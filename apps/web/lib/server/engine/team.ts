@@ -54,6 +54,12 @@ export interface TeamSpec {
    */
   allowed_mcp_servers: string[]
   limits: RunLimits
+  /**
+   * Optional domain tag (e.g. "research", "sales"). Used by the work ledger
+   * (S4) to group cross-team history under a user-meaningful category.
+   * Falls back to `id` when unset.
+   */
+  domain?: string
 }
 
 function clampParallel(v: number): number {
@@ -123,6 +129,7 @@ export function toTeamSpec(raw: Record<string, unknown>): TeamSpec {
       max_tool_rounds_per_turn: Number(limitsRaw.max_tool_rounds_per_turn ?? 8),
       max_delegation_depth: Number(limitsRaw.max_delegation_depth ?? 4),
     },
+    domain: typeof raw.domain === 'string' ? raw.domain : undefined,
   }
 }
 

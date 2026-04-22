@@ -26,6 +26,9 @@ import {
 import * as artifactsStore from '../artifacts'
 import { getSettings } from '../config'
 import { type Event, makeEvent } from '../events/schema'
+import { isLedgerDisabled } from '../ledger/db'
+import { ledgerTools } from '../ledger/tools'
+import { maybeWriteLedger } from '../ledger/write'
 import type { ChatMessage } from '../providers/types'
 import * as sessionsStore from '../sessions'
 import { type SkillDef, getSkill, matchSkillHints } from '../skills/loader'
@@ -484,6 +487,10 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   if (depth === 0) {
     tools.push(askUserTool())
     tools.push(...todoTools(sessionId))
+    // S4: Lead-only work-ledger recall. Requires a resolved company slug.
+    if (teamSlugs && !isLedgerDisabled()) {
+      tools.push(...ledgerTools(teamSlugs[0]))
+    }
   }
   if (teamSlugs) {
     tools.push(...teamDataTools(teamSlugs, persona.tools))
@@ -1094,6 +1101,21 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
       provider: target.provider_id,
       model: target.model,
     })
+    // S4: record errored sub-agent run to the work ledger.
+    {
+      const slugs = state().teamSlugs.get(sessionId) ?? null
+      if (slugs) {
+        await maybeWriteLedger({
+          sessionId,
+          team,
+          target,
+          task,
+          output: msg,
+          status: 'errored',
+          companySlug: slugs[0],
+        })
+      }
+    }
     yield makeEvent(
       'delegation_closed',
       sessionId,
@@ -1108,6 +1130,21 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
     return
   }
 
+  // S4: record completed sub-agent run to the work ledger.
+  {
+    const slugs = state().teamSlugs.get(sessionId) ?? null
+    if (slugs) {
+      await maybeWriteLedger({
+        sessionId,
+        team,
+        target,
+        task,
+        output: subOutput,
+        status: 'completed',
+        companySlug: slugs[0],
+      })
+    }
+  }
   yield makeEvent(
     'delegation_closed',
     sessionId,
@@ -1305,6 +1342,25 @@ async function* runParallelDelegation(opts: DelegationOpts): AsyncGenerator<Even
   const combined = parts.length > 0 ? parts.join('\n\n') : '(no output)'
   const anyError = errs.some((e) => e !== null)
   const allError = errs.every((e) => e !== null)
+
+  // S4: record one ledger entry per parallel sibling (not per group).
+  {
+    const slugs = state().teamSlugs.get(sessionId) ?? null
+    if (slugs) {
+      for (let i = 0; i < tasks.length; i += 1) {
+        const errMsg = errs[i]
+        await maybeWriteLedger({
+          sessionId,
+          team,
+          target: capturedTarget,
+          task: String(tasks[i]),
+          output: errMsg ?? outputs[i] ?? '',
+          status: errMsg ? 'errored' : 'completed',
+          companySlug: slugs[0],
+        })
+      }
+    }
+  }
 
   yield makeEvent(
     'delegation_closed',
