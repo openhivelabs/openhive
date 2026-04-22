@@ -52,6 +52,46 @@ function layoutPositions(nMembers: number): { x: number; y: number }[] {
   return positions
 }
 
+// LLM output caps. A design-time generator should never produce more than
+// a handful of agents; anything larger is almost certainly the model
+// hallucinating a whole department, which we refuse to commit to disk.
+const MAX_AGENTS = 20
+const MAX_EDGES = 100
+const SAFE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+function detectCycle(edges: { source: string; target: string }[]): boolean {
+  const adj = new Map<string, string[]>()
+  for (const e of edges) {
+    const list = adj.get(e.source) ?? []
+    list.push(e.target)
+    adj.set(e.source, list)
+  }
+  const WHITE = 0
+  const GREY = 1
+  const BLACK = 2
+  const color = new Map<string, number>()
+  const nodes = new Set<string>()
+  for (const e of edges) {
+    nodes.add(e.source)
+    nodes.add(e.target)
+  }
+  for (const n of nodes) color.set(n, WHITE)
+  const visit = (n: string): boolean => {
+    color.set(n, GREY)
+    for (const m of adj.get(n) ?? []) {
+      const c = color.get(m) ?? WHITE
+      if (c === GREY) return true
+      if (c === WHITE && visit(m)) return true
+    }
+    color.set(n, BLACK)
+    return false
+  }
+  for (const n of nodes) {
+    if ((color.get(n) ?? WHITE) === WHITE && visit(n)) return true
+  }
+  return false
+}
+
 function buildTeamYaml(
   meta: Record<string, unknown>,
   description: string,
@@ -61,6 +101,12 @@ function buildTeamYaml(
   const agentsRaw = Array.isArray(meta.agents) ? (meta.agents as AgentLike[]) : []
   const edgesRaw = Array.isArray(meta.edges) ? (meta.edges as EdgeLike[]) : []
   if (agentsRaw.length === 0) throw new Error('meta-agent returned no agents')
+  if (agentsRaw.length > MAX_AGENTS) {
+    throw new Error(`meta-agent returned ${agentsRaw.length} agents (max ${MAX_AGENTS})`)
+  }
+  if (edgesRaw.length > MAX_EDGES) {
+    throw new Error(`meta-agent returned ${edgesRaw.length} edges (max ${MAX_EDGES})`)
+  }
 
   const roleToId = new Map<string, string>()
   const agents: Record<string, unknown>[] = []
@@ -110,9 +156,22 @@ function buildTeamYaml(
     }
   }
 
+  const edgePairs = edges.map((e) => ({
+    source: String(e.source),
+    target: String(e.target),
+  }))
+  if (detectCycle(edgePairs)) {
+    throw new Error('meta-agent returned edges with a cycle')
+  }
+
+  const slug = slugify(name)
+  if (!SAFE_SLUG.test(slug)) {
+    throw new Error(`generated team slug is not filesystem-safe: ${slug}`)
+  }
+
   return {
     id: rid('t'),
-    slug: slugify(name),
+    slug,
     name,
     agents: ordered,
     edges,
@@ -130,6 +189,9 @@ teams.post('/generate', async (c) => {
   }
   if (typeof body.company_slug !== 'string' || !body.company_slug) {
     return c.json({ detail: 'company_slug required' }, 400)
+  }
+  if (!SAFE_SLUG.test(body.company_slug)) {
+    return c.json({ detail: 'invalid company_slug' }, 400)
   }
   try {
     const text = await chatCompletion({
