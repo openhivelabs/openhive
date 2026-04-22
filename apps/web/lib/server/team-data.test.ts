@@ -98,3 +98,21 @@ describe('isDestructiveSql', () => {
     expect(isDestructiveSql('SELECT * FROM t')).toBe(false)
   })
 })
+
+describe('query timeout', () => {
+  beforeEach(() => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openhive-td-'))
+    process.env.OPENHIVE_DATA_DIR = tmp
+    process.env.OPENHIVE_DB_QUERY_TIMEOUT_MS = '50'
+  })
+
+  afterEach(() => {
+    delete process.env.OPENHIVE_DB_QUERY_TIMEOUT_MS
+  })
+
+  it('interrupts a long-running recursive CTE', () => {
+    const sql =
+      'WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM c WHERE n < 99999999) SELECT count(*) FROM c'
+    expect(() => runQuery('acme', 'sales', sql)).toThrow(/timeout/)
+  })
+})

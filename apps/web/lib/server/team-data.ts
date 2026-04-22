@@ -47,7 +47,8 @@ function openTeamDb(companySlug: string, teamSlug: string): BetterSqliteDatabase
   const conn = new Database(file)
   conn.pragma('journal_mode = WAL')
   conn.pragma('foreign_keys = ON')
-  // Bootstrap is idempotent — cheap to run every open.
+  const busyMs = Number.parseInt(process.env.OPENHIVE_DB_BUSY_TIMEOUT_MS ?? '5000', 10)
+  conn.pragma(`busy_timeout = ${Number.isFinite(busyMs) && busyMs > 0 ? busyMs : 5000}`)
   conn.exec(BOOTSTRAP_SCHEMA)
   return conn
 }
@@ -58,9 +59,33 @@ export function withTeamDb<T>(
   fn: (conn: BetterSqliteDatabase) => T,
 ): T {
   const conn = openTeamDb(companySlug, teamSlug)
+  const timeoutMs = Number.parseInt(
+    process.env.OPENHIVE_DB_QUERY_TIMEOUT_MS ?? '10000',
+    10,
+  )
+  const ms = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 10000
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    try {
+      ;(conn as unknown as { interrupt?: () => void }).interrupt?.()
+    } catch {
+      /* ignore — interrupt can race with close */
+    }
+  }, ms)
   try {
     return fn(conn)
+  } catch (exc) {
+    if (timedOut) {
+      const err = new Error(`timeout: query exceeded ${ms}ms`) as Error & {
+        code?: string
+      }
+      err.code = 'timeout'
+      throw err
+    }
+    throw exc
   } finally {
+    clearTimeout(timer)
     conn.close()
   }
 }
@@ -251,7 +276,7 @@ export function hasMultipleStatements(sql: string): boolean {
       i++
       continue
     }
-    if (sawStatementEnd && !/\s/.test(c)) {
+    if (sawStatementEnd && c !== undefined && !/\s/.test(c)) {
       return true
     }
     i++
