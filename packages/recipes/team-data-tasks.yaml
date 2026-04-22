@@ -1,0 +1,69 @@
+id: team-data-tasks
+label: "팀 DB · 할 일"
+icon: CheckSquare
+category: data
+description: "팀 data.db 의 tasks 테이블. 추가/완료/삭제 액션 포함."
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'todo',
+    due_at TEXT,
+    deleted_at TEXT
+  )
+panel:
+  type: kanban
+  title: "할 일"
+  colSpan: 2
+  rowSpan: 2
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: "SELECT id, title, status, due_at FROM tasks WHERE deleted_at IS NULL ORDER BY id DESC LIMIT 200"
+    map:
+      group_by: status
+      title: "title"
+      on_click:
+        kind: detail
+    refresh_seconds: 60
+    actions:
+      - id: add-task
+        kind: create
+        label: "할 일 추가"
+        placement: toolbar
+        form:
+          fields:
+            - name: title
+              label: "제목"
+              type: text
+              required: true
+            - name: status
+              label: "상태"
+              type: select
+              options: [todo, doing, done]
+              default: todo
+            - name: due_at
+              label: "마감"
+              type: date
+        target:
+          kind: team_data
+          config:
+            sql: "INSERT INTO tasks (title, status, due_at) VALUES (:title, :status, :due_at)"
+      - id: complete-task
+        kind: update
+        label: "완료 처리"
+        placement: row
+        target:
+          kind: team_data
+          config:
+            sql: "UPDATE tasks SET status = 'done' WHERE id = :id"
+      - id: delete-task
+        kind: delete
+        label: "삭제"
+        placement: row
+        target:
+          kind: team_data
+          config:
+            sql: "UPDATE tasks SET deleted_at = datetime('now') WHERE id = :id"
+        confirm: true

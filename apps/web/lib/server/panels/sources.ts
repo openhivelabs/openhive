@@ -11,8 +11,9 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { getCredentialValue } from '../credentials'
 import { callTool as mcpCallTool } from '../mcp/manager'
-import { dataDir } from '../paths'
+import { dataDir, teamDir } from '../paths'
 import { runQuery } from '../team-data'
 
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -24,6 +25,10 @@ export class SourceError extends Error {}
 export interface SourceSpec {
   kind: string
   config?: Record<string, unknown>
+  /** Optional credentials vault reference. Resolved here server-side so the
+   *  raw secret never leaves the process. Applies to `http` / `http_recipe`
+   *  today; MCP sources get their auth from the server process itself. */
+  auth_ref?: string
 }
 
 export interface SourceContext {
@@ -63,9 +68,13 @@ export async function execute(
     case 'team_data':
       return execTeamData(config, context)
     case 'http':
-      return execHttp(config)
+      return execHttp(config, spec.auth_ref)
+    case 'http_recipe':
+      return execHttp(config, spec.auth_ref)
     case 'file':
       return execFile(config)
+    case 'team_file':
+      return execTeamFile(config, context)
     case 'static':
       return config.value
     default:
@@ -110,13 +119,31 @@ async function execTeamData(
   return runQuery(context.companySlug, context.teamSlug, sql)
 }
 
-async function execHttp(config: Record<string, unknown>): Promise<unknown> {
+async function execHttp(
+  config: Record<string, unknown>,
+  authRef: string | undefined,
+): Promise<unknown> {
   const url = String(config.url ?? '')
   if (!url) throw new SourceError('http source requires url')
   const method = String(config.method ?? 'GET').toUpperCase()
-  const headers = config.headers
-  if (headers && (typeof headers !== 'object' || Array.isArray(headers))) {
+  const headersRaw = config.headers
+  if (headersRaw && (typeof headersRaw !== 'object' || Array.isArray(headersRaw))) {
     throw new SourceError('http source headers must be an object')
+  }
+  const headers: Record<string, string> = {
+    ...((headersRaw as Record<string, string> | undefined) ?? {}),
+  }
+  // Resolve auth_ref → Authorization header. If the recipe opts into a custom
+  // header name via `config.auth_header`, honor it. Default is
+  // `Authorization: Bearer <value>`.
+  if (authRef) {
+    const value = getCredentialValue(authRef)
+    if (!value) {
+      throw new SourceError(`auth_ref "${authRef}" not found in credential vault`)
+    }
+    const authHeader = String(config.auth_header ?? 'Authorization')
+    const authScheme = String(config.auth_scheme ?? 'Bearer')
+    headers[authHeader] = authScheme ? `${authScheme} ${value}` : value
   }
   const body = config.body
   const controller = new AbortController()
@@ -125,7 +152,7 @@ async function execHttp(config: Record<string, unknown>): Promise<unknown> {
   try {
     resp = await fetch(url, {
       method,
-      headers: (headers as Record<string, string> | undefined) ?? undefined,
+      headers,
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     })
@@ -152,6 +179,141 @@ async function execHttp(config: Record<string, unknown>): Promise<unknown> {
     }
   }
   return text
+}
+
+/**
+ * team_file — sandboxed to this team's `files/` directory. Reads a single file
+ * with optional format parsing. AI composer uses this for "today's notes.md",
+ * uploaded CSV fixtures, etc.
+ */
+function execTeamFile(
+  config: Record<string, unknown>,
+  context: SourceContext,
+): unknown {
+  const rel = String(config.path ?? '')
+  if (!rel) throw new SourceError('team_file source requires path')
+  if (!context.companySlug || !context.teamSlug) {
+    throw new SourceError('team_file source needs company_slug + team_slug context')
+  }
+  const base = path.resolve(teamDir(context.companySlug, context.teamSlug), 'files')
+  const candidate = path.resolve(base, rel)
+  if (candidate !== base && !candidate.startsWith(base + path.sep)) {
+    throw new SourceError(`team_file path escapes team files dir: ${JSON.stringify(rel)}`)
+  }
+  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) {
+    throw new SourceError(`file not found: ${JSON.stringify(rel)}`)
+  }
+  const text = fs.readFileSync(candidate, 'utf8')
+  const format = String(config.format ?? inferFormat(candidate)).toLowerCase()
+  switch (format) {
+    case 'json':
+      try {
+        return JSON.parse(text)
+      } catch (e) {
+        throw new SourceError(`json parse: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    case 'csv':
+      return parseCsv(text)
+    case 'markdown':
+    case 'md':
+      return parseMarkdown(text)
+    default:
+      return text
+  }
+}
+
+function inferFormat(p: string): string {
+  const ext = path.extname(p).toLowerCase()
+  if (ext === '.json') return 'json'
+  if (ext === '.csv') return 'csv'
+  if (ext === '.md' || ext === '.markdown') return 'markdown'
+  return 'text'
+}
+
+/** Minimal RFC-4180 CSV parser — handles quoted fields with commas/newlines
+ *  and doubled-quote escapes. Good enough for dashboard fixtures; not a full
+ *  CSV library. */
+function parseCsv(text: string): Record<string, string>[] {
+  const rows: string[][] = []
+  let field = ''
+  let row: string[] = []
+  let inQuotes = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"'
+          i++
+        } else {
+          inQuotes = false
+        }
+      } else {
+        field += ch
+      }
+    } else if (ch === '"') {
+      inQuotes = true
+    } else if (ch === ',') {
+      row.push(field)
+      field = ''
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++
+      row.push(field)
+      rows.push(row)
+      row = []
+      field = ''
+    } else {
+      field += ch
+    }
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field)
+    rows.push(row)
+  }
+  if (rows.length === 0) return []
+  const headers = rows[0] as string[]
+  return rows.slice(1).map((r) => {
+    const obj: Record<string, string> = {}
+    headers.forEach((h, idx) => {
+      obj[h] = r[idx] ?? ''
+    })
+    return obj
+  })
+}
+
+/** Split YAML-style frontmatter (if present) and return `{frontmatter, body}`.
+ *  Frontmatter parsing is deliberately shallow — just `key: value` lines. */
+function parseMarkdown(text: string): { frontmatter: Record<string, string>; body: string } {
+  const frontmatter: Record<string, string> = {}
+  if (text.startsWith('---\n')) {
+    const end = text.indexOf('\n---\n', 4)
+    if (end !== -1) {
+      const header = text.slice(4, end)
+      for (const line of header.split('\n')) {
+        const m = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line)
+        if (m) frontmatter[m[1] as string] = (m[2] as string).trim()
+      }
+      return { frontmatter, body: text.slice(end + 5) }
+    }
+  }
+  return { frontmatter, body: text }
+}
+
+/** List files under this team's `files/` directory. Used by the catalog. */
+export function listTeamFiles(companySlug: string, teamSlug: string): string[] {
+  const base = path.resolve(teamDir(companySlug, teamSlug), 'files')
+  if (!fs.existsSync(base)) return []
+  const out: string[] = []
+  const walk = (dir: string, prefix: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+      if (entry.isDirectory()) walk(full, rel)
+      else if (entry.isFile()) out.push(rel)
+    }
+  }
+  walk(base, '')
+  return out.sort()
 }
 
 function execFile(config: Record<string, unknown>): unknown {

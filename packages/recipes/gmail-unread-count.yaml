@@ -1,0 +1,25 @@
+id: gmail-unread-count
+label: "Gmail 미확인 메일"
+icon: EnvelopeSimple
+category: email
+description: "연결된 Gmail MCP 서버에서 미확인 메일 수를 KPI 로 표시."
+requires:
+  mcp_server: gmail
+panel:
+  type: kpi
+  title: "미확인 메일"
+  colSpan: 1
+  rowSpan: 1
+  props:
+    hint: "건"
+  binding:
+    source:
+      kind: mcp
+      config:
+        server: gmail
+        tool: count_unread
+        args: {}
+    map:
+      value: "$.count"
+      aggregate: first
+    refresh_seconds: 300

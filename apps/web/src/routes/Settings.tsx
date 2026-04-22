@@ -1,5 +1,6 @@
 import { type SettingsSection, SettingsShell } from '@/components/settings/SettingsShell'
 import { AppearanceSection } from '@/components/settings/sections/AppearanceSection'
+import { CredentialsSection } from '@/components/settings/sections/CredentialsSection'
 import { GeneralSection } from '@/components/settings/sections/GeneralSection'
 import { McpSection } from '@/components/settings/sections/McpSection'
 import { ProvidersSection } from '@/components/settings/sections/ProvidersSection'
@@ -17,6 +18,7 @@ const SECTION_COMPONENTS: Record<SettingsSection, () => React.ReactElement> = {
   general: GeneralSection,
   appearance: AppearanceSection,
   providers: ProvidersSection,
+  credentials: CredentialsSection,
   mcp: McpSection,
   usage: UsageSection,
   account: AccountSection,

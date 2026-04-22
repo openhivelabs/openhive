@@ -1,0 +1,20 @@
+id: fx-krw-usd
+label: "USD/KRW 환율"
+icon: CurrencyDollar
+category: data
+description: "무인증 퍼블릭 API 에서 당일 USD→KRW 환율을 가져오는 KPI 패널."
+panel:
+  type: kpi
+  title: "USD / KRW"
+  colSpan: 1
+  rowSpan: 1
+  binding:
+    source:
+      kind: http
+      config:
+        url: "https://open.er-api.com/v6/latest/USD"
+        method: GET
+    map:
+      value: "$.rates.KRW"
+      aggregate: first
+    refresh_seconds: 3600

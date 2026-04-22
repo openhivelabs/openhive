@@ -1,48 +1,60 @@
-import { useEffect, useRef, useState } from 'react'
-import { type PanelCacheRow, fetchPanelData, streamPanel } from '@/lib/api/panels'
+import { useEffect, useState } from 'react'
+import { type PanelCacheRow, fetchPanelData } from '@/lib/api/panels'
 
 /**
- * Subscribe to a bound block's live data via SSE, with an initial fetch to
- * populate immediately. Falls back to null until the first event arrives.
- *
- * Usage:
- *   const { data, error, fetchedAt, loading } = usePanelData(block.id, !!block.binding)
+ * Poll a bound panel's cached data every few seconds. Previously we used SSE
+ * (EventSource) per panel, but Chrome caps HTTP/1.1 at ~6 connections per
+ * origin — with a handful of panels open those slots filled up and blocked
+ * new fetches (action writes, composer chat, etc). Polling is plenty for
+ * single-user local dashboards and keeps the connection pool free.
  */
-export function usePanelData(blockId: string, active: boolean): {
+const POLL_MS = 3000
+
+export function usePanelData(
+  blockId: string,
+  active: boolean,
+): {
   data: unknown
   error: string | null
   fetchedAt: number | null
+  shapeChanged: boolean
   loading: boolean
 } {
   const [row, setRow] = useState<PanelCacheRow | null>(null)
   const [loading, setLoading] = useState(false)
-  // EventSource instance is kept in ref so re-renders don't reopen the stream.
-  const cleanupRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     if (!active || !blockId) return
     let cancelled = false
-    setLoading(true)
-    fetchPanelData(blockId)
-      .then((r) => !cancelled && setRow(r))
-      .catch(() => {
-        /* first-fetch failures are fine — stream will fill in */
-      })
-      .finally(() => !cancelled && setLoading(false))
+    let timer: ReturnType<typeof setTimeout> | null = null
 
-    cleanupRef.current = streamPanel(blockId, (r) => setRow(r))
+    const tick = async () => {
+      try {
+        const r = await fetchPanelData(blockId)
+        if (!cancelled) setRow(r)
+      } catch {
+        /* swallow — next tick retries */
+      } finally {
+        if (!cancelled && loading) setLoading(false)
+        if (!cancelled) timer = setTimeout(tick, POLL_MS)
+      }
+    }
+
+    setLoading(true)
+    void tick()
 
     return () => {
       cancelled = true
-      cleanupRef.current?.()
-      cleanupRef.current = null
+      if (timer) clearTimeout(timer)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blockId, active])
 
   return {
     data: row?.data ?? null,
     error: row?.error ?? null,
     fetchedAt: row?.fetched_at ?? null,
+    shapeChanged: !!row?.shape_changed,
     loading,
   }
 }

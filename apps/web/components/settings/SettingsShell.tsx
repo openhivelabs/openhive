@@ -2,6 +2,7 @@ import {
   ChartBar,
   Database,
   Info,
+  Key,
   Palette,
   Plugs,
   PuzzlePiece,
@@ -16,6 +17,7 @@ export type SettingsSection =
   | 'general'
   | 'appearance'
   | 'providers'
+  | 'credentials'
   | 'mcp'
   | 'usage'
   | 'account'
@@ -29,6 +31,7 @@ export const SETTINGS_SECTIONS: {
   { id: 'general', icon: Sliders },
   { id: 'appearance', icon: Palette },
   { id: 'providers', icon: Plugs },
+  { id: 'credentials', icon: Key },
   { id: 'mcp', icon: PuzzlePiece },
   { id: 'usage', icon: ChartBar },
   { id: 'account', icon: User },

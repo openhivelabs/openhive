@@ -1,6 +1,11 @@
 import { extractJson, loadSkillBody, rid, slugify } from '@/lib/server/ai-generators/common'
 import { resolveTeamSlugs, saveTeam } from '@/lib/server/companies'
-import { loadDashboard, saveDashboard } from '@/lib/server/dashboards'
+import {
+  listDashboardBackups,
+  loadDashboard,
+  restoreDashboardBackup,
+  saveDashboard,
+} from '@/lib/server/dashboards'
 import { FilesError, listFiles, readFile } from '@/lib/server/files'
 import {
   type MessageRecord,
@@ -178,6 +183,26 @@ teams.put('/:teamId/dashboard', async (c) => {
     return c.json({ detail: 'layout required' }, 400)
   }
   saveDashboard(resolved.companySlug, resolved.teamSlug, body.layout)
+  return c.json({ ok: true })
+})
+
+// GET /api/teams/:teamId/dashboard/backups — list recent auto-saves
+teams.get('/:teamId/dashboard/backups', (c) => {
+  const teamId = c.req.param('teamId')
+  const r = resolveTeamSlugs(teamId)
+  if (!r) return c.json(teamNotFound(teamId), 404)
+  return c.json({ backups: listDashboardBackups(r.companySlug, r.teamSlug) })
+})
+
+// POST /api/teams/:teamId/dashboard/restore — body {name}
+teams.post('/:teamId/dashboard/restore', async (c) => {
+  const teamId = c.req.param('teamId')
+  const r = resolveTeamSlugs(teamId)
+  if (!r) return c.json(teamNotFound(teamId), 404)
+  const body = (await c.req.json().catch(() => ({}))) as { name?: unknown }
+  if (typeof body.name !== 'string') return c.json({ detail: 'name required' }, 400)
+  const ok = restoreDashboardBackup(r.companySlug, r.teamSlug, body.name)
+  if (!ok) return c.json({ detail: 'backup not found' }, 404)
   return c.json({ ok: true })
 })
 

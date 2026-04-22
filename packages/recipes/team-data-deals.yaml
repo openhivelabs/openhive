@@ -1,0 +1,72 @@
+id: team-data-deals
+label: "팀 DB · 딜 테이블"
+icon: Table
+category: data
+description: "팀 data.db 의 deals 테이블을 테이블 패널로 표시. 추가/삭제 액션 포함."
+requires: {}
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS deals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    amount REAL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'prospect',
+    deleted_at TEXT
+  )
+panel:
+  type: table
+  title: "딜"
+  colSpan: 2
+  rowSpan: 2
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: "SELECT id, title, amount, status FROM deals WHERE deleted_at IS NULL ORDER BY id DESC LIMIT 100"
+    map:
+      columns: [id, title, amount, status]
+      on_click:
+        kind: detail
+    refresh_seconds: 60
+    actions:
+      - id: add-deal
+        kind: create
+        label: "딜 추가"
+        placement: toolbar
+        form:
+          fields:
+            - name: title
+              label: "딜명"
+              type: text
+              required: true
+            - name: amount
+              label: "금액"
+              type: number
+              min: 0
+            - name: status
+              label: "단계"
+              type: select
+              options: [prospect, qualified, won, lost]
+              default: prospect
+        target:
+          kind: team_data
+          config:
+            sql: "INSERT INTO deals (title, amount, status) VALUES (:title, :amount, :status)"
+        confirm: false
+      - id: delete-deal
+        kind: delete
+        label: "삭제"
+        placement: row
+        target:
+          kind: team_data
+          config:
+            sql: "UPDATE deals SET deleted_at = datetime('now') WHERE id = :id"
+        confirm: true
+      - id: update-status
+        kind: update
+        label: "상태 변경"
+        placement: inline
+        fields: [status]
+        target:
+          kind: team_data
+          config:
+            sql: "UPDATE deals SET status = :status WHERE id = :id"
