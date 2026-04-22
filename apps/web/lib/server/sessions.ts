@@ -64,6 +64,11 @@ export interface SessionMeta {
    *  Optional on the type so legacy sessions (pre-resume-refactor) still
    *  load — those can't be resumed but don't break listing. */
   team_snapshot?: TeamSpec
+  /** Timestamp of the first successful `finalizeSession` call. Used as an
+   *  idempotent guard so the A2 Stop-hook path in `runTeamBody` and the
+   *  registry-level finalize can both call safely — only the first writes
+   *  transcript / usage. */
+  finalized_at?: number | null
 }
 
 function normalizeStatus(raw: unknown): SessionStatus {
@@ -232,6 +237,12 @@ export async function finalizeSession(
   sessionId: string,
   opts: { output?: string | null; error?: string | null } = {},
 ): Promise<void> {
+  // A2 idempotency guard: `runTeamBody`'s finally and the run-registry both
+  // call this — only the first invocation writes transcript/usage/meta.
+  // Subsequent calls are cheap no-ops so Stop hooks can fire exactly once.
+  const existing = readMeta(sessionId)
+  if (existing && existing.finalized_at) return
+
   // Drain any in-flight batched events before we read events.jsonl to build
   // the transcript.
   await flushSession(sessionId)
@@ -264,6 +275,7 @@ export async function finalizeSession(
     error: opts.error ?? meta.error,
     finished_at: meta.finished_at ?? Date.now(),
     artifact_count: artifactCount,
+    finalized_at: Date.now(),
   })
 }
 

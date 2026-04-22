@@ -16,6 +16,7 @@
  */
 
 import crypto from 'node:crypto'
+import fs from 'node:fs'
 import pLimit from 'p-limit'
 import {
   composePersonaBody,
@@ -27,9 +28,11 @@ import {
 import * as artifactsStore from '../artifacts'
 import { getSettings } from '../config'
 import { type Event, makeEvent } from '../events/schema'
+import { runHooks } from '../hooks'
 import { isLedgerDisabled } from '../ledger/db'
 import { ledgerTools } from '../ledger/tools'
 import { maybeWriteLedger } from '../ledger/write'
+import { dataDir } from '../paths'
 import type { ChatMessage } from '../providers/types'
 import * as sessionsStore from '../sessions'
 import { type SkillDef, getSkill, matchSkillHints } from '../skills/loader'
@@ -378,6 +381,9 @@ export async function* runTeam(
     const iter = errors.withRunLocale(opts.locale ?? 'en', () =>
       runTeamBody(team, goal, sessionId, opts.resume?.history),
     )
+    // `iter` is the async generator that yields the engine's full event stream
+    // (including the A2 SessionStart / PreToolUse / Stop hook events emitted
+    // below).
     for await (const ev of iter) yield ev
   } finally {
     state().askUser.delete(sessionId)
@@ -400,11 +406,42 @@ async function* runTeamBody(
   resumeHistory?: ChatMessage[],
 ): AsyncGenerator<Event> {
   const isResume = !!resumeHistory
+  const startedAt = Date.now()
+  let injectedSystemSuffix: string | undefined
   if (isResume) {
     // Session already exists on disk. `goal` is the new user message — emit
     // it as user_message so the stream looks identical to a live follow-up.
     yield makeEvent('user_message', sessionId, { text: goal })
   } else {
+    // [A2 HOOK] SessionStart — fire only on fresh sessions, before any event
+    // hits events.jsonl, so `additionalContext` can be folded into the first
+    // system prompt. Failures are non-fatal and logged only.
+    try {
+      const companyId = companyIdFromSession(sessionId)
+      const outcome = await runHooks(
+        'SessionStart',
+        companyId ?? '',
+        {
+          hook_event_name: 'SessionStart',
+          session_id: sessionId,
+          transcript_path: sessionsStore.sessionTranscriptPath(sessionId),
+          cwd: process.cwd(),
+          company_id: companyId,
+          team_id: team.id,
+          data_dir: dataDir(),
+          goal,
+          team_snapshot: team,
+          source: 'fresh',
+        },
+        { sessionId },
+      )
+      for (const e of outcome.events) yield e
+      injectedSystemSuffix = outcome.additionalContext ?? undefined
+    } catch (exc) {
+      console.warn(
+        `[hooks] SessionStart failed: ${exc instanceof Error ? exc.message : String(exc)}`,
+      )
+    }
     yield makeEvent('run_started', sessionId, { team_id: team.id, goal })
   }
   const entry = entryAgent(team)
@@ -415,6 +452,8 @@ async function* runTeamBody(
   const inbox = ensureQueue(sessionId)
   let currentTask = goal
   let lastFinal = ''
+  let stopStatus: 'completed' | 'error' | 'idle' = 'idle'
+  let stopError: string | null = null
   try {
     while (true) {
       for await (const ev of runNode({
@@ -424,12 +463,16 @@ async function* runTeamBody(
         task: currentTask,
         depth: 0,
         externalHistory: leadHistory,
+        injectedSystemSuffix,
       })) {
         if (ev.kind === 'node_finished' && ev.depth === 0) {
           lastFinal = (ev.data.output as string | undefined) ?? ''
         }
         yield ev
       }
+      // The injected SessionStart suffix only applies to the first Lead turn —
+      // subsequent turns in this session see the vanilla system prompt.
+      injectedSystemSuffix = undefined
       // Lead finished a turn — park until the user sends another message.
       yield makeEvent('turn_finished', sessionId, { output: lastFinal })
       const next = await inbox.pop()
@@ -439,11 +482,84 @@ async function* runTeamBody(
       currentTask = next
     }
     yield makeEvent('run_finished', sessionId, { output: lastFinal })
+    stopStatus = 'completed'
   } catch (exc) {
     const message = exc instanceof Error ? exc.message : String(exc)
     yield makeEvent('run_error', sessionId, { error: message })
+    stopStatus = 'error'
+    stopError = message
   } finally {
-    inboxState().queues.delete(sessionId)
+    // [A2] Finalize + Stop hook: call finalizeSession directly here so the
+    // Stop hook sees transcript/usage/meta on disk. The registry also calls
+    // finalizeSession after us — the idempotent guard in sessions.ts makes
+    // that a cheap no-op. If any step throws, we still clear the inbox queue.
+    try {
+      await sessionsStore.finalizeSession(sessionId, {
+        output: stopStatus === 'completed' ? lastFinal : null,
+        error: stopError,
+      })
+      try {
+        const companyId = companyIdFromSession(sessionId)
+        const lastSeq = lastEventSeq(sessionId)
+        const artifactPaths = listArtifactPaths(sessionId)
+        const outcome = await runHooks(
+          'Stop',
+          companyId ?? '',
+          {
+            hook_event_name: 'Stop',
+            session_id: sessionId,
+            transcript_path: sessionsStore.sessionTranscriptPath(sessionId),
+            cwd: process.cwd(),
+            company_id: companyId,
+            team_id: team.id,
+            data_dir: dataDir(),
+            status: stopStatus,
+            duration_ms: Date.now() - startedAt,
+            artifact_paths: artifactPaths,
+            last_event_seq: lastSeq,
+            output: stopStatus === 'completed' ? lastFinal : null,
+            error: stopError,
+          },
+          { sessionId },
+        )
+        for (const e of outcome.events) yield e
+      } catch (exc) {
+        console.warn(`[hooks] Stop failed: ${exc instanceof Error ? exc.message : String(exc)}`)
+      }
+    } finally {
+      inboxState().queues.delete(sessionId)
+    }
+  }
+}
+
+/** Pulls the company slug registered for this session (if any). Returns `null`
+ *  for ad-hoc / teamSlug-less runs. */
+function companyIdFromSession(sessionId: string): string | null {
+  const slugs = state().teamSlugs.get(sessionId)
+  return slugs ? slugs[0] : null
+}
+
+/** Returns the highest `seq` currently visible in events.jsonl, or 0 when
+ *  the file is empty / missing. Used for Stop-hook payload metadata. */
+function lastEventSeq(sessionId: string): number {
+  try {
+    const rows = sessionsStore.eventsForSession(sessionId)
+    if (rows.length === 0) return 0
+    const last = rows[rows.length - 1]
+    return last ? last.seq : 0
+  } catch {
+    return 0
+  }
+}
+
+/** Returns absolute paths of files under the session's `artifacts/` dir. */
+function listArtifactPaths(sessionId: string): string[] {
+  try {
+    const dir = sessionsStore.sessionArtifactDir(sessionId)
+    if (!fs.existsSync(dir)) return []
+    return fs.readdirSync(dir).map((name) => `${dir}/${name}`)
+  } catch {
+    return []
   }
 }
 
@@ -485,10 +601,14 @@ interface SessionNodeOpts {
   /** If provided, the caller owns history across turns (chat mode). runNode
    *  appends to this array instead of building its own. */
   externalHistory?: ChatMessage[]
+  /** Text returned by an A2 `SessionStart` hook as `additionalContext`.
+   *  Concatenated to the built system prompt only for the Lead (depth 0) on
+   *  the first turn of the session. Undefined = no injection. */
+  injectedSystemSuffix?: string
 }
 
 async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
-  const { sessionId, team, node, task, depth, externalHistory } = opts
+  const { sessionId, team, node, task, depth, externalHistory, injectedSystemSuffix } = opts
   const teamSlugs = state().teamSlugs.get(sessionId) ?? null
 
   yield makeEvent('node_started', sessionId, { role: node.role, task }, { depth, node_id: node.id })
@@ -612,11 +732,19 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     }
 
     let turnDone = false
+    // A2: splice SessionStart-hook `additionalContext` onto the system prompt
+    // only for the Lead's first turn. Downstream sub-agent nodes and later
+    // turns in the same session see the vanilla prompt.
+    const baseSystem = buildSystemPrompt(rounds)
+    const systemPromptForTurn =
+      depth === 0 && rounds === 1 && injectedSystemSuffix
+        ? `${baseSystem}\n\n---\n\n[Injected by SessionStart hook]\n${injectedSystemSuffix}`
+        : baseSystem
     for await (const ev of streamTurn({
       sessionId,
       team,
       node,
-      systemPrompt: buildSystemPrompt(rounds),
+      systemPrompt: systemPromptForTurn,
       history,
       tools,
       depth,
@@ -855,6 +983,51 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
         { arguments: parsedArgs },
         { depth, node_id: node.id, tool_call_id: tc.id, tool_name: tc.function.name },
       )
+
+      // [A2 HOOK] PreToolUse — runs after the tool_called event is visible in
+      // the stream, before dispatch to the actual handler. An `exit 2` / JSON
+      // `decision: 'block'` rewrites the tool result into a synthetic "blocked
+      // by hook" message; the next LLM turn sees that via normal history and
+      // picks a different path.
+      try {
+        const companyId = companyIdFromSession(sessionId)
+        const hookOutcome = await runHooks(
+          'PreToolUse',
+          tc.function.name,
+          {
+            hook_event_name: 'PreToolUse',
+            session_id: sessionId,
+            transcript_path: sessionsStore.sessionTranscriptPath(sessionId),
+            cwd: process.cwd(),
+            company_id: companyId,
+            team_id: team.id,
+            data_dir: dataDir(),
+            tool_name: tc.function.name,
+            tool_input: parsedArgs,
+            agent_id: node.id,
+            depth,
+            tool_call_id: tc.id,
+          },
+          { sessionId },
+        )
+        for (const e of hookOutcome.events) yield e
+        if (hookOutcome.decision === 'block') {
+          const reason = hookOutcome.reason ?? 'unspecified'
+          const sysMsg = hookOutcome.systemMessage ? ` ${hookOutcome.systemMessage}` : ''
+          const blockMsg = `[Tool ${tc.function.name} blocked by hook. Reason: ${reason}.${sysMsg}]`
+          yield makeEvent(
+            'tool_result',
+            sessionId,
+            { content: blockMsg, is_error: true },
+            { depth, node_id: node.id, tool_call_id: tc.id, tool_name: tc.function.name },
+          )
+          return { content: blockMsg, isError: true }
+        }
+      } catch (exc) {
+        console.warn(
+          `[hooks] PreToolUse failed: ${exc instanceof Error ? exc.message : String(exc)}`,
+        )
+      }
 
       const tool = tools.find((t) => t.name === tc.function.name)
       let content = ''

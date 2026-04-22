@@ -32,6 +32,8 @@ export type EventKind =
   | 'token.estimate.drift'
   | 'turn.blocked'
   | 'autocompact.disabled'
+  // A2 — lifecycle hooks
+  | 'hook.invoked'
 
 export interface Event {
   kind: EventKind
