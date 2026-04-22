@@ -66,3 +66,35 @@ describe('single-statement guard', () => {
     runExec('acme', 'sales', 'CREATE TABLE u (y INT); /* trailing block */')
   })
 })
+
+import { isDestructiveSql } from './team-data'
+
+describe('isDestructiveSql', () => {
+  it('flags DROP TABLE / DROP INDEX / TRUNCATE', () => {
+    expect(isDestructiveSql('DROP TABLE leads')).toBe(true)
+    expect(isDestructiveSql('drop index ix_leads_name')).toBe(true)
+    expect(isDestructiveSql('TRUNCATE TABLE leads')).toBe(true)
+  })
+
+  it('flags DELETE / UPDATE without WHERE', () => {
+    expect(isDestructiveSql('DELETE FROM leads')).toBe(true)
+    expect(isDestructiveSql('UPDATE leads SET score = 0')).toBe(true)
+  })
+
+  it('passes DELETE / UPDATE with WHERE', () => {
+    expect(isDestructiveSql('DELETE FROM leads WHERE id = 1')).toBe(false)
+    expect(isDestructiveSql("UPDATE leads SET score = 0 WHERE status = 'cold'")).toBe(false)
+  })
+
+  it('strips comments before checking', () => {
+    expect(isDestructiveSql('DELETE FROM leads -- WHERE id = 1')).toBe(true)
+    expect(isDestructiveSql('DELETE FROM leads /* WHERE id = 1 */')).toBe(true)
+  })
+
+  it('ignores CREATE / ALTER / INSERT / SELECT', () => {
+    expect(isDestructiveSql('CREATE TABLE t (x INT)')).toBe(false)
+    expect(isDestructiveSql('ALTER TABLE t ADD COLUMN y TEXT')).toBe(false)
+    expect(isDestructiveSql('INSERT INTO t VALUES (1)')).toBe(false)
+    expect(isDestructiveSql('SELECT * FROM t')).toBe(false)
+  })
+})

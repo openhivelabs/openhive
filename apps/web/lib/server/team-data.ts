@@ -148,6 +148,50 @@ const DDL_RE = /^\s*(CREATE|ALTER|DROP|TRUNCATE|RENAME)\b/i
  * after the first top-level semicolon (ignoring semicolons inside string
  * literals).
  */
+/** Strip SQL line and block comments; return the remaining text. */
+export function stripSqlComments(sql: string): string {
+  let out = ''
+  let i = 0
+  let inSingle = false
+  let inDouble = false
+  while (i < sql.length) {
+    const c = sql[i]
+    const next = sql[i + 1]
+    if (!inSingle && !inDouble) {
+      if (c === '-' && next === '-') {
+        while (i < sql.length && sql[i] !== '\n') i++
+        continue
+      }
+      if (c === '/' && next === '*') {
+        i += 2
+        while (i < sql.length && !(sql[i] === '*' && sql[i + 1] === '/')) i++
+        i += 2
+        continue
+      }
+    }
+    if (!inDouble && c === "'") inSingle = !inSingle
+    else if (!inSingle && c === '"') inDouble = !inDouble
+    out += c
+    i++
+  }
+  return out
+}
+
+/**
+ * A statement is "destructive" if it can delete wide swathes of data without
+ * explicit restriction. The LLM must pass `confirm_destructive: true` at the
+ * tool layer before we run these.
+ */
+export function isDestructiveSql(sql: string): boolean {
+  const stripped = stripSqlComments(sql).trim()
+  if (/^\s*DROP\s+TABLE\b/i.test(stripped)) return true
+  if (/^\s*DROP\s+INDEX\b/i.test(stripped)) return true
+  if (/^\s*TRUNCATE\b/i.test(stripped)) return true
+  if (/^\s*DELETE\s+FROM\b/i.test(stripped) && !/\bWHERE\b/i.test(stripped)) return true
+  if (/^\s*UPDATE\b/i.test(stripped) && !/\bWHERE\b/i.test(stripped)) return true
+  return false
+}
+
 export function hasMultipleStatements(sql: string): boolean {
   let i = 0
   let inSingle = false
