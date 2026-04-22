@@ -3,7 +3,7 @@
  * Static metadata — flow implementations live in ./claude, ./codex, ./copilot.
  */
 
-export type FlowKind = 'auth_code' | 'device_code'
+export type FlowKind = 'auth_code' | 'device_code' | 'api_key'
 
 export interface ProviderDef {
   id: string
@@ -34,6 +34,30 @@ export const PROVIDERS: ProviderDef[] = [
     kind: 'device_code',
     description:
       'Use your GitHub Copilot subscription. Activates via device-code login.',
+  },
+  {
+    id: 'anthropic',
+    label: 'Anthropic',
+    kind: 'api_key',
+    description: 'Direct Anthropic API access via API key (claude.ai console).',
+  },
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    kind: 'api_key',
+    description: 'Direct OpenAI API access via API key (platform.openai.com).',
+  },
+  {
+    id: 'gemini',
+    label: 'Google Gemini',
+    kind: 'api_key',
+    description: 'Gemini API access via API key (aistudio.google.com).',
+  },
+  {
+    id: 'vertex-ai',
+    label: 'Vertex AI',
+    kind: 'api_key',
+    description: 'Google Cloud Vertex AI via service-account JSON.',
   },
 ]
 

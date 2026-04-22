@@ -2,6 +2,7 @@ id: tavily
 name: Tavily Search
 icon: "🔎"
 brand: tavily
+icon_url: /brands/tavily-search.webp
 description: AI-optimised web search with built-in answer summarisation. Great for research agents.
 command: npx
 args: ["-y", "tavily-mcp"]

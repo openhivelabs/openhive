@@ -1,7 +1,7 @@
 export interface ProviderStatus {
   id: string
   label: string
-  kind: 'auth_code' | 'device_code'
+  kind: 'auth_code' | 'device_code' | 'api_key'
   description: string
   connected: boolean
   account_label: string | null
@@ -62,4 +62,18 @@ export async function getConnectStatus(providerId: string, flowId: string): Prom
 
 export async function disconnectProvider(providerId: string): Promise<{ removed: boolean }> {
   return json(await fetch(`${API_BASE}/api/providers/${providerId}`, { method: 'DELETE' }))
+}
+
+export async function connectWithApiKey(
+  providerId: string,
+  apiKey: string,
+  label?: string,
+): Promise<{ ok: boolean; account_label: string }> {
+  return json(
+    await fetch(`${API_BASE}/api/providers/${providerId}/connect/key`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey, label }),
+    }),
+  )
 }

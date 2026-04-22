@@ -1,4 +1,5 @@
 import {
+  CaretDown,
   ChartBar,
   Database,
   Info,
@@ -7,10 +8,9 @@ import {
   Plugs,
   PuzzlePiece,
   Sliders,
-  User,
 } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
-import type { ComponentType, ReactNode } from 'react'
+import type { ComponentType, ReactNode, SelectHTMLAttributes } from 'react'
 import { useT } from '@/lib/i18n'
 
 export type SettingsSection =
@@ -20,7 +20,6 @@ export type SettingsSection =
   | 'credentials'
   | 'mcp'
   | 'usage'
-  | 'account'
   | 'data'
   | 'about'
 
@@ -34,7 +33,6 @@ export const SETTINGS_SECTIONS: {
   { id: 'credentials', icon: Key },
   { id: 'mcp', icon: PuzzlePiece },
   { id: 'usage', icon: ChartBar },
-  { id: 'account', icon: User },
   { id: 'data', icon: Database },
   { id: 'about', icon: Info },
 ]
@@ -57,7 +55,7 @@ export function SettingsShell({
             {t('settings.title')}
           </span>
         </div>
-        <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
+        <nav className="flex-1 overflow-y-auto p-2 space-y-1.5">
           {SETTINGS_SECTIONS.map(({ id, icon: Icon }) => {
             const isActive = active === id
             const label = t(`settings.section.${id}`)
@@ -81,7 +79,7 @@ export function SettingsShell({
         </nav>
       </aside>
       <main className="flex-1 overflow-auto">
-        <div className="max-w-[780px] mx-auto p-8">{children}</div>
+        <div className="max-w-[1040px] mx-auto p-8">{children}</div>
       </main>
     </div>
   )
@@ -111,9 +109,33 @@ export function SettingRow({
         <div className="text-[14px] font-medium text-neutral-800 dark:text-neutral-100">
           {label}
         </div>
-        {hint && <div className="text-[14px] text-neutral-500 mt-0.5 leading-relaxed">{hint}</div>}
+        {hint && <div className="text-[13px] text-neutral-500 mt-0.5 leading-relaxed">{hint}</div>}
       </div>
       <div className="shrink-0">{children}</div>
+    </div>
+  )
+}
+
+export function SelectBox({
+  className,
+  children,
+  ...props
+}: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <div className="relative inline-block">
+      <select
+        {...props}
+        className={clsx(
+          'appearance-none h-8 pl-2.5 pr-8 rounded-sm border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-[13px] text-neutral-800 dark:text-neutral-100 disabled:opacity-50 cursor-pointer',
+          className,
+        )}
+      >
+        {children}
+      </select>
+      <CaretDown
+        weight="bold"
+        className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-neutral-500"
+      />
     </div>
   )
 }
