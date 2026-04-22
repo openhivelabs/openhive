@@ -20,6 +20,8 @@ import traceback
 
 SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_ROOT))
+# _lib/fonts.py lives at packages/skills/_lib — one level above this skill.
+sys.path.insert(0, str(SKILL_ROOT.parent))
 
 
 def main() -> int:
@@ -55,6 +57,16 @@ def main() -> int:
     meta = spec.get("meta") or {}
     size = meta.get("size", "16:9")
     theme = get_theme(meta.get("theme"), meta.get("theme_overrides"))
+    # Swap the theme fonts to a Noto cut matching the dominant script of the
+    # deck text. PowerPoint picks a system fallback if the user doesn't have
+    # Noto installed, which is still far better than the default Helvetica
+    # (no CJK/Arabic/Thai coverage at all).
+    from _lib import fonts as _fonts
+    from dataclasses import replace as _dc_replace
+    _script = _fonts.dominant_script(_gather_text(spec))
+    if _script != _fonts.SCRIPT_LATIN:
+        _name = _fonts.display_name(_script)
+        theme = _dc_replace(theme, heading_font=_name, body_font=_name)
     grid = Grid(size=size)
 
     prs = Presentation()
@@ -88,6 +100,24 @@ def main() -> int:
         "warnings": warnings,
     }))
     return 0
+
+
+def _gather_text(obj) -> str:
+    """Collect every string in the spec into one blob for script detection."""
+    buf: list[str] = []
+
+    def _walk(v) -> None:
+        if isinstance(v, str):
+            buf.append(v)
+        elif isinstance(v, dict):
+            for item in v.values():
+                _walk(item)
+        elif isinstance(v, list):
+            for item in v:
+                _walk(item)
+
+    _walk(obj)
+    return " ".join(buf)
 
 
 def _load_spec(path: str | None) -> dict:

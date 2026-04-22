@@ -14,6 +14,8 @@ import traceback
 
 SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_ROOT))
+# _lib/fonts.py lives at packages/skills/_lib — one level above this skill.
+sys.path.insert(0, str(SKILL_ROOT.parent))
 
 
 def main() -> int:
@@ -47,6 +49,15 @@ def main() -> int:
 
     meta = spec.get("meta") or {}
     theme = get_theme(meta.get("theme"), meta.get("theme_overrides"))
+    # Pin the document to one Noto cut so CJK/Arabic/Thai/Devanagari text
+    # doesn't fall through to whatever random font the reader happens to
+    # have. Pure-Latin docs keep the theme's default (Helvetica/Georgia).
+    from _lib import fonts as _fonts
+    from dataclasses import replace as _dc_replace
+    _script = _fonts.dominant_script(_gather_text(spec))
+    if _script != _fonts.SCRIPT_LATIN:
+        _name = _fonts.display_name(_script)
+        theme = _dc_replace(theme, heading_font=_name, body_font=_name)
 
     doc = Document()
 
@@ -111,6 +122,24 @@ def _apply_page_setup(doc, size_name: str, orient: str, theme) -> None:
     section.right_margin = Inches(theme.margin_right)
     section.top_margin = Inches(theme.margin_top)
     section.bottom_margin = Inches(theme.margin_bottom)
+
+
+def _gather_text(obj) -> str:
+    """Collect every string in the spec into one blob for script detection."""
+    buf: list[str] = []
+
+    def _walk(v) -> None:
+        if isinstance(v, str):
+            buf.append(v)
+        elif isinstance(v, dict):
+            for item in v.values():
+                _walk(item)
+        elif isinstance(v, list):
+            for item in v:
+                _walk(item)
+
+    _walk(obj)
+    return " ".join(buf)
 
 
 def _load_spec(path: str | None) -> dict:
