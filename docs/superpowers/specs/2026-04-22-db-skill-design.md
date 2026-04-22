@@ -162,7 +162,7 @@ packages/skills/db/
 1. `runQuery(sql, params?)`, `runExec(sql, params?, opts)` — params 바인딩 추가.
 2. 단일 statement 가드: `;` 이후 비공백·비주석 감지.
 3. Destructive 감지 헬퍼: 정규식 + AST-lite (WHERE 없는 DELETE/UPDATE, DROP/TRUNCATE).
-4. 타임아웃 래퍼: `setTimeout(() => conn.interrupt(), ms)` + promise race (better-sqlite3 는 sync 이므로 `conn.interrupt()` 를 시그널 스레드에서 호출).
+4. 타임아웃 래퍼: `setTimeout(() => conn.interrupt?.(), ms)` — **best-effort only**. better-sqlite3 12.x 는 `interrupt` 미노출 + `stmt.all()` 은 메인 스레드 sync C call → JS 타이머로 preempt 불가. `busy_timeout` pragma 는 lock 대기에만 작용. 런어웨이 쿼리 preempt 는 worker-thread DB pool 도입 전까지 불가 (single-user 로컬이라 용인). 환경변수는 미래 호환용으로 유지.
 5. `installTemplate` 에 before/after 스키마 diff 반환 추가.
 
 ## 테스트
