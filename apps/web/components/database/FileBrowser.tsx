@@ -1,7 +1,7 @@
 'use client'
 
 import {
-  DotsThree,
+  Copy,
   DownloadSimple,
   File as FileIcon,
   FileCode,
@@ -14,8 +14,11 @@ import {
   FileXls,
   FolderOpen,
   MagnifyingGlass,
+  PushPin,
+  PushPinSlash,
   Rows,
   SquaresFour,
+  X,
 } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import Link from 'next/link'
@@ -23,10 +26,35 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   downloadUrl,
   fetchArtifactsDetailed,
+  revealArtifact,
   type ArtifactDetailed,
 } from '@/lib/api/artifacts'
-import { MOCK_ARTIFACTS, MOCK_SESSIONS } from '@/lib/mockRecords'
+import { useT } from '@/lib/i18n'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
+
+const PINNED_STORAGE_KEY = 'openhive.filebrowser.pinned'
+
+function loadPinned(): Set<string> {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = window.localStorage.getItem(PINNED_STORAGE_KEY)
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw) as unknown
+    if (!Array.isArray(arr)) return new Set()
+    return new Set(arr.filter((x): x is string => typeof x === 'string'))
+  } catch {
+    return new Set()
+  }
+}
+
+function savePinned(set: Set<string>) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(PINNED_STORAGE_KEY, JSON.stringify([...set]))
+  } catch {
+    // ignore quota / private-mode errors
+  }
+}
 
 type ViewMode = 'grid' | 'list'
 
@@ -98,7 +126,16 @@ function fileVisual(name: string): FileVisual {
   )
 }
 
-function dayBucket(ms: number): string {
+type BucketKey =
+  | { kind: 'pinned' }
+  | { kind: 'today' }
+  | { kind: 'yesterday' }
+  | { kind: 'thisWeek' }
+  | { kind: 'thisMonth' }
+  | { kind: 'month'; month: number }
+  | { kind: 'year'; year: number }
+
+function dayBucket(ms: number): BucketKey {
   const d = new Date(ms)
   const now = new Date()
   const sameDay = (a: Date, b: Date) =>
@@ -107,17 +144,56 @@ function dayBucket(ms: number): string {
     a.getDate() === b.getDate()
   const yesterday = new Date(now)
   yesterday.setDate(now.getDate() - 1)
-  if (sameDay(d, now)) return '오늘'
-  if (sameDay(d, yesterday)) return '어제'
+  if (sameDay(d, now)) return { kind: 'today' }
+  if (sameDay(d, yesterday)) return { kind: 'yesterday' }
   const week = 7 * 86400_000
-  if (Date.now() - ms < week) return '이번 주'
-  if (Date.now() - ms < 4 * week) return '이번 달'
+  if (Date.now() - ms < week) return { kind: 'thisWeek' }
+  if (Date.now() - ms < 4 * week) return { kind: 'thisMonth' }
   return d.getFullYear() === now.getFullYear()
-    ? `${d.getMonth() + 1}월`
-    : `${d.getFullYear()}년`
+    ? { kind: 'month', month: d.getMonth() + 1 }
+    : { kind: 'year', year: d.getFullYear() }
+}
+
+function bucketKeyId(k: BucketKey): string {
+  switch (k.kind) {
+    case 'pinned':
+    case 'today':
+    case 'yesterday':
+    case 'thisWeek':
+    case 'thisMonth':
+      return k.kind
+    case 'month':
+      return `month:${k.month}`
+    case 'year':
+      return `year:${k.year}`
+  }
+}
+
+function bucketLabel(k: BucketKey, t: (key: string, vars?: Record<string, string>) => string, locale: 'en' | 'ko'): string {
+  switch (k.kind) {
+    case 'pinned':
+      return t('records.files.bucket.pinned')
+    case 'today':
+      return t('records.files.bucket.today')
+    case 'yesterday':
+      return t('records.files.bucket.yesterday')
+    case 'thisWeek':
+      return t('records.files.bucket.thisWeek')
+    case 'thisMonth':
+      return t('records.files.bucket.thisMonth')
+    case 'month': {
+      if (locale === 'ko') return `${k.month}월`
+      const label = new Date(2000, k.month - 1, 1).toLocaleDateString('en-US', { month: 'long' })
+      return label
+    }
+    case 'year':
+      return t('records.files.bucket.yearLabel', { year: String(k.year) })
+  }
 }
 
 export function FileBrowser() {
+  const t = useT()
+  const locale = useAppStore((s) => s.locale)
   const team = useCurrentTeam()
   const teamId = useAppStore((s) => s.currentTeamId)
   const companySlug = useAppStore((s) => {
@@ -130,33 +206,35 @@ export function FileBrowser() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [isMock, setIsMock] = useState(false)
+  const [pinned, setPinned] = useState<Set<string>>(() => new Set())
+
+  useEffect(() => {
+    setPinned(loadPinned())
+  }, [])
+
+  const togglePin = useCallback((id: string) => {
+    setPinned((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      savePinned(next)
+      return next
+    })
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     if (!teamId) {
-      setArtifacts(MOCK_ARTIFACTS)
-      setIsMock(true)
+      setArtifacts([])
       setLoading(false)
       return
     }
     try {
-      const real = await fetchArtifactsDetailed(teamId)
-      if (real.length < MOCK_ARTIFACTS.length) {
-        // Design-preview mode: show mock while there aren't many real
-        // artifacts yet. As soon as the real list outgrows the mock, we
-        // flip to real automatically.
-        setArtifacts(MOCK_ARTIFACTS)
-        setIsMock(true)
-      } else {
-        setArtifacts(real)
-        setIsMock(false)
-      }
+      setArtifacts(await fetchArtifactsDetailed(teamId))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
-      setArtifacts(MOCK_ARTIFACTS)
-      setIsMock(true)
+      setArtifacts([])
     } finally {
       setLoading(false)
     }
@@ -185,39 +263,48 @@ export function FileBrowser() {
   }, [artifacts, search])
 
   const buckets = useMemo(() => {
-    const out = new Map<string, ArtifactDetailed[]>()
-    for (const a of filtered) {
-      const key = dayBucket(a.createdAt)
-      const arr = out.get(key) ?? []
-      arr.push(a)
-      out.set(key, arr)
+    const pinnedList = filtered.filter((a) => pinned.has(a.id))
+    const rest = filtered.filter((a) => !pinned.has(a.id))
+    const byKey = new Map<string, { key: BucketKey; items: ArtifactDetailed[] }>()
+    const ensure = (k: BucketKey) => {
+      const id = bucketKeyId(k)
+      let b = byKey.get(id)
+      if (!b) {
+        b = { key: k, items: [] }
+        byKey.set(id, b)
+      }
+      return b
     }
-    return Array.from(out.entries())
-  }, [filtered])
+    if (pinnedList.length > 0) ensure({ kind: 'pinned' }).items.push(...pinnedList)
+    for (const a of rest) {
+      ensure(dayBucket(a.createdAt)).items.push(a)
+    }
+    return Array.from(byKey.values()).map((b) => ({
+      ...b,
+      label: bucketLabel(b.key, t, locale),
+    }))
+  }, [filtered, pinned, t, locale])
 
-  const sessionLookup = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const s of MOCK_SESSIONS) m.set(s.id, s.title)
-    return m
-  }, [])
+  // TODO: wire real session title lookup when sessions API lands.
+  const sessionLookup = useMemo(() => new Map<string, string>(), [])
 
   return (
     <div className="h-full flex flex-col bg-white dark:bg-neutral-950">
       {/* Toolbar */}
       <header className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-6 py-2.5">
         <div className="flex items-center gap-3">
-          <div className="relative w-[320px] max-w-full">
-            <MagnifyingGlass className="w-3.5 h-3.5 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+          <div className="group flex items-center gap-1 h-8 w-[320px] max-w-full pl-2.5 pr-2 rounded-md border bg-white dark:bg-neutral-900 border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 focus-within:border-neutral-400 dark:focus-within:border-neutral-600 transition-colors">
+            <MagnifyingGlass className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="파일명 또는 스킬 검색…"
-              className="w-full h-8 pl-8 pr-2 rounded-md bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 text-[13px] placeholder:text-neutral-400 focus:outline-none focus:border-neutral-400 dark:focus:border-neutral-600"
+              placeholder={t('records.files.searchPlaceholder')}
+              className="flex-1 min-w-0 h-6 bg-transparent border-0 outline-none text-[12.5px] text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400"
             />
           </div>
           <div className="flex-1" />
           <span className="text-[11.5px] font-mono tabular-nums text-neutral-400">
-            {filtered.length} files
+            {t('records.files.countFiles', { n: String(filtered.length) })}
           </span>
           <div className="inline-flex h-8 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-0.5">
             <button
@@ -229,8 +316,8 @@ export function FileBrowser() {
                   ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100'
                   : 'text-neutral-500 hover:text-neutral-900',
               )}
-              aria-label="그리드 보기"
-              title="그리드 보기"
+              aria-label={t('records.files.view.grid')}
+              title={t('records.files.view.grid')}
             >
               <SquaresFour className="w-4 h-4" />
             </button>
@@ -243,8 +330,8 @@ export function FileBrowser() {
                   ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100'
                   : 'text-neutral-500 hover:text-neutral-900',
               )}
-              aria-label="리스트 보기"
-              title="리스트 보기"
+              aria-label={t('records.files.view.list')}
+              title={t('records.files.view.list')}
             >
               <Rows className="w-4 h-4" />
             </button>
@@ -265,10 +352,10 @@ export function FileBrowser() {
               <div className="text-center">
                 <FolderOpen className="w-10 h-10 mx-auto text-neutral-300 dark:text-neutral-700 mb-2" />
                 {loading
-                  ? '로딩 중…'
+                  ? t('records.files.loading')
                   : search.trim()
-                    ? '검색 결과가 없습니다'
-                    : '아직 생성된 아티팩트가 없습니다'}
+                    ? t('records.files.noResults')
+                    : t('records.files.empty')}
               </div>
             </div>
           ) : view === 'grid' ? (
@@ -295,7 +382,8 @@ export function FileBrowser() {
               sessionTitle={sessionLookup.get(selected.sessionId) ?? null}
               companySlug={companySlug}
               teamSlug={team?.slug ?? null}
-              isMock={isMock}
+              isPinned={pinned.has(selected.id)}
+              onTogglePin={() => togglePin(selected.id)}
               onClose={() => setSelected(null)}
             />
           </aside>
@@ -305,26 +393,36 @@ export function FileBrowser() {
   )
 }
 
+type Bucket = { key: BucketKey; label: string; items: ArtifactDetailed[] }
+
+function BucketHeading({ bucket }: { bucket: Bucket }) {
+  const pinned = bucket.key.kind === 'pinned'
+  return (
+    <h3 className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-neutral-400 mb-2">
+      {pinned && <PushPin className="w-3 h-3 text-neutral-500" weight="fill" />}
+      <span>{bucket.label}</span>
+    </h3>
+  )
+}
+
 function GridView({
   buckets,
   selected,
   onSelect,
   sessionLookup,
 }: {
-  buckets: [string, ArtifactDetailed[]][]
+  buckets: Bucket[]
   selected: ArtifactDetailed | null
   onSelect: (a: ArtifactDetailed) => void
   sessionLookup: Map<string, string>
 }) {
   return (
     <div className="px-6 py-5 space-y-5">
-      {buckets.map(([label, items]) => (
-        <section key={label}>
-          <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-neutral-400 mb-2">
-            {label}
-          </h3>
+      {buckets.map((b) => (
+        <section key={bucketKeyId(b.key)}>
+          <BucketHeading bucket={b} />
           <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2.5">
-            {items.map((a) => {
+            {b.items.map((a) => {
               const v = fileVisual(a.filename)
               const active = selected?.id === a.id
               return (
@@ -378,25 +476,26 @@ function ListView({
   onSelect,
   sessionLookup,
 }: {
-  buckets: [string, ArtifactDetailed[]][]
+  buckets: Bucket[]
   selected: ArtifactDetailed | null
   onSelect: (a: ArtifactDetailed) => void
   sessionLookup: Map<string, string>
 }) {
+  const t = useT()
   return (
     <div className="px-2 py-2">
       <div className="grid grid-cols-[1fr_200px_auto_120px] gap-x-4 px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-neutral-400 border-b border-neutral-200 dark:border-neutral-800">
-        <span>이름</span>
-        <span>세션</span>
-        <span className="text-right">크기</span>
-        <span>생성</span>
+        <span>{t('records.files.col.name')}</span>
+        <span>{t('records.files.col.session')}</span>
+        <span className="text-right">{t('records.files.col.size')}</span>
+        <span>{t('records.files.col.created')}</span>
       </div>
-      {buckets.map(([label, items]) => (
-        <div key={label}>
-          <div className="px-4 pt-3 pb-1 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-neutral-400">
-            {label}
+      {buckets.map((b) => (
+        <div key={bucketKeyId(b.key)}>
+          <div className="px-4 pt-3 pb-1">
+            <BucketHeading bucket={b} />
           </div>
-          {items.map((a) => {
+          {b.items.map((a) => {
             const v = fileVisual(a.filename)
             const active = selected?.id === a.id
             return (
@@ -447,25 +546,60 @@ function Preview({
   sessionTitle,
   companySlug,
   teamSlug,
-  isMock,
+  isPinned,
+  onTogglePin,
   onClose,
 }: {
   artifact: ArtifactDetailed
   sessionTitle: string | null
   companySlug: string | null
   teamSlug: string | null
-  isMock: boolean
+  isPinned: boolean
+  onTogglePin: () => void
   onClose: () => void
 }) {
+  const t = useT()
   const v = fileVisual(artifact.filename)
   const sessionHref =
-    !isMock && companySlug && teamSlug
+    companySlug && teamSlug
       ? `/${companySlug}/${teamSlug}/s/${artifact.sessionId}`
       : null
+  const fullPath = `~/.openhive/${artifact.path}`
+
+  const [copied, setCopied] = useState<'path' | 'name' | null>(null)
+  const [revealError, setRevealError] = useState<string | null>(null)
+
+  const copyText = async (text: string, kind: 'path' | 'name') => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(kind)
+      setTimeout(() => setCopied(null), 1500)
+    } catch {
+      // ignore
+    }
+  }
+
+  const openFolder = async () => {
+    setRevealError(null)
+    try {
+      await revealArtifact(artifact.id)
+    } catch (e) {
+      setRevealError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   return (
     <div className="flex flex-col">
-      <div className="px-5 pt-5 pb-4 border-b border-neutral-200 dark:border-neutral-800">
+      <div className="relative px-5 pt-5 pb-4 border-b border-neutral-200 dark:border-neutral-800">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t('records.files.close')}
+          title={t('records.files.close')}
+          className="absolute top-3 right-3 w-7 h-7 rounded-md flex items-center justify-center text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+        >
+          <X className="w-4 h-4" />
+        </button>
         <div
           className={clsx(
             'w-14 h-16 rounded-lg flex items-center justify-center mb-3',
@@ -474,8 +608,19 @@ function Preview({
         >
           <v.Icon className={clsx('w-7 h-7', v.fg)} weight="duotone" />
         </div>
-        <div className="text-[14.5px] font-semibold text-neutral-900 dark:text-neutral-100 break-words leading-snug">
-          {artifact.filename}
+        <div className="group/filename flex items-start gap-1 pr-6">
+          <div className="text-[14.5px] font-semibold text-neutral-900 dark:text-neutral-100 break-words leading-snug flex-1 min-w-0">
+            {artifact.filename}
+          </div>
+          <button
+            type="button"
+            onClick={() => void copyText(artifact.filename, 'name')}
+            aria-label={t('records.files.copyName')}
+            title={t('records.files.copyName')}
+            className="shrink-0 w-5 h-5 mt-0.5 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800 opacity-0 group-hover/filename:opacity-100 focus:opacity-100 transition-opacity cursor-pointer"
+          >
+            <Copy className="w-3 h-3" />
+          </button>
         </div>
         <div className="mt-1 flex items-center gap-1.5 text-[11.5px] text-neutral-500 font-mono">
           <span
@@ -490,61 +635,72 @@ function Preview({
           <span>·</span>
           <span>{formatBytes(artifact.size)}</span>
         </div>
-        <div className="mt-3 flex gap-1.5">
+        <div className="mt-3 flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={openFolder}
+            className="h-7 px-2.5 rounded-md text-[12px] font-medium flex items-center gap-1.5 flex-1 justify-center bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 hover:opacity-90 cursor-pointer"
+          >
+            <FolderOpen className="w-3.5 h-3.5" />
+            {t('records.files.openFolder')}
+          </button>
           <a
-            href={isMock ? undefined : downloadUrl(artifact.id)}
-            download={!isMock}
-            aria-disabled={isMock}
-            className={clsx(
-              'h-7 px-2.5 rounded-md text-[12px] font-medium flex items-center gap-1.5',
-              isMock
-                ? 'bg-neutral-200 dark:bg-neutral-800 text-neutral-400 cursor-not-allowed'
-                : 'bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 hover:opacity-90 cursor-pointer',
-            )}
+            href={downloadUrl(artifact.id)}
+            download
+            aria-label={t('records.files.download')}
+            title={t('records.files.download')}
+            className="h-7 w-7 rounded-md border border-neutral-200 dark:border-neutral-800 flex items-center justify-center text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
           >
             <DownloadSimple className="w-3.5 h-3.5" />
-            다운로드
           </a>
           <button
             type="button"
-            className="h-7 w-7 rounded-md border border-neutral-200 dark:border-neutral-800 text-neutral-600 hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center justify-center cursor-pointer"
+            onClick={onTogglePin}
+            aria-label={isPinned ? t('records.files.unpin') : t('records.files.pin')}
+            title={isPinned ? t('records.files.unpin') : t('records.files.pin')}
+            className={clsx(
+              'h-7 w-7 rounded-md border flex items-center justify-center cursor-pointer',
+              isPinned
+                ? 'border-neutral-400 dark:border-neutral-600 bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100'
+                : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800',
+            )}
           >
-            <DotsThree className="w-4 h-4" weight="bold" />
+            {isPinned ? (
+              <PushPinSlash className="w-3.5 h-3.5" />
+            ) : (
+              <PushPin className="w-3.5 h-3.5" />
+            )}
           </button>
         </div>
+        {revealError && (
+          <div className="mt-2 text-[11px] text-red-600 dark:text-red-400 break-words">
+            {revealError}
+          </div>
+        )}
+        {copied && (
+          <div className="mt-2 text-[11px] text-neutral-500">
+            {copied === 'path'
+              ? t('records.files.copiedPath')
+              : t('records.files.copiedName')}
+          </div>
+        )}
       </div>
 
       <dl className="px-5 py-4 text-[12px] space-y-2.5">
         <div className="grid grid-cols-[70px_1fr] gap-2 items-baseline">
-          <dt className="text-neutral-400">생성 일시</dt>
+          <dt className="text-neutral-400">{t('records.files.detail.createdAt')}</dt>
           <dd className="text-neutral-700 dark:text-neutral-300">
             {new Date(artifact.createdAt).toLocaleString()}
           </dd>
         </div>
         <div className="grid grid-cols-[70px_1fr] gap-2 items-baseline">
-          <dt className="text-neutral-400">크기</dt>
+          <dt className="text-neutral-400">{t('records.files.detail.size')}</dt>
           <dd className="text-neutral-700 dark:text-neutral-300 font-mono">
             {formatBytes(artifact.size)}
           </dd>
         </div>
-        {artifact.mime && (
-          <div className="grid grid-cols-[70px_1fr] gap-2 items-baseline">
-            <dt className="text-neutral-400">MIME</dt>
-            <dd className="text-neutral-700 dark:text-neutral-300 font-mono break-all">
-              {artifact.mime}
-            </dd>
-          </div>
-        )}
-        {artifact.skillName && (
-          <div className="grid grid-cols-[70px_1fr] gap-2 items-baseline">
-            <dt className="text-neutral-400">스킬</dt>
-            <dd className="text-neutral-700 dark:text-neutral-300 font-mono">
-              {artifact.skillName}
-            </dd>
-          </div>
-        )}
         <div className="grid grid-cols-[70px_1fr] gap-2 items-baseline">
-          <dt className="text-neutral-400">세션</dt>
+          <dt className="text-neutral-400">{t('records.files.detail.session')}</dt>
           <dd className="text-neutral-700 dark:text-neutral-300 min-w-0">
             {sessionHref ? (
               <Link
@@ -560,23 +716,24 @@ function Preview({
             )}
           </dd>
         </div>
-        <div className="grid grid-cols-[70px_1fr] gap-2 items-baseline">
-          <dt className="text-neutral-400">경로</dt>
-          <dd className="text-neutral-500 dark:text-neutral-500 font-mono text-[11px] break-all">
-            ~/.openhive/{artifact.path}
+        <div className="grid grid-cols-[70px_1fr] gap-2 items-start group/path">
+          <dt className="text-neutral-400 mt-0.5">{t('records.files.detail.path')}</dt>
+          <dd className="flex items-start gap-1 min-w-0">
+            <span className="text-neutral-500 dark:text-neutral-500 font-mono text-[11px] break-all flex-1 min-w-0">
+              {fullPath}
+            </span>
+            <button
+              type="button"
+              onClick={() => void copyText(fullPath, 'path')}
+              aria-label={t('records.files.copyPath')}
+              title={t('records.files.copyPath')}
+              className="shrink-0 w-5 h-5 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800 opacity-0 group-hover/path:opacity-100 focus:opacity-100 transition-opacity cursor-pointer"
+            >
+              <Copy className="w-3 h-3" />
+            </button>
           </dd>
         </div>
       </dl>
-
-      <div className="px-5 pb-5">
-        <button
-          type="button"
-          onClick={onClose}
-          className="w-full h-7 rounded-md border border-neutral-200 dark:border-neutral-800 text-[12px] text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
-        >
-          닫기
-        </button>
-      </div>
     </div>
   )
 }

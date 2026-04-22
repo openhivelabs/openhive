@@ -22,8 +22,22 @@ export async function GET(
       { status: 404 },
     )
   }
-  const limitRaw = new URL(req.url).searchParams.get('limit') ?? '200'
-  const limit = Math.max(1, Math.min(10_000, Number.parseInt(limitRaw, 10) || 200))
-  const sql = `SELECT * FROM ${tableName} ORDER BY rowid DESC LIMIT ${limit}`
-  return NextResponse.json(runQuery(r.companySlug, r.teamSlug, sql))
+  const params = new URL(req.url).searchParams
+  const limit = Math.max(
+    1,
+    Math.min(1000, Number.parseInt(params.get('limit') ?? '100', 10) || 100),
+  )
+  const offset = Math.max(0, Number.parseInt(params.get('offset') ?? '0', 10) || 0)
+  const pageSql = `SELECT * FROM ${tableName} ORDER BY rowid DESC LIMIT ${limit} OFFSET ${offset}`
+  const page = runQuery(r.companySlug, r.teamSlug, pageSql)
+  const countSql = `SELECT COUNT(*) AS c FROM ${tableName}`
+  const countRes = runQuery(r.companySlug, r.teamSlug, countSql)
+  const total = Number((countRes.rows[0] ?? { c: 0 }).c ?? 0)
+  return NextResponse.json({
+    columns: page.columns,
+    rows: page.rows,
+    total,
+    limit,
+    offset,
+  })
 }

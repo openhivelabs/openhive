@@ -1,26 +1,26 @@
 'use client'
 
 import {
+  type ColumnInfo,
+  type PagedQueryResult,
+  type SchemaResponse,
+  fetchSchema,
+  fetchTableRows,
+} from '@/lib/api/teamData'
+import { useT } from '@/lib/i18n'
+import { useAppStore } from '@/lib/stores/useAppStore'
+import {
   ArrowDown,
-  ArrowsDownUp,
   ArrowUp,
-  FunnelSimple,
-  Plus,
-  Sparkle,
+  ArrowsDownUp,
+  CaretLeft,
+  CaretRight,
   Table as TableIcon,
   X,
 } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  fetchSchema,
-  fetchTableRows,
-  type ColumnInfo,
-  type QueryResult,
-  type SchemaResponse,
-} from '@/lib/api/teamData'
-import { MOCK_ROWS, MOCK_SCHEMA } from '@/lib/mockRecords'
-import { useAppStore } from '@/lib/stores/useAppStore'
+import { type ColKind, type FilterOp, type FilterRule, RecordsSearchBar } from './RecordsSearchBar'
 
 function isIsoDateString(s: string): boolean {
   // Matches ISO-ish date / datetime strings emitted by JSON.stringify(new Date())
@@ -28,58 +28,11 @@ function isIsoDateString(s: string): boolean {
   return /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/.test(s)
 }
 
-type ColKind = 'number' | 'boolean' | 'date' | 'string'
 type SortDir = 'asc' | 'desc'
 interface SortRule {
   column: string
   dir: SortDir
 }
-type FilterOp =
-  | 'contains'
-  | 'not_contains'
-  | 'equals'
-  | 'not_equals'
-  | 'gt'
-  | 'gte'
-  | 'lt'
-  | 'lte'
-  | 'is_empty'
-  | 'is_not_empty'
-  | 'is_true'
-  | 'is_false'
-interface FilterRule {
-  id: string
-  column: string
-  op: FilterOp
-  value: string
-}
-
-const OP_LABEL: Record<FilterOp, string> = {
-  contains: '포함',
-  not_contains: '미포함',
-  equals: '=',
-  not_equals: '≠',
-  gt: '>',
-  gte: '≥',
-  lt: '<',
-  lte: '≤',
-  is_empty: '비어있음',
-  is_not_empty: '값 있음',
-  is_true: 'true',
-  is_false: 'false',
-}
-const OPS_BY_KIND: Record<ColKind, FilterOp[]> = {
-  string: ['contains', 'not_contains', 'equals', 'not_equals', 'is_empty', 'is_not_empty'],
-  number: ['equals', 'not_equals', 'gt', 'gte', 'lt', 'lte', 'is_empty', 'is_not_empty'],
-  date: ['equals', 'gt', 'lt', 'is_empty', 'is_not_empty'],
-  boolean: ['is_true', 'is_false'],
-}
-const NO_VALUE_OPS: ReadonlySet<FilterOp> = new Set([
-  'is_empty',
-  'is_not_empty',
-  'is_true',
-  'is_false',
-])
 
 function colKindOf(col: ColumnInfo | undefined, sample: unknown): ColKind {
   const t = (col?.type ?? '').toUpperCase()
@@ -161,47 +114,41 @@ function matchesFilter(rule: FilterRule, row: Record<string, unknown>, kind: Col
 }
 
 export function DatabaseView() {
+  const t = useT()
   const teamId = useAppStore((s) => s.currentTeamId)
   const [schema, setSchema] = useState<SchemaResponse | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
-  const [rows, setRows] = useState<QueryResult | null>(null)
+  const [rows, setRows] = useState<PagedQueryResult | null>(null)
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [isMock, setIsMock] = useState(false)
   const [sortRules, setSortRules] = useState<SortRule[]>([])
   const [filters, setFilters] = useState<FilterRule[]>([])
-  const [openPopover, setOpenPopover] = useState<'filter' | 'sort' | null>(null)
-  const filterBtnRef = useRef<HTMLButtonElement>(null)
+  const [openPopover, setOpenPopover] = useState<'sort' | null>(null)
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
   const sortBtnRef = useRef<HTMLButtonElement>(null)
+  const PAGE_SIZE = 100
 
   const loadSchema = useCallback(async () => {
     const pickDefault = (names: string[]) =>
       setSelected((curr) => (curr && names.includes(curr) ? curr : (names[0] ?? null)))
 
     if (!teamId) {
-      setSchema(MOCK_SCHEMA)
-      setIsMock(true)
-      pickDefault(MOCK_SCHEMA.tables.map((t) => t.name))
+      setSchema({ tables: [], recent_migrations: [] })
+      setSelected(null)
       return
     }
     setLoading(true)
     setError(null)
     try {
       const s = await fetchSchema(teamId)
-      if (s.tables.length === 0) {
-        setSchema(MOCK_SCHEMA)
-        setIsMock(true)
-        pickDefault(MOCK_SCHEMA.tables.map((t) => t.name))
-      } else {
-        setSchema(s)
-        setIsMock(false)
-        pickDefault(s.tables.map((t) => t.name))
-      }
+      setSchema(s)
+      pickDefault(s.tables.map((t) => t.name))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
-      setSchema(MOCK_SCHEMA)
-      setIsMock(true)
-      pickDefault(MOCK_SCHEMA.tables.map((t) => t.name))
+      setSchema({ tables: [], recent_migrations: [] })
+      setSelected(null)
     } finally {
       setLoading(false)
     }
@@ -212,22 +159,27 @@ export function DatabaseView() {
   }, [loadSchema])
 
   useEffect(() => {
+    // `selected` is the trigger — resets must run when it changes.
+    void selected
     setSortRules([])
     setFilters([])
     setOpenPopover(null)
-    if (!selected) {
+    setAiError(null)
+    setPage(1)
+  }, [selected])
+
+  useEffect(() => {
+    if (!selected || !teamId) {
       setRows(null)
       return
     }
-    if (isMock) {
-      setRows(MOCK_ROWS[selected] ?? { columns: [], rows: [] })
-      return
-    }
-    if (!teamId) return
-    fetchTableRows(teamId, selected)
+    fetchTableRows(teamId, selected, {
+      limit: PAGE_SIZE,
+      offset: (page - 1) * PAGE_SIZE,
+    })
       .then(setRows)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-  }, [teamId, selected, isMock])
+  }, [teamId, selected, page])
 
   const tables = schema?.tables ?? []
   const selectedTable = tables.find((t) => t.name === selected)
@@ -242,6 +194,46 @@ export function DatabaseView() {
     }
     return out
   }, [rows, selectedTable])
+
+  const askAi = useCallback(
+    async (query: string) => {
+      if (!rows || rows.columns.length === 0) return
+      setAiBusy(true)
+      setAiError(null)
+      try {
+        const cols = rows.columns.map((c) => ({
+          name: c,
+          kind: (colKinds[c] ?? 'string') as ColKind,
+        }))
+        const resp = await fetch('/api/ai/records-filter', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ columns: cols, query }),
+        })
+        if (!resp.ok) {
+          const body = (await resp.json().catch(() => ({}))) as { detail?: string }
+          throw new Error(body.detail || `AI filter failed (${resp.status})`)
+        }
+        const data = (await resp.json()) as {
+          filters?: { column: string; op: FilterOp; value: string }[]
+        }
+        const next = (data.filters ?? []).map((f) => ({
+          id: `f-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          ...f,
+        }))
+        if (next.length === 0) {
+          setAiError(t('records.search.aiNoMatch'))
+          return
+        }
+        setFilters((prev) => [...prev, ...next])
+      } catch (e) {
+        setAiError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setAiBusy(false)
+      }
+    },
+    [rows, colKinds, t],
+  )
 
   const displayRows = useMemo(() => {
     if (!rows) return [] as Record<string, unknown>[]
@@ -277,52 +269,23 @@ export function DatabaseView() {
                 {selectedTable.name}
               </h2>
               <span className="text-[11.5px] text-neutral-400 font-mono tabular-nums">
-                {displayRows.length === rows.rows.length
-                  ? `${rows.rows.length} rows`
-                  : `${displayRows.length} / ${rows.rows.length} rows`}{' '}
-                · {selectedTable.columns.length} cols
+                {t('records.db.totalRows', { total: String(rows.total) })}{' '}
+                · {t('records.db.colCount', { n: String(selectedTable.columns.length) })}
               </span>
-              <div className="flex-1" />
-              <div className="relative">
-                <button
-                  ref={filterBtnRef}
-                  type="button"
-                  onClick={() =>
-                    setOpenPopover((v) => (v === 'filter' ? null : 'filter'))
-                  }
-                  className={clsx(
-                    'h-8 px-2 rounded-md text-[12px] flex items-center gap-1.5 cursor-pointer',
-                    filters.length > 0 || openPopover === 'filter'
-                      ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100'
-                      : 'text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800',
-                  )}
-                >
-                  <FunnelSimple className="w-3.5 h-3.5" />
-                  Filter
-                  {filters.length > 0 && (
-                    <span className="ml-0.5 h-4 min-w-4 px-1 rounded-full bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 text-[10px] font-mono tabular-nums inline-flex items-center justify-center">
-                      {filters.length}
-                    </span>
-                  )}
-                </button>
-                {openPopover === 'filter' && (
-                  <FilterPopover
-                    anchorRef={filterBtnRef}
-                    columns={rows.columns}
-                    colKinds={colKinds}
-                    filters={filters}
-                    onChange={setFilters}
-                    onClose={() => setOpenPopover(null)}
-                  />
-                )}
-              </div>
+              <RecordsSearchBar
+                columns={rows.columns}
+                colKinds={colKinds}
+                filters={filters}
+                onChange={setFilters}
+                onAskAi={askAi}
+                aiBusy={aiBusy}
+                aiError={aiError}
+              />
               <div className="relative">
                 <button
                   ref={sortBtnRef}
                   type="button"
-                  onClick={() =>
-                    setOpenPopover((v) => (v === 'sort' ? null : 'sort'))
-                  }
+                  onClick={() => setOpenPopover((v) => (v === 'sort' ? null : 'sort'))}
                   className={clsx(
                     'h-8 px-2 rounded-md text-[12px] flex items-center gap-1.5 cursor-pointer',
                     sortRules.length > 0 || openPopover === 'sort'
@@ -331,12 +294,7 @@ export function DatabaseView() {
                   )}
                 >
                   <ArrowsDownUp className="w-3.5 h-3.5" />
-                  Sort
-                  {sortRules.length > 0 && (
-                    <span className="ml-0.5 h-4 min-w-4 px-1 rounded-full bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 text-[10px] font-mono tabular-nums inline-flex items-center justify-center">
-                      {sortRules.length}
-                    </span>
-                  )}
+                  {t('records.sort.buttonLabel')}
                 </button>
                 {openPopover === 'sort' && (
                   <SortPopover
@@ -348,72 +306,34 @@ export function DatabaseView() {
                   />
                 )}
               </div>
+              {sortRules.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {sortRules.map((r) => (
+                    <span
+                      key={r.column}
+                      className="inline-flex items-center gap-1.5 h-8 pl-2 pr-1.5 rounded-md bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-[12px] text-neutral-700 dark:text-neutral-200 font-mono"
+                    >
+                      {r.dir === 'asc' ? (
+                        <ArrowUp className="w-3.5 h-3.5 text-neutral-500 dark:text-neutral-400" />
+                      ) : (
+                        <ArrowDown className="w-3.5 h-3.5 text-neutral-500 dark:text-neutral-400" />
+                      )}
+                      <span>{r.column}</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSortRules((prev) => prev.filter((x) => x.column !== r.column))
+                        }
+                        className="w-4 h-4 rounded-sm flex items-center justify-center text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 cursor-pointer"
+                        aria-label={t('records.search.removeFilter')}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
-
-            {(filters.length > 0 || sortRules.length > 0) && (
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                {filters.map((f) => (
-                  <span
-                    key={f.id}
-                    className="inline-flex items-center gap-1 h-6 pl-2 pr-1 rounded-full bg-amber-50 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-900/50 text-[11.5px] text-amber-800 dark:text-amber-200 font-mono"
-                  >
-                    <FunnelSimple className="w-3 h-3" />
-                    <span>{f.column}</span>
-                    <span className="text-amber-500">{OP_LABEL[f.op]}</span>
-                    {!NO_VALUE_OPS.has(f.op) && (
-                      <span className="text-amber-900 dark:text-amber-100">
-                        "{f.value}"
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFilters((prev) => prev.filter((x) => x.id !== f.id))
-                      }
-                      className="w-4 h-4 rounded-full flex items-center justify-center hover:bg-amber-200/70 dark:hover:bg-amber-900/60 cursor-pointer"
-                      aria-label="필터 제거"
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
-                  </span>
-                ))}
-                {sortRules.map((r) => (
-                  <span
-                    key={r.column}
-                    className="inline-flex items-center gap-1 h-6 pl-2 pr-1 rounded-full bg-blue-50 dark:bg-blue-950/40 border border-blue-200/70 dark:border-blue-900/50 text-[11.5px] text-blue-800 dark:text-blue-200 font-mono"
-                  >
-                    {r.dir === 'asc' ? (
-                      <ArrowUp className="w-3 h-3" />
-                    ) : (
-                      <ArrowDown className="w-3 h-3" />
-                    )}
-                    <span>{r.column}</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSortRules((prev) =>
-                          prev.filter((x) => x.column !== r.column),
-                        )
-                      }
-                      className="w-4 h-4 rounded-full flex items-center justify-center hover:bg-blue-200/70 dark:hover:bg-blue-900/60 cursor-pointer"
-                      aria-label="정렬 제거"
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
-                  </span>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFilters([])
-                    setSortRules([])
-                  }}
-                  className="text-[11.5px] text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 underline-offset-2 hover:underline cursor-pointer ml-1"
-                >
-                  모두 지우기
-                </button>
-              </div>
-            )}
           </>
         ) : null}
       </div>
@@ -430,61 +350,50 @@ export function DatabaseView() {
           <div className="flex-1 overflow-y-auto px-2 py-3">
             <div className="space-y-0.5">
               {tables.map((tbl) => {
-              const active = selected === tbl.name
-              return (
-                <button
-                  key={tbl.name}
-                  type="button"
-                  onClick={() => setSelected(tbl.name)}
-                  className={clsx(
-                    'w-full text-left px-2 py-1.5 rounded-md flex items-center gap-2 group transition-colors cursor-pointer',
-                    active
-                      ? 'bg-white dark:bg-neutral-800 shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-neutral-200 dark:ring-neutral-700'
-                      : 'hover:bg-white/70 dark:hover:bg-neutral-800/60',
-                  )}
-                >
-                  <TableIcon
+                const active = selected === tbl.name
+                return (
+                  <button
+                    key={tbl.name}
+                    type="button"
+                    onClick={() => setSelected(tbl.name)}
                     className={clsx(
-                      'w-3.5 h-3.5 shrink-0',
-                      active ? 'text-neutral-700 dark:text-neutral-300' : 'text-neutral-400',
-                    )}
-                  />
-                  <span
-                    className={clsx(
-                      'text-[13px] font-mono truncate flex-1',
+                      'w-full text-left px-2 py-1.5 rounded-md flex items-center gap-2 group transition-colors cursor-pointer',
                       active
-                        ? 'text-neutral-900 dark:text-neutral-100 font-medium'
-                        : 'text-neutral-700 dark:text-neutral-300',
+                        ? 'bg-white dark:bg-neutral-800 shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-neutral-200 dark:ring-neutral-700'
+                        : 'hover:bg-white/70 dark:hover:bg-neutral-800/60',
                     )}
                   >
-                    {tbl.name}
-                  </span>
-                  <span className="text-[10.5px] font-mono tabular-nums text-neutral-400 shrink-0">
-                    {tbl.row_count}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-
-        </div>
-
-        {isMock && (
-          <div className="shrink-0 mx-3 mb-3 rounded-lg border border-dashed border-violet-300 dark:border-violet-800 bg-violet-50/50 dark:bg-violet-950/20 px-2.5 py-2">
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-violet-700 dark:text-violet-300">
-              <Sparkle className="w-3 h-3" weight="fill" />
-              목업 데이터
+                    <TableIcon
+                      className={clsx(
+                        'w-3.5 h-3.5 shrink-0',
+                        active ? 'text-neutral-700 dark:text-neutral-300' : 'text-neutral-400',
+                      )}
+                    />
+                    <span
+                      className={clsx(
+                        'text-[13px] font-mono truncate flex-1',
+                        active
+                          ? 'text-neutral-900 dark:text-neutral-100 font-medium'
+                          : 'text-neutral-700 dark:text-neutral-300',
+                      )}
+                    >
+                      {tbl.name}
+                    </span>
+                    <span className="text-[10.5px] font-mono tabular-nums text-neutral-400 shrink-0">
+                      {tbl.row_count}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
-            <p className="text-[11px] text-violet-600/80 dark:text-violet-400/80 leading-snug mt-0.5">
-              실제 테이블이 없어 미리보기를 보여줍니다.
-            </p>
           </div>
-        )}
-      </aside>
+
+        </aside>
 
         {/* Right: table body */}
         <div className="flex-1 flex flex-col min-w-0">
           {selectedTable && rows ? (
+            <>
             <div className="flex-1 overflow-auto">
               {rows.columns.length > 0 ? (
                 <table className="w-full text-[13px] border-separate border-spacing-0">
@@ -507,14 +416,11 @@ export function DatabaseView() {
                   <tbody>
                     {displayRows.length === 0 ? (
                       <tr>
-                        <td
-                          colSpan={rows.columns.length}
-                          className="text-center px-3 py-16"
-                        >
+                        <td colSpan={rows.columns.length} className="text-center px-3 py-16">
                           <div className="text-[13px] text-neutral-400">
                             {rows.rows.length === 0
-                              ? '비어있는 테이블입니다'
-                              : '필터 조건에 맞는 행이 없습니다'}
+                              ? t('records.db.emptyTable')
+                              : t('records.db.noFilterMatch')}
                           </div>
                         </td>
                       </tr>
@@ -542,12 +448,55 @@ export function DatabaseView() {
                   </tbody>
                 </table>
               ) : (
-                <div className="p-6 text-[13px] text-neutral-400">데이터 로딩 중…</div>
+                <div className="p-6 text-[13px] text-neutral-400">
+                  {t('records.db.loadingData')}
+                </div>
               )}
             </div>
+            {(() => {
+              const totalPages = Math.max(1, Math.ceil(rows.total / PAGE_SIZE))
+              if (totalPages <= 1) return null
+              return (
+                <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-800 px-6 h-10 flex items-center justify-between gap-3">
+                  <span className="text-[11.5px] text-neutral-400">
+                    {(filters.length > 0 || sortRules.length > 0) &&
+                      t('records.db.filterPageHint')}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      disabled={page <= 1}
+                      aria-label={t('records.db.prevPage')}
+                      title={t('records.db.prevPage')}
+                      className="h-7 w-7 rounded-md border border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-300 flex items-center justify-center hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent cursor-pointer"
+                    >
+                      <CaretLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="text-[11.5px] text-neutral-500 font-mono tabular-nums min-w-[96px] text-center">
+                      {t('records.db.pageOf', {
+                        page: String(page),
+                        pages: String(totalPages),
+                      })}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                      disabled={page >= totalPages}
+                      aria-label={t('records.db.nextPage')}
+                      title={t('records.db.nextPage')}
+                      className="h-7 w-7 rounded-md border border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-300 flex items-center justify-center hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent cursor-pointer"
+                    >
+                      <CaretRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )
+            })()}
+            </>
           ) : (
             <div className="flex-1 flex items-center justify-center text-[13px] text-neutral-400">
-              {loading ? '로딩 중…' : '테이블을 선택하세요'}
+              {loading ? t('records.db.loading') : t('records.db.selectTable')}
             </div>
           )}
         </div>
@@ -581,135 +530,6 @@ function usePopoverClose(
   return panelRef
 }
 
-function FilterPopover({
-  anchorRef,
-  columns,
-  colKinds,
-  filters,
-  onChange,
-  onClose,
-}: {
-  anchorRef: React.RefObject<HTMLButtonElement | null>
-  columns: string[]
-  colKinds: Record<string, ColKind>
-  filters: FilterRule[]
-  onChange: (next: FilterRule[]) => void
-  onClose: () => void
-}) {
-  const panelRef = usePopoverClose(anchorRef, onClose)
-  const addFilter = () => {
-    const col = columns[0]
-    if (!col) return
-    const kind = colKinds[col] ?? 'string'
-    const op = (OPS_BY_KIND[kind][0] ?? 'contains') as FilterOp
-    const id = `f-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    onChange([...filters, { id, column: col, op, value: '' }])
-  }
-  const update = (id: string, patch: Partial<FilterRule>) => {
-    onChange(
-      filters.map((f) => {
-        if (f.id !== id) return f
-        const next = { ...f, ...patch }
-        // If column changed, reset op to first valid op for new kind
-        if (patch.column && patch.column !== f.column) {
-          const kind = colKinds[patch.column] ?? 'string'
-          next.op = (OPS_BY_KIND[kind][0] ?? 'contains') as FilterOp
-          next.value = ''
-        }
-        return next
-      }),
-    )
-  }
-  const remove = (id: string) => onChange(filters.filter((f) => f.id !== id))
-
-  return (
-    <div
-      ref={panelRef}
-      className="absolute right-0 top-9 z-30 w-[420px] rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-[0_8px_24px_rgba(0,0,0,0.08)] px-3 py-3"
-    >
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-neutral-500">
-          필터
-        </span>
-        {filters.length > 0 && (
-          <button
-            type="button"
-            onClick={() => onChange([])}
-            className="text-[11.5px] text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 cursor-pointer"
-          >
-            초기화
-          </button>
-        )}
-      </div>
-      {filters.length === 0 ? (
-        <div className="text-[12px] text-neutral-400 py-3 text-center">
-          설정된 필터가 없습니다
-        </div>
-      ) : (
-        <div className="space-y-1.5">
-          {filters.map((f) => {
-            const kind = colKinds[f.column] ?? 'string'
-            const ops = OPS_BY_KIND[kind]
-            const needsValue = !NO_VALUE_OPS.has(f.op)
-            return (
-              <div key={f.id} className="flex items-center gap-1.5">
-                <select
-                  value={f.column}
-                  onChange={(e) => update(f.id, { column: e.target.value })}
-                  className="h-7 px-1.5 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-[12px] font-mono min-w-0 flex-1 cursor-pointer focus:outline-none focus:border-neutral-400"
-                >
-                  {columns.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={f.op}
-                  onChange={(e) => update(f.id, { op: e.target.value as FilterOp })}
-                  className="h-7 px-1.5 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-[12px] cursor-pointer focus:outline-none focus:border-neutral-400"
-                >
-                  {ops.map((op) => (
-                    <option key={op} value={op}>
-                      {OP_LABEL[op]}
-                    </option>
-                  ))}
-                </select>
-                {needsValue ? (
-                  <input
-                    value={f.value}
-                    onChange={(e) => update(f.id, { value: e.target.value })}
-                    placeholder={kind === 'number' ? '0' : kind === 'date' ? 'YYYY-MM-DD' : ''}
-                    className="h-7 px-2 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-[12px] font-mono w-[130px] focus:outline-none focus:border-neutral-400"
-                  />
-                ) : (
-                  <span className="w-[130px]" />
-                )}
-                <button
-                  type="button"
-                  onClick={() => remove(f.id)}
-                  className="w-7 h-7 rounded-md flex items-center justify-center text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer shrink-0"
-                  aria-label="필터 제거"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )
-          })}
-        </div>
-      )}
-      <button
-        type="button"
-        onClick={addFilter}
-        className="mt-2 w-full h-7 rounded-md border border-dashed border-neutral-200 dark:border-neutral-800 text-[12px] text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 hover:border-neutral-300 dark:hover:border-neutral-700 flex items-center justify-center gap-1.5 cursor-pointer"
-      >
-        <Plus className="w-3.5 h-3.5" />
-        필터 추가
-      </button>
-    </div>
-  )
-}
-
 function SortPopover({
   anchorRef,
   columns,
@@ -723,34 +543,31 @@ function SortPopover({
   onChange: (next: SortRule[]) => void
   onClose: () => void
 }) {
+  const t = useT()
   const panelRef = usePopoverClose(anchorRef, onClose)
-  const used = new Set(rules.map((r) => r.column))
-  const available = columns.filter((c) => !used.has(c))
+  const ruleByCol = new Map(rules.map((r) => [r.column, r] as const))
 
-  const addRule = () => {
-    const col = available[0]
-    if (!col) return
-    onChange([...rules, { column: col, dir: 'asc' }])
+  const toggle = (column: string, dir: SortDir) => {
+    const existing = ruleByCol.get(column)
+    if (!existing) {
+      onChange([...rules, { column, dir }])
+      return
+    }
+    if (existing.dir === dir) {
+      onChange(rules.filter((r) => r.column !== column))
+      return
+    }
+    onChange(rules.map((r) => (r.column === column ? { ...r, dir } : r)))
   }
-  const update = (idx: number, patch: Partial<SortRule>) =>
-    onChange(rules.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
-  const move = (idx: number, dir: -1 | 1) => {
-    const j = idx + dir
-    if (j < 0 || j >= rules.length) return
-    const next = rules.slice()
-    ;[next[idx], next[j]] = [next[j]!, next[idx]!]
-    onChange(next)
-  }
-  const remove = (idx: number) => onChange(rules.filter((_, i) => i !== idx))
 
   return (
     <div
       ref={panelRef}
-      className="absolute right-0 top-9 z-30 w-[360px] rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-[0_8px_24px_rgba(0,0,0,0.08)] px-3 py-3"
+      className="absolute right-0 top-9 z-30 w-[280px] max-h-[360px] overflow-y-auto rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-[0_8px_24px_rgba(0,0,0,0.08)] py-1"
     >
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between px-3 pt-2 pb-1">
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-neutral-500">
-          정렬
+          {t('records.sort.title')}
         </span>
         {rules.length > 0 && (
           <button
@@ -758,95 +575,53 @@ function SortPopover({
             onClick={() => onChange([])}
             className="text-[11.5px] text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 cursor-pointer"
           >
-            초기화
+            {t('records.sort.reset')}
           </button>
         )}
       </div>
-      {rules.length === 0 ? (
-        <div className="text-[12px] text-neutral-400 py-3 text-center">
-          설정된 정렬이 없습니다
-        </div>
-      ) : (
-        <div className="space-y-1.5">
-          {rules.map((r, idx) => (
-            <div key={r.column} className="flex items-center gap-1.5">
-              <span className="text-[10.5px] font-mono tabular-nums text-neutral-400 w-4 text-right shrink-0">
-                {idx + 1}
+      <div>
+        {columns.map((c) => {
+          const rule = ruleByCol.get(c)
+          return (
+            <div
+              key={c}
+              className="flex items-center gap-2 px-3 py-1.5 hover:bg-neutral-50 dark:hover:bg-neutral-900/60"
+            >
+              <span className="text-[13px] font-mono text-neutral-800 dark:text-neutral-200 truncate flex-1">
+                {c}
               </span>
-              <select
-                value={r.column}
-                onChange={(e) => update(idx, { column: e.target.value })}
-                className="h-7 px-1.5 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-[12px] font-mono flex-1 min-w-0 cursor-pointer focus:outline-none focus:border-neutral-400"
-              >
-                {/* Current column always selectable; other used columns excluded */}
-                {columns
-                  .filter((c) => c === r.column || !used.has(c))
-                  .map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-              </select>
               <button
                 type="button"
-                onClick={() =>
-                  update(idx, { dir: r.dir === 'asc' ? 'desc' : 'asc' })
-                }
-                className="h-7 px-2 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-[11.5px] flex items-center gap-1 hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
-              >
-                {r.dir === 'asc' ? (
-                  <>
-                    <ArrowUp className="w-3 h-3" />
-                    asc
-                  </>
-                ) : (
-                  <>
-                    <ArrowDown className="w-3 h-3" />
-                    desc
-                  </>
+                onClick={() => toggle(c, 'asc')}
+                aria-label={t('records.sort.asc')}
+                title={t('records.sort.asc')}
+                className={clsx(
+                  'w-7 h-6 rounded flex items-center justify-center cursor-pointer',
+                  rule?.dir === 'asc'
+                    ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
+                    : 'text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800',
                 )}
+              >
+                <ArrowUp className="w-3.5 h-3.5" />
               </button>
-              <div className="flex flex-col shrink-0">
-                <button
-                  type="button"
-                  onClick={() => move(idx, -1)}
-                  disabled={idx === 0}
-                  className="w-5 h-3.5 rounded-sm flex items-center justify-center text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 disabled:cursor-default cursor-pointer"
-                  aria-label="우선순위 위로"
-                >
-                  <ArrowUp className="w-2.5 h-2.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => move(idx, 1)}
-                  disabled={idx === rules.length - 1}
-                  className="w-5 h-3.5 rounded-sm flex items-center justify-center text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 disabled:cursor-default cursor-pointer"
-                  aria-label="우선순위 아래로"
-                >
-                  <ArrowDown className="w-2.5 h-2.5" />
-                </button>
-              </div>
               <button
                 type="button"
-                onClick={() => remove(idx)}
-                className="w-7 h-7 rounded-md flex items-center justify-center text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer shrink-0"
-                aria-label="정렬 제거"
+                onClick={() => toggle(c, 'desc')}
+                aria-label={t('records.sort.desc')}
+                title={t('records.sort.desc')}
+                className={clsx(
+                  'w-7 h-6 rounded flex items-center justify-center cursor-pointer',
+                  rule?.dir === 'desc'
+                    ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
+                    : 'text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800',
+                )}
               >
-                <X className="w-3.5 h-3.5" />
+                <ArrowDown className="w-3.5 h-3.5" />
               </button>
             </div>
-          ))}
-        </div>
-      )}
-      <button
-        type="button"
-        onClick={addRule}
-        disabled={available.length === 0}
-        className="mt-2 w-full h-7 rounded-md border border-dashed border-neutral-200 dark:border-neutral-800 text-[12px] text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 hover:border-neutral-300 dark:hover:border-neutral-700 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-default"
-      >
-        <Plus className="w-3.5 h-3.5" />
-        정렬 추가
-      </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -867,9 +642,7 @@ function Cell({ value }: { value: unknown }) {
   }
   if (typeof value === 'number') {
     return (
-      <span className="text-neutral-800 dark:text-neutral-200 tabular-nums">
-        {String(value)}
-      </span>
+      <span className="text-neutral-800 dark:text-neutral-200 tabular-nums">{String(value)}</span>
     )
   }
   if (typeof value === 'object') {
@@ -905,4 +678,3 @@ function Cell({ value }: { value: unknown }) {
     </span>
   )
 }
-

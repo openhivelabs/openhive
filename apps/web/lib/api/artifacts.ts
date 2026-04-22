@@ -68,3 +68,14 @@ export async function fetchArtifactsDetailed(teamId: string): Promise<ArtifactDe
 export function downloadUrl(artifactId: string): string {
   return `/api/artifacts/${encodeURIComponent(artifactId)}/download`
 }
+
+export async function revealArtifact(artifactId: string): Promise<void> {
+  const resp = await fetch(
+    `/api/artifacts/${encodeURIComponent(artifactId)}/reveal`,
+    { method: 'POST' },
+  )
+  if (!resp.ok) {
+    const body = (await resp.json().catch(() => ({}))) as { detail?: string }
+    throw new Error(body.detail || `Reveal failed (${resp.status})`)
+  }
+}
