@@ -34,3 +34,35 @@ describe('team-data params', () => {
     expect(r.rows).toEqual([{ a: 1, b: null }])
   })
 })
+
+describe('single-statement guard', () => {
+  beforeEach(() => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openhive-td-'))
+    process.env.OPENHIVE_DATA_DIR = tmp
+  })
+
+  it('rejects multiple statements in runQuery', () => {
+    expect(() =>
+      runQuery('acme', 'sales', 'SELECT 1; SELECT 2'),
+    ).toThrow(/multi_statement/)
+  })
+
+  it('rejects multiple statements in runExec', () => {
+    expect(() =>
+      runExec('acme', 'sales', 'CREATE TABLE a(x INT); CREATE TABLE b(y INT)'),
+    ).toThrow(/multi_statement/)
+  })
+
+  it('allows trailing semicolon + whitespace', () => {
+    runExec('acme', 'sales', 'CREATE TABLE t (x INT);  \n  ')
+    const r = runQuery('acme', 'sales', 'SELECT name FROM sqlite_master WHERE type = ? ;', {
+      params: ['table'],
+    })
+    expect(r.rows.some((r) => (r as { name: string }).name === 't')).toBe(true)
+  })
+
+  it('ignores trailing comments', () => {
+    runExec('acme', 'sales', 'CREATE TABLE t (x INT); -- done')
+    runExec('acme', 'sales', 'CREATE TABLE u (y INT); /* trailing block */')
+  })
+})

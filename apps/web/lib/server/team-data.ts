@@ -27,7 +27,12 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 `
 
 export function teamDbPath(companySlug: string, teamSlug: string): string {
-  const dir = teamDir(companySlug, teamSlug)
+  // Honor OPENHIVE_DATA_DIR env directly so tests that swap tmp dirs per-test
+  // don't get pinned to the cached getSettings() value.
+  const envRoot = process.env.OPENHIVE_DATA_DIR
+  const dir = envRoot
+    ? path.join(envRoot, 'companies', companySlug, 'teams', teamSlug)
+    : teamDir(companySlug, teamSlug)
   fs.mkdirSync(dir, { recursive: true })
   return path.join(dir, 'data.db')
 }
@@ -137,6 +142,79 @@ export function describeSchema(
 const SELECT_RE = /^\s*(SELECT|WITH)\b/i
 const DDL_RE = /^\s*(CREATE|ALTER|DROP|TRUNCATE|RENAME)\b/i
 
+/**
+ * Return true if `sql` contains more than one statement. We strip line and
+ * block comments, then check whether any non-whitespace character appears
+ * after the first top-level semicolon (ignoring semicolons inside string
+ * literals).
+ */
+export function hasMultipleStatements(sql: string): boolean {
+  let i = 0
+  let inSingle = false
+  let inDouble = false
+  let inLineComment = false
+  let inBlockComment = false
+  let sawStatementEnd = false
+  while (i < sql.length) {
+    const c = sql[i]
+    const next = sql[i + 1]
+    if (inLineComment) {
+      if (c === '\n') inLineComment = false
+      i++
+      continue
+    }
+    if (inBlockComment) {
+      if (c === '*' && next === '/') {
+        inBlockComment = false
+        i += 2
+        continue
+      }
+      i++
+      continue
+    }
+    if (inSingle) {
+      if (c === "'") inSingle = false
+      i++
+      continue
+    }
+    if (inDouble) {
+      if (c === '"') inDouble = false
+      i++
+      continue
+    }
+    if (c === '-' && next === '-') {
+      inLineComment = true
+      i += 2
+      continue
+    }
+    if (c === '/' && next === '*') {
+      inBlockComment = true
+      i += 2
+      continue
+    }
+    if (c === "'") {
+      inSingle = true
+      i++
+      continue
+    }
+    if (c === '"') {
+      inDouble = true
+      i++
+      continue
+    }
+    if (c === ';') {
+      sawStatementEnd = true
+      i++
+      continue
+    }
+    if (sawStatementEnd && !/\s/.test(c)) {
+      return true
+    }
+    i++
+  }
+  return false
+}
+
 export interface QueryResult {
   columns: string[]
   rows: Record<string, unknown>[]
@@ -154,6 +232,11 @@ export function runQuery(
   sql: string,
   opts: RunQueryOptions = {},
 ): QueryResult {
+  if (hasMultipleStatements(sql)) {
+    const err = new Error('multi_statement: only one SQL statement per call')
+    ;(err as Error & { code?: string }).code = 'multi_statement'
+    throw err
+  }
   if (!SELECT_RE.test(sql)) {
     throw new Error('run_query accepts only SELECT/WITH statements')
   }
@@ -193,6 +276,11 @@ export function runExec(
   sql: string,
   opts: RunExecOptions = {},
 ): ExecResult {
+  if (hasMultipleStatements(sql)) {
+    const err = new Error('multi_statement: only one SQL statement per call')
+    ;(err as Error & { code?: string }).code = 'multi_statement'
+    throw err
+  }
   const isDdl = DDL_RE.test(sql)
   const source = opts.source ?? 'ai'
   const note = opts.note ?? null
