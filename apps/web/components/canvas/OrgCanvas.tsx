@@ -4,9 +4,7 @@ import {
   Background,
   BackgroundVariant,
   type Connection,
-  Controls,
   type EdgeChange,
-  MiniMap,
   type NodeChange,
   ReactFlow,
 } from '@xyflow/react'
@@ -17,6 +15,7 @@ import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
 import { useCanvasStore } from '@/lib/stores/useCanvasStore'
 import type { Agent } from '@/lib/types'
 import { AddAgentButton } from './AddAgentButton'
+import { AgentFrameGalleryModal } from './AgentFrameGalleryModal'
 import { AgentNode, type AgentFlowNode } from './AgentNode'
 import { AskAiAgentModal } from './AskAiAgentModal'
 import { ReportingEdge, type ReportingFlowEdge } from './ReportingEdge'
@@ -40,9 +39,9 @@ function autoLayout(
   agents: { id: string; role?: string }[],
   edges: { source: string; target: string }[],
 ): Record<string, { x: number; y: number }> {
-  const NODE_W = 280
+  const NODE_W = 240
   const H_GAP = 60
-  const LEVEL_H = 160
+  const LEVEL_H = 140
   const incoming: Record<string, string[]> = {}
   const outgoing: Record<string, string[]> = {}
   for (const a of agents) {
@@ -106,9 +105,14 @@ function autoLayout(
 export function OrgCanvas() {
   const team = useCurrentTeam()
   const mode = useAppStore((s) => s.mode)
+  const companySlug = useAppStore((s) => {
+    const c = s.companies.find((x) => x.id === s.currentCompanyId)
+    return c?.slug ?? ''
+  })
   const { addAgent, addEdge, removeAgent, removeEdge } = useCanvasStore()
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
   const [askAiOpen, setAskAiOpen] = useState(false)
+  const [frameGalleryOpen, setFrameGalleryOpen] = useState(false)
 
   const positions = useMemo(() => {
     if (!team) return {}
@@ -232,8 +236,26 @@ export function OrgCanvas() {
   }, [])
 
   const onAiCreated = useCallback(
-    (agent: Agent) => {
+    (agent: Agent, warnings?: string[]) => {
       addAgent(agent)
+      if (warnings && warnings.length > 0) console.warn('[agent generate]', warnings)
+      setEditingAgent(agent)
+    },
+    [addAgent],
+  )
+
+  const addFromFrame = useCallback(() => {
+    setFrameGalleryOpen(true)
+  }, [])
+
+  const onFrameInstalled = useCallback(
+    (agent: Agent, warnings: string[]) => {
+      // Server has already persisted the new agent into the team yaml; we still
+      // call addAgent so the in-memory store matches without waiting for a
+      // refetch. Canvas store will also call saveTeam again — harmless (same
+      // state) and keeps the write path uniform with manual/AI creation.
+      addAgent(agent)
+      if (warnings.length > 0) console.warn('[agent frame install]', warnings)
       setEditingAgent(agent)
     },
     [addAgent],
@@ -250,7 +272,11 @@ export function OrgCanvas() {
   return (
     <div className="h-full w-full relative">
       {mode === 'design' && (
-        <AddAgentButton onAddManual={addManualMember} onAddViaAi={addViaAi} />
+        <AddAgentButton
+          onAddManual={addManualMember}
+          onAddViaAi={addViaAi}
+          onAddFromFrame={addFromFrame}
+        />
       )}
 
       <ReactFlow
@@ -279,15 +305,6 @@ export function OrgCanvas() {
         deleteKeyCode={['Backspace', 'Delete']}
       >
         <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="#e5e5e5" />
-        <Controls showInteractive={false} className="!bg-white !border !border-neutral-200" />
-        <MiniMap
-          pannable
-          zoomable
-          position="bottom-right"
-          className="!bg-white !border !border-neutral-200"
-          nodeColor="#e5e5e5"
-          nodeStrokeWidth={1}
-        />
       </ReactFlow>
 
       <NodeEditor agent={editingAgent} onClose={() => setEditingAgent(null)} />
@@ -295,6 +312,14 @@ export function OrgCanvas() {
         open={askAiOpen}
         onClose={() => setAskAiOpen(false)}
         onCreate={onAiCreated}
+        companySlug={companySlug}
+      />
+      <AgentFrameGalleryModal
+        open={frameGalleryOpen}
+        onClose={() => setFrameGalleryOpen(false)}
+        companySlug={companySlug}
+        teamSlug={team.slug}
+        onInstalled={onFrameInstalled}
       />
     </div>
   )
