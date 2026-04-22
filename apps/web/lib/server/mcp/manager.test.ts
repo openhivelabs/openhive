@@ -1,5 +1,33 @@
 import { describe, expect, it } from 'vitest'
-import { capMcpBody } from './manager'
+import {
+  __resetMcpManagerForTests,
+  capMcpBody,
+  getMcpManager,
+  hasMcpManagerForTest,
+} from './manager'
+
+describe('getMcpManager (lazy singleton)', () => {
+  it('lazily instantiates', () => {
+    __resetMcpManagerForTests()
+    expect(hasMcpManagerForTest()).toBe(false)
+    getMcpManager()
+    expect(hasMcpManagerForTest()).toBe(true)
+  })
+
+  it('returns the same singleton across calls', () => {
+    __resetMcpManagerForTests()
+    const a = getMcpManager()
+    const b = getMcpManager()
+    expect(a).toBe(b)
+  })
+
+  it('does not spawn subprocesses on instantiation', () => {
+    __resetMcpManagerForTests()
+    const mgr = getMcpManager()
+    // No servers touched => snapshot is empty (no subprocesses, no lookups).
+    expect(mgr.statusSnapshot()).toEqual({})
+  })
+})
 
 describe('capMcpBody', () => {
   it('returns body unchanged when under cap', () => {
