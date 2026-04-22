@@ -31,6 +31,8 @@ OpenHive 는 local-first, single-user. 각 team 은 `~/.openhive/companies/{c}/t
 
 모든 tool 은 delegation frame 에서 (company, team) 을 읽는다. LLM 은 슬러그를 전달하지 않는다.
 
+**툴 이름 규칙**: 프로바이더 호환을 위해 `db_*` 언더스코어 (OpenAI 는 `[a-zA-Z0-9_-]` 만 허용). 아래 설명에서 "`db.describe`" 는 `db_describe` 를 의미.
+
 ### `db.describe()`
 - 반환: `{tables: TableInfo[], recent_migrations: MigrationRow[], size_bytes: number, empty: boolean, hint?: string}`
 - `empty: true` (테이블 0개) 이면 `hint: "Design schema via db.exec(CREATE TABLE ...). Read hybrid-schema guide first if unfamiliar."` 동봉 — 부트스트랩 신호.
@@ -68,13 +70,18 @@ OpenHive 는 local-first, single-user. 각 team 은 `~/.openhive/companies/{c}/t
 
 ### 권한 선언 (`tools.yaml` 확장)
 
+기존 `team_data:` 키를 확장한다 (새 네임스페이스 안 만듦 — 이미 있는 필드 재사용).
+
 ```yaml
-db:
-  read: true       # false | true
-  write: true      # false | true | "ask"
-  ddl: true        # false | true | "ask"
-  templates: ["crm", "inbox"]   # install_template 허용 목록, 생략 시 빈 배열
+team_data:
+  read: true       # false | true  (기존)
+  write: true      # false | true | "ask"  (기존 확장: "ask" 추가)
+  ddl: true        # false | true | "ask"  (신규)
+  templates: ["crm", "inbox"]   # 신규. install_template 허용 목록
+  # 기존: tables, write_fields — 현 파서 유지
 ```
+
+**"ask" 처리 v1**: pending-approval UI 는 별도 스펙. v1 에서 `"ask"` 는 `{error_code: "needs_approval"}` 로 거부 + suggestion 에 "유저에게 권한 확대 요청" 안내. 실제 유저 승인 워크플로는 follow-up.
 
 **기본값 (persona 에 `db:` 키 없음)**: `db.*` tool 자체가 비활성. persona 가 명시적으로 선언해야 활성.
 
@@ -146,14 +153,9 @@ packages/skills/db/
 
 - Tool registry (`apps/web/lib/server/tools/base.ts` 패턴) 에 등록. persona 의 `tools.yaml` 파싱 단계에서 `db:` 키 유무로 tool 목록에 include/exclude.
 - (company, team) 은 엔진이 delegation frame 에 이미 들고 있는 값. tool handler 의 `ctx` 에서 꺼내 사용.
-- 각 호출이 typed Event 를 `events.jsonl` 에 append:
-  - `db.query.started { sql_preview, params_count }`
-  - `db.query.completed { rows, truncated, elapsed_ms }`
-  - `db.exec.applied { rows_changed, ddl, migration_id? }`
-  - `db.denied { error_code, sql_preview }`
-  - `db.pending_approval { sql_preview, kind }`
-- Run 캔버스 Timeline 은 이 이벤트들을 다른 step 처럼 자동 렌더. Side channel 만들지 않는다 (아키텍처 규칙).
-- `sql_preview` 는 앞 200자 + `...`. 전체 SQL 은 필요 시 별도 inspector 에서 (보안상 이벤트 스트림을 가볍게).
+- 엔진이 이미 모든 tool handler 를 `tool_call` / `tool_result` 이벤트로 감싼다 → 새 이벤트 타입 추가 없음. 핸들러가 JSON 반환하면 `tool_result.content` 에 그대로 담겨 Timeline 에 나옴.
+- 핸들러 반환 JSON 에 `elapsed_ms`, `rows_changed`, `migration_id`, `error_code` 등을 구조화해 실어 보내는 것이 "typed event" 역할을 함.
+- `sql_preview` 개념은 tool_call.arguments 에 이미 SQL 이 담기므로 별도 처리 불필요.
 
 ## `team-data.ts` 확장 필요 사항
 
