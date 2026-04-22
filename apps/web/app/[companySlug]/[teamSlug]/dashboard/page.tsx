@@ -9,6 +9,7 @@ import {
   Note,
   Package,
   PencilSimple,
+  Plus,
   Sparkle,
   Table as TableIcon,
   TrendUp,
@@ -35,11 +36,11 @@ import {
 import {
   fetchSchema,
   fetchTableRows,
-  installTemplate,
   type QueryResult,
   type SchemaResponse,
 } from '@/lib/api/teamData'
 import { useAppStore } from '@/lib/stores/useAppStore'
+import { useT } from '@/lib/i18n'
 
 const STAGE_ORDER = ['prospect', 'qualified', 'proposal', 'won', 'lost'] as const
 const STAGE_LABEL: Record<string, string> = {
@@ -50,19 +51,7 @@ const STAGE_LABEL: Record<string, string> = {
   lost: 'Lost',
 }
 
-const DEFAULT_LAYOUT: DashboardLayout = {
-  blocks: [
-    { id: 'kpi-customers', type: 'kpi', title: 'Total customers', colSpan: 1, rowSpan: 1, props: { metric: 'total_customers', hint: '활성 고객 레코드' } },
-    { id: 'kpi-pipeline', type: 'kpi', title: 'Pipeline value', colSpan: 1, rowSpan: 1, props: { metric: 'pipeline_value', hint: '열린 거래 합계' } },
-    { id: 'kpi-win', type: 'kpi', title: 'Win rate', colSpan: 1, rowSpan: 1, props: { metric: 'win_rate', hint: '지난 분기 기준' } },
-    { id: 'kpi-activity', type: 'kpi', title: 'Activity today', colSpan: 1, rowSpan: 1, props: { metric: 'activity_today', hint: '에이전트 + 사용자 이벤트' } },
-    { id: 'kanban-pipe', type: 'kanban', title: 'Sales pipeline', subtitle: 'stage별 고객', colSpan: 3, rowSpan: 2, props: { table: 'customer', groupBy: 'stage' } },
-    { id: 'note-team', type: 'note', title: 'Quick note', colSpan: 1, rowSpan: 2, props: { text: '이 블록은 팀 메모용입니다.\n\n• 이번 주 목표: 신규 리드 10건\n• 집중 고객: Acme Corp\n• 차주 미팅: —\n\n(자유 편집 · 마크다운 대응 예정)' } },
-    { id: 'table-cust', type: 'table', title: 'Customers', colSpan: 3, rowSpan: 1, props: { table: 'customer' } },
-    { id: 'chart-stage', type: 'chart', title: 'Stage distribution', colSpan: 1, rowSpan: 1, props: { table: 'customer', groupBy: 'stage', kind: 'bars' } },
-    { id: 'activity-feed', type: 'activity', title: 'Recent activity', colSpan: 4, rowSpan: 1, props: {} },
-  ],
-}
+const DEFAULT_LAYOUT: DashboardLayout = { blocks: [] }
 
 const ICON: Record<string, typeof TrendUp> = {
   kpi: TrendUp,
@@ -74,10 +63,10 @@ const ICON: Record<string, typeof TrendUp> = {
 }
 
 export default function DashboardPage() {
+  const t = useT()
   const teamId = useAppStore((s) => s.currentTeamId)
   const [schema, setSchema] = useState<SchemaResponse | null>(null)
   const [customers, setCustomers] = useState<QueryResult | null>(null)
-  const [installing, setInstalling] = useState(false)
   const [layout, setLayout] = useState<DashboardLayout | null>(null)
   const [editing, setEditing] = useState(false)
   const [aiOpen, setAiOpen] = useState(false)
@@ -168,7 +157,6 @@ export default function DashboardPage() {
     [layout, persist],
   )
 
-  const hasTemplate = !!schema?.tables.some((t) => t.name === 'customer')
   const customerRows = customers?.rows ?? []
   const totalValue = customerRows.reduce(
     (acc, r) => acc + (typeof r.value === 'number' ? r.value : Number(r.value ?? 0)),
@@ -217,70 +205,70 @@ export default function DashboardPage() {
     setEditing(false)
   }, [teamId])
 
-  async function onInstallCrm() {
-    if (!teamId) return
-    setInstalling(true)
-    try {
-      await installTemplate(teamId, 'crm')
-      const s = await fetchSchema(teamId)
-      setSchema(s)
-    } finally {
-      setInstalling(false)
-    }
-  }
-
   return (
     <div className="h-full flex overflow-hidden bg-neutral-50 dark:bg-neutral-950">
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex-1 overflow-auto p-4">
-        <div className="max-w-[1400px] mx-auto mb-3 flex items-center gap-2">
+        <div className="flex-1 min-h-0 flex flex-col p-4">
+        <div className="mb-3 flex items-center gap-2 shrink-0">
           {editing ? (
             <>
               <button
                 type="button"
                 onClick={() => setAddPanelOpen(true)}
-                className="h-9 px-3 rounded-sm bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 text-[14px] font-medium flex items-center gap-1.5 hover:opacity-90 cursor-pointer"
+                className="h-9 pl-3 pr-3.5 rounded-full bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 text-[13px] font-medium inline-flex items-center gap-1.5 shadow-sm hover:opacity-90 cursor-pointer"
               >
-                + 패널 추가
+                <Plus weight="bold" className="w-3.5 h-3.5" />
+                {t('dashboard.addPanel')}
               </button>
-              <button
-                type="button"
-                onClick={() => setAiOpen((v) => !v)}
-                className={
-                  aiOpen
-                    ? 'h-9 px-3 rounded-sm bg-amber-500 text-white text-[14px] font-medium flex items-center gap-1.5 cursor-pointer'
-                    : 'h-9 px-3 rounded-sm border border-amber-400 text-amber-600 dark:text-amber-300 text-[14px] font-medium flex items-center gap-1.5 hover:bg-amber-50 dark:hover:bg-amber-950/40 cursor-pointer'
-                }
-              >
-                <Sparkle weight="fill" className="w-3.5 h-3.5" />
-                커스터마이즈
-              </button>
-              <button
-                type="button"
-                onClick={() => leaveEdit(true)}
-                className="h-9 px-3 rounded-sm border border-neutral-300 dark:border-neutral-700 text-[14px] text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
-              >
-                완료
-              </button>
+              <div className="inline-flex items-center h-9 rounded-full bg-white dark:bg-neutral-900 ring-1 ring-neutral-200 dark:ring-neutral-800 shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setAiOpen((v) => !v)}
+                  className={
+                    aiOpen
+                      ? 'h-full px-3 text-[13px] font-medium text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 inline-flex items-center gap-1.5 cursor-pointer'
+                      : 'h-full px-3 text-[13px] font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-800 inline-flex items-center gap-1.5 cursor-pointer'
+                  }
+                >
+                  <Sparkle weight="fill" className="w-3.5 h-3.5 text-amber-500" />
+                  {t('dashboard.aiCustomize')}
+                </button>
+                <div className="w-px h-4 bg-neutral-200 dark:bg-neutral-800" />
+                <button
+                  type="button"
+                  onClick={() => leaveEdit(true)}
+                  className="h-full px-3 text-[13px] font-medium text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
+                >
+                  {t('dashboard.done')}
+                </button>
+              </div>
             </>
           ) : (
             <button
               type="button"
               onClick={enterEdit}
-              className="h-9 px-3 rounded-sm bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-[14px] font-medium flex items-center gap-1.5 hover:opacity-90 cursor-pointer"
+              className="h-9 pl-3 pr-3.5 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-[13px] font-medium inline-flex items-center gap-1.5 shadow-sm hover:opacity-90 cursor-pointer"
             >
               <PencilSimple className="w-3.5 h-3.5" />
-              편집
+              {t('dashboard.edit')}
             </button>
           )}
         </div>
 
+        <div className="flex-1 min-h-0 overflow-auto">
         {schema === null ? (
           // Loading: render nothing rather than flash EmptyState before we know
           // whether this team actually has a populated dashboard.
           <div className="h-full" aria-hidden="true" />
-        ) : !hasTemplate ? (
-          <EmptyState onInstall={onInstallCrm} installing={installing} />
+        ) : (layout?.blocks.length ?? 0) === 0 ? (
+          editing ? (
+            <EditEmptyState
+              onAdd={() => setAddPanelOpen(true)}
+              onAskAi={() => setAiOpen(true)}
+            />
+          ) : (
+            <EmptyState />
+          )
         ) : (
           <div className="grid grid-cols-4 auto-rows-[180px] gap-3 max-w-[1400px] mx-auto">
             {(layout?.blocks ?? []).map((spec) => (
@@ -302,6 +290,7 @@ export default function DashboardPage() {
             ))}
           </div>
         )}
+        </div>
         </div>
       </div>
       <AiEditDrawer
@@ -626,7 +615,8 @@ function StageBars({
   )
 }
 
-function EmptyState({ onInstall, installing }: { onInstall: () => void; installing: boolean }) {
+function EmptyState() {
+  const t = useT()
   return (
     <div className="h-full flex items-center justify-center">
       <div className="max-w-[460px] text-center">
@@ -634,28 +624,65 @@ function EmptyState({ onInstall, installing }: { onInstall: () => void; installi
           <Package className="w-5 h-5 text-neutral-500" />
         </div>
         <div className="text-[15px] font-semibold text-neutral-900 dark:text-neutral-100">
-          이 팀의 대시보드가 비어있어요
+          {t('dashboard.empty.title')}
         </div>
         <p className="text-[14px] text-neutral-500 mt-1 leading-relaxed">
-          블록을 직접 추가하거나, 도메인 템플릿을 설치해 기본 레이아웃을 불러올 수 있습니다. 블록은
-          자유롭게 배치 가능하며 템플릿에서 꺼낸 블록도 이후 편집할 수 있습니다.
+          {t('dashboard.empty.desc')}
         </p>
-        <div className="mt-4 flex items-center justify-center gap-2">
-          <button
-            type="button"
-            onClick={onInstall}
-            disabled={installing}
-            className="h-8 px-3 rounded-sm bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-[14px] font-medium hover:opacity-90 disabled:opacity-50 cursor-pointer"
-          >
-            {installing ? 'Installing…' : 'CRM 템플릿 설치'}
-          </button>
-          <button
-            type="button"
-            className="h-8 px-3 rounded-sm border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-200 text-[14px] font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
-          >
-            빈 블록부터 시작
-          </button>
+      </div>
+    </div>
+  )
+}
+
+function EditEmptyState({
+  onAdd,
+  onAskAi,
+}: {
+  onAdd: () => void
+  onAskAi: () => void
+}) {
+  const t = useT()
+  return (
+    <div className="h-full max-w-[1400px] mx-auto">
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onAdd}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onAdd()
+          }
+        }}
+        className="group relative h-full rounded-2xl border border-dashed border-neutral-300 dark:border-neutral-700 hover:border-neutral-400 dark:hover:border-neutral-600 bg-white/40 dark:bg-neutral-900/30 hover:bg-white/70 dark:hover:bg-neutral-900/50 transition-colors cursor-pointer flex flex-col items-center justify-center gap-6 p-10 overflow-hidden"
+        style={{
+          backgroundImage:
+            'radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)',
+          backgroundSize: '18px 18px',
+        }}
+      >
+        <div className="w-14 h-14 rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-neutral-200 dark:ring-neutral-800 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_6px_20px_rgba(0,0,0,0.06)] flex items-center justify-center transition-transform group-hover:-translate-y-0.5">
+          <Plus weight="bold" className="w-6 h-6 text-neutral-700 dark:text-neutral-200" />
         </div>
+        <div className="text-center">
+          <div className="text-[16px] font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
+            {t('dashboard.emptyEdit.title')}
+          </div>
+          <p className="text-[13px] text-neutral-500 dark:text-neutral-400 mt-1.5 max-w-[380px] mx-auto leading-relaxed">
+            {t('dashboard.emptyEdit.desc')}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onAskAi()
+          }}
+          className="h-8 px-3 rounded-full bg-white dark:bg-neutral-900 ring-1 ring-amber-300/70 dark:ring-amber-400/30 text-[13px] font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+        >
+          <Sparkle weight="fill" className="w-3.5 h-3.5 text-amber-500" />
+          {t('dashboard.emptyEdit.askAi')}
+        </button>
       </div>
     </div>
   )
