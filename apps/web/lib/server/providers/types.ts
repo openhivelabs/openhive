@@ -25,6 +25,11 @@ export interface ChatMessage {
   tool_call_id?: string
   /** Optional name on role=tool for OpenAI's shape. */
   name?: string
+  /** Internal — never serialized to provider. Epoch ms timestamp used by
+   *  microcompact to tell whether the last assistant turn is still "hot"
+   *  (within the provider's prefix-cache TTL). Stripped by `buildMessages`
+   *  before the payload leaves the engine. */
+  _ts?: number
 }
 
 export interface ToolSpec {

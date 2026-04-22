@@ -53,14 +53,26 @@ export async function* stream(
   )
 }
 
-/** Build the initial OpenAI-shaped message array for a node. */
+/** Build the initial OpenAI-shaped message array for a node.
+ *
+ *  Strips the internal `_ts` field so provider clients never see it —
+ *  microcompact uses it on the engine-side `history`, but providers only
+ *  want the OpenAI-shaped `{role, content, tool_calls, tool_call_id, name}`.
+ */
 export function buildMessages(
   system: string,
   history: ChatMessage[],
 ): ChatMessage[] {
   const out: ChatMessage[] = []
   if (system) out.push({ role: 'system', content: system })
-  out.push(...history)
+  for (const m of history) {
+    const clean: ChatMessage = { role: m.role }
+    if (m.content !== undefined) clean.content = m.content
+    if (m.tool_calls !== undefined) clean.tool_calls = m.tool_calls
+    if (m.tool_call_id !== undefined) clean.tool_call_id = m.tool_call_id
+    if (m.name !== undefined) clean.name = m.name
+    out.push(clean)
+  }
   return out
 }
 

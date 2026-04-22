@@ -55,6 +55,7 @@ import {
   decideForkOrFresh,
   type TurnSnapshot,
 } from './fork'
+import { maybeMicrocompact } from './microcompact'
 import { stream, buildMessages } from './providers'
 import {
   MAX_CHILD_RESULT_CHARS,
@@ -737,7 +738,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   tools.push(...makePersonaTools(persona))
 
   const history: ChatMessage[] = externalHistory ?? []
-  history.push({ role: 'user', content: task })
+  history.push({ role: 'user', content: task, _ts: Date.now() })
 
   // History sliding-window: Infinity keeps the feature inert by default so
   // existing sessions see byte-identical prompts. Nodes can opt in later by
@@ -825,6 +826,30 @@ interface StreamTurnOpts {
 
 async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
   const { sessionId, team, node, systemPrompt, history, tools, depth } = opts
+  // Time-based microcompact: clear stale read-only tool_result bodies before
+  // the prompt is built. Only applies to Lead (depth === 0); sub-agent
+  // histories are short and ephemeral so ROI is zero. No-op when the last
+  // assistant turn is still within STALE_AFTER_MS (cache hot).
+  if (depth === 0) {
+    const mc = maybeMicrocompact(history, sessionId)
+    for (const e of mc.entries) {
+      yield makeEvent(
+        'microcompact.applied',
+        sessionId,
+        {
+          tool_name: e.tool_name,
+          tool_call_id: e.tool_call_id,
+          original_chars: e.original_chars,
+        },
+        {
+          depth,
+          node_id: node.id,
+          tool_call_id: e.tool_call_id,
+          tool_name: e.tool_name,
+        },
+      )
+    }
+  }
   const messages = buildMessages(systemPrompt, history)
   const openaiTools = opts.toolsOverride ?? (tools.length > 0 ? toolsToOpenAI(tools) : undefined)
 
@@ -997,6 +1022,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       role: 'assistant',
       content: assembledText || null,
       tool_calls: toolCallsForHistory,
+      _ts: Date.now(),
     })
 
     // Split tool_calls into serial-vs-parallel runs. Tools that mutate
@@ -1209,6 +1235,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
         role: 'tool',
         tool_call_id: tc.id,
         content: historyContent,
+        _ts: Date.now(),
       })
       // B1: once a skill script succeeds, reference docs read earlier are
       // dead weight on the prompt. Elide them in-place.

@@ -37,6 +37,8 @@ export type EventKind =
   // S3 — parallel fork
   | 'fork.spawned'
   | 'fork.skipped'
+  // S2 — microcompact
+  | 'microcompact.applied'
 
 export interface Event {
   kind: EventKind
