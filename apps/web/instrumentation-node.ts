@@ -25,14 +25,14 @@ export async function registerNode() {
   const { startScheduler } = await import('./lib/server/scheduler/scheduler')
   const {
     backfillTranscripts,
-    markOrphanedSessionsInterrupted,
+    markOrphanedSessionsIdle,
     pruneLegacyArtifactsRoot,
   } = await import('./lib/server/sessions')
 
   try {
-    const n = await markOrphanedSessionsInterrupted()
+    const n = await markOrphanedSessionsIdle()
     if (n > 0) {
-      console.log(`boot: marked ${n} orphaned session(s) as interrupted`)
+      console.log(`boot: demoted ${n} orphaned running session(s) to idle (resumable)`)
     }
   } catch (exc) {
     console.error('boot: orphan cleanup failed', exc)

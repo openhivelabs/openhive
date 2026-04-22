@@ -285,6 +285,16 @@ function mcpManager() {
 export interface SessionTeamOpts {
   teamSlugs?: [string, string] | null
   locale?: string
+  /** When set, runTeam reuses the given sessionId instead of minting a new
+   *  one, seeds the Lead's chat history with `resume.history`, and emits a
+   *  `user_message` (for the follow-up) instead of a fresh `run_started`.
+   *  `goal` is interpreted as the new user message. Used by
+   *  session-registry.resume() to continue a parked session after its
+   *  original process died. */
+  resume?: {
+    sessionId: string
+    history: ChatMessage[]
+  }
 }
 
 /** Per-session queue of follow-up user messages. The chat loop pops from this
@@ -332,7 +342,7 @@ export async function* runTeam(
   goal: string,
   opts: SessionTeamOpts = {},
 ): AsyncGenerator<Event> {
-  const sessionId = newSessionId()
+  const sessionId = opts.resume?.sessionId ?? newSessionId()
   const sem = getRunSemaphore()
 
   const queued = sem.locked()
@@ -348,7 +358,7 @@ export async function* runTeam(
 
     // Wrap the entire run in the locale context so error formatter sees it.
     const iter = errors.withRunLocale(opts.locale ?? 'en', () =>
-      runTeamBody(team, goal, sessionId),
+      runTeamBody(team, goal, sessionId, opts.resume?.history),
     )
     for await (const ev of iter) yield ev
   } finally {
@@ -369,13 +379,21 @@ async function* runTeamBody(
   team: TeamSpec,
   goal: string,
   sessionId: string,
+  resumeHistory?: ChatMessage[],
 ): AsyncGenerator<Event> {
-  yield makeEvent('run_started', sessionId, { team_id: team.id, goal })
+  const isResume = !!resumeHistory
+  if (isResume) {
+    // Session already exists on disk. `goal` is the new user message — emit
+    // it as user_message so the stream looks identical to a live follow-up.
+    yield makeEvent('user_message', sessionId, { text: goal })
+  } else {
+    yield makeEvent('run_started', sessionId, { team_id: team.id, goal })
+  }
   const entry = entryAgent(team)
   // The Lead's history persists across turns — this is what makes the session
-  // a chat rather than a one-shot run. Each follow-up user message pushes a
-  // new `user` entry and re-enters runNode with the accumulated context.
-  const leadHistory: ChatMessage[] = []
+  // a chat rather than a one-shot run. On resume we seed it from the prior
+  // events.jsonl; otherwise it starts empty and grows as each turn runs.
+  const leadHistory: ChatMessage[] = resumeHistory ? [...resumeHistory] : []
   const inbox = ensureQueue(sessionId)
   let currentTask = goal
   let lastFinal = ''

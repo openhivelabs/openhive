@@ -16,6 +16,8 @@ import {
   type AskUserQuestion,
   type SessionEvent,
   attachSession,
+  deleteSessionRequest,
+  patchSession,
   startSession,
   stopBackendSession,
 } from '../api/sessions'
@@ -40,20 +42,24 @@ interface ServerSessionRow {
   error: string | null
   started_at: number
   finished_at: number | null
+  title?: string | null
+  pinned?: boolean
 }
 
 function mapServerStatus(row: ServerSessionRow): Session['status'] {
   if (row.status === 'running') return 'running'
-  if (row.status === 'finished') return 'done'
-  // Both server 'error' and 'interrupted' collapse to client 'failed'.
-  // Cause is preserved in row.error ('interrupted' | 'cancelled' | <message>).
-  return 'failed'
+  if (row.status === 'needs_input') return 'needs_input'
+  if (row.status === 'error') return 'failed'
+  // 'idle' (new) and legacy 'finished' / 'interrupted' all map to 'done' on
+  // the client. The session is parked without a live generator but fully
+  // resumable — the UI treats idle + done identically for now. Error remains
+  // the only true terminal state.
+  return 'done'
 }
 
 function rowToSession(row: ServerSessionRow): Session {
   return {
     id: row.id,
-    
     taskId: row.task_id,
     teamId: row.team_id,
     goal: row.goal,
@@ -62,6 +68,8 @@ function rowToSession(row: ServerSessionRow): Session {
     endedAt: row.finished_at ? new Date(row.finished_at).toISOString() : undefined,
     error: row.error ?? undefined,
     messages: [],
+    title: row.title ?? null,
+    pinned: row.pinned ?? false,
   }
 }
 
@@ -86,6 +94,8 @@ interface SessionsState {
   stopSession: (id: string) => void
   markViewed: (id: string) => void
   removeSession: (id: string) => void
+  setPinned: (id: string, pinned: boolean) => void
+  setTitle: (id: string, title: string | null) => void
 
   /** Insert or merge a session — used by the tasks store during transition
    *  so task-driven sessions still appear in the Done column as they finish. */
@@ -392,7 +402,25 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
   },
 
   removeSession: (id) => {
+    // Optimistic local remove + fire-and-forget server DELETE so the folder
+    // under ~/.openhive/sessions/{id} is actually gone on disk.
     set((s) => ({ sessions: s.sessions.filter((x) => x.id !== id) }))
+    void deleteSessionRequest(id)
+  },
+
+  setPinned: (id, pinned) => {
+    set((s) => ({
+      sessions: s.sessions.map((x) => (x.id === id ? { ...x, pinned } : x)),
+    }))
+    void patchSession(id, { pinned })
+  },
+
+  setTitle: (id, title) => {
+    const normalized = title && title.trim().length > 0 ? title.trim() : null
+    set((s) => ({
+      sessions: s.sessions.map((x) => (x.id === id ? { ...x, title: normalized } : x)),
+    }))
+    void patchSession(id, { title: normalized })
   },
 
   upsertSession: (session) => {

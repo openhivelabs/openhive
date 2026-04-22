@@ -4,6 +4,7 @@ import {
   CaretDown,
   CaretRight,
   ChatCircle,
+  ChatsCircle,
   CircleNotch,
   Clock,
   DotsThreeVertical,
@@ -76,54 +77,9 @@ function stateInTab(state: SessionState, tab: SessionTabKey): boolean {
   return state === 'failed-fresh' || state === 'failed-seen'
 }
 
-/** 세션 고정/제목 변경/읽음 플래그는 현재 localStorage persist.
- *  (백엔드 meta.json 에 저장 필요해지면 이후 마이그레이션.) */
-const LS_PINNED_KEY = 'openhive.sessions.pinned'
-const LS_TITLES_KEY = 'openhive.sessions.titles'
+/** Pin / rename state lives on the backend (session meta.json). Viewed flag is
+ *  still localStorage-only because there's no server counterpart yet. */
 const LS_VIEWED_KEY = 'openhive.sessions.viewed'
-
-function loadPinnedIds(): Set<string> {
-  try {
-    const raw = localStorage.getItem(LS_PINNED_KEY)
-    if (!raw) return new Set()
-    const arr = JSON.parse(raw)
-    return Array.isArray(arr) ? new Set(arr.filter((x) => typeof x === 'string')) : new Set()
-  } catch {
-    return new Set()
-  }
-}
-
-function savePinnedIds(ids: Set<string>) {
-  try {
-    localStorage.setItem(LS_PINNED_KEY, JSON.stringify(Array.from(ids)))
-  } catch {
-    /* quota/private-mode — ignore */
-  }
-}
-
-function loadRenamedTitles(): Record<string, string> {
-  try {
-    const raw = localStorage.getItem(LS_TITLES_KEY)
-    if (!raw) return {}
-    const obj = JSON.parse(raw)
-    if (!obj || typeof obj !== 'object') return {}
-    const out: Record<string, string> = {}
-    for (const [k, v] of Object.entries(obj)) {
-      if (typeof k === 'string' && typeof v === 'string') out[k] = v
-    }
-    return out
-  } catch {
-    return {}
-  }
-}
-
-function saveRenamedTitles(map: Record<string, string>) {
-  try {
-    localStorage.setItem(LS_TITLES_KEY, JSON.stringify(map))
-  } catch {
-    /* ignore */
-  }
-}
 
 function loadViewedIds(): Set<string> {
   try {
@@ -272,17 +228,15 @@ export function TasksTab() {
   const markSessionViewed = useSessionsStore((s) => s.markViewed)
   const markRunViewed = useTasksStore((s) => s.markRunViewed)
   const removeSession = useSessionsStore((s) => s.removeSession)
+  const setSessionPinned = useSessionsStore((s) => s.setPinned)
+  const setSessionTitle = useSessionsStore((s) => s.setTitle)
 
   const [showNew, setShowNew] = useState(false)
   const { collapsed, toggle: toggleSection } = useCollapsedSections()
-  // 세션 고정 & 제목 변경은 localStorage persist. SSR-safe: 첫 렌더 기본값 →
-  // useEffect 에서 읽어 동기화.
-  const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set())
-  const [renamedTitles, setRenamedTitles] = useState<Record<string, string>>({})
+  // Viewed flag is still localStorage-only. Pin / title are server-backed via
+  // useSessionsStore actions.
   const [viewedIds, setViewedIds] = useState<Set<string>>(new Set())
   useEffect(() => {
-    setPinnedIds(loadPinnedIds())
-    setRenamedTitles(loadRenamedTitles())
     setViewedIds(loadViewedIds())
   }, [])
   const markViewedLocal = (id: string) => {
@@ -295,20 +249,11 @@ export function TasksTab() {
     })
   }
   const togglePinned = (id: string) => {
-    setPinnedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      savePinnedIds(next)
-      return next
-    })
+    const current = allSessions.find((s) => s.id === id)
+    setSessionPinned(id, !(current?.pinned ?? false))
   }
-  const setRenamedTitle = (id: string, title: string) => {
-    setRenamedTitles((prev) => {
-      const next = { ...prev, [id]: title }
-      saveRenamedTitles(next)
-      return next
-    })
+  const renameSession = (id: string, title: string) => {
+    setSessionTitle(id, title)
   }
   const [sessionTab, setSessionTab] = useState<SessionTabKey>('all')
 
@@ -368,10 +313,17 @@ export function TasksTab() {
         s.error ??
         lastMsg?.text ??
         (ownerTask?.prompt.split('\n')[0] ?? s.goal.split('\n')[0] ?? '')
+      // Display title precedence: user-renamed > auto-title > owning task title
+      // > goal slice. All server-backed except the owning-task fallback.
+      const displayTitle =
+        (s.title && s.title.trim().length > 0 ? s.title : null) ??
+        ownerTask?.title ??
+        s.goal.split('\n')[0] ??
+        t('tasks.sessionDefault')
       map.set(key, {
         id: s.id,
         taskId: s.taskId,
-        title: ownerTask?.title ?? s.goal.split('\n')[0] ?? '세션',
+        title: displayTitle,
         preview: (existing?.preview && stateFromSession(s, viewedIds.has(s.id)) !== 'done-seen'
           ? existing.preview
           : preview
@@ -380,26 +332,18 @@ export function TasksTab() {
         timestampIso: s.endedAt ?? s.startedAt,
         relTime: fmtRelative(s.endedAt ?? s.startedAt, t, locale),
         navigable: true,
+        pinned: s.pinned ?? false,
       })
     }
 
     const rows = Array.from(map.values())
-    // Pin / rename overlay 적용.
-    const overlaid = rows.map((r) => {
-      const id = r.id ?? ''
-      return {
-        ...r,
-        pinned: pinnedIds.has(id),
-        title: renamedTitles[id] ?? r.title,
-      }
-    })
-    return overlaid.sort((a, b) => {
+    return rows.sort((a, b) => {
       if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1
       const bucketDiff = STATE_BUCKET[a.state] - STATE_BUCKET[b.state]
       if (bucketDiff !== 0) return bucketDiff
       return Date.parse(b.timestampIso) - Date.parse(a.timestampIso)
     })
-  }, [teamTasks, teamSessions, tasks, t, locale, pinnedIds, renamedTitles, viewedIds])
+  }, [teamTasks, teamSessions, tasks, t, locale, viewedIds])
 
   const sessionTabCounts = useMemo(() => {
     const counts: Record<SessionTabKey, number> = {
@@ -523,7 +467,7 @@ export function TasksTab() {
               className="inline-flex items-center justify-center gap-1 text-[13px] bg-neutral-900 text-white px-2 py-1.5 rounded-sm hover:bg-neutral-800"
             >
               <Plus weight="bold" className="w-3.5 h-3.5" />
-              새 업무
+              {t('tasks.newTask')}
             </button>
             <button
               type="button"
@@ -532,7 +476,7 @@ export function TasksTab() {
               className="inline-flex items-center justify-center gap-1 text-[13px] border border-neutral-300 dark:border-neutral-700 text-neutral-800 dark:text-neutral-100 px-2 py-1.5 rounded-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <ChatCircle weight="regular" className="w-3.5 h-3.5" />
-              새 채팅
+              {t('tasks.newChat')}
             </button>
           </div>
 
@@ -540,14 +484,14 @@ export function TasksTab() {
             {/* 드래프트 — 일회성 템플릿 */}
             <CollapsibleSection
               icon={<FileText className="w-3.5 h-3.5" />}
-              label={t('tasks.drafts') || '드래프트'}
+              label={t('tasks.drafts')}
               count={draftTemplates.length}
               collapsed={collapsed.drafts}
               onToggle={() => toggleSection('drafts')}
             >
               {draftTemplates.length === 0 ? (
                 <div className="px-4 py-3 text-[12px] text-neutral-400 dark:text-neutral-500">
-                  없음
+                  {t('tasks.none')}
                 </div>
               ) : (
                 draftTemplates.map((task) => (
@@ -563,7 +507,7 @@ export function TasksTab() {
             {/* 스케줄 — cron 걸린 템플릿 */}
             <CollapsibleSection
               icon={<Clock className="w-3.5 h-3.5" />}
-              label={t('tasks.scheduled') || '스케줄'}
+              label={t('tasks.scheduled')}
               count={scheduledTemplates.length}
               collapsed={collapsed.scheduled}
               onToggle={() => toggleSection('scheduled')}
@@ -571,7 +515,7 @@ export function TasksTab() {
             >
               {scheduledTemplates.length === 0 ? (
                 <div className="px-4 py-3 text-[12px] text-neutral-400 dark:text-neutral-500">
-                  없음
+                  {t('tasks.none')}
                 </div>
               ) : (
                 scheduledTemplates.map((task) => (
@@ -595,19 +539,7 @@ export function TasksTab() {
             counts={sessionTabCounts}
           />
           {visibleSessions.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center gap-2 text-neutral-400 text-[13px]">
-              <div>
-                {unifiedSessions.length === 0
-                  ? t('tasks.sessionsEmpty') || '아직 세션이 없습니다'
-                  : '이 탭에는 세션이 없습니다'}
-              </div>
-              {unifiedSessions.length === 0 && draftTemplates[0] && (
-                <Button size="sm" variant="outline" onClick={() => play(draftTemplates[0]!)}>
-                  <Sparkle className="w-3.5 h-3.5" />
-                  {draftTemplates[0]?.title}
-                </Button>
-              )}
-            </div>
+            <EmptyInbox t={t} truly={unifiedSessions.length === 0} />
           ) : (
             <div className="flex-1 overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800">
               {visibleSessions.map((u) => {
@@ -627,9 +559,9 @@ export function TasksTab() {
                     onRename={
                       sid
                         ? () => {
-                            const input = window.prompt('새 제목', u.title)
+                            const input = window.prompt(t('tasks.renamePrompt'), u.title)
                             const trimmed = input?.trim()
-                            if (trimmed) setRenamedTitle(sid, trimmed)
+                            if (trimmed) renameSession(sid, trimmed)
                           }
                         : undefined
                     }
@@ -644,6 +576,32 @@ export function TasksTab() {
 
       <NewTaskModal open={showNew} onClose={() => setShowNew(false)} onSubmit={handleCreate} />
       <TaskDetailModal task={selectedTask} onClose={() => selectTask(null)} />
+    </div>
+  )
+}
+
+/** Empty state for the session inbox. Two modes:
+ *   - truly=true  → nothing exists anywhere. Show headline + subtitle + the
+ *     two primary CTAs (새 업무 / 새 채팅) so the user always has a next step,
+ *     plus a tertiary "run this draft" if the rail already has one.
+ *   - truly=false → other tabs have rows but this filter is empty. Softer
+ *     copy, no CTAs — the user just needs to switch tabs. */
+function EmptyInbox({
+  t,
+  truly,
+}: {
+  t: (key: string, vars?: Record<string, string | number>) => string
+  truly: boolean
+}) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center gap-3 px-8 text-center">
+      <ChatsCircle
+        weight="thin"
+        className="w-14 h-14 text-neutral-300 dark:text-neutral-700"
+      />
+      <div className="text-[13px] text-neutral-400 dark:text-neutral-500">
+        {truly ? t('tasks.sessionsEmpty') : t('tasks.noInTab')}
+      </div>
     </div>
   )
 }
@@ -723,35 +681,33 @@ function CollapsibleSection({
  *  실루엣이 전부 동그라미, 내부 글리프와 fill/outline 으로만 상태 차별화.
  *  컬러는 실패에만. 나머지는 뉴트럴. */
 function StateIndicator({ state }: { state: SessionState }) {
+  const t = useT()
   if (state === 'working') {
     return (
       <CircleNotch
         weight="bold"
         className="w-4 h-4 text-neutral-500 dark:text-neutral-400 animate-spin"
-        aria-label="실행 중"
+        aria-label={t('tasks.state.working')}
       />
     )
   }
   if (state === 'waiting') {
-    // 작은 주황 점. 4x4 슬롯 안에 센터 정렬.
     return (
-      <span className="w-4 h-4 flex items-center justify-center" aria-label="답변 필요">
+      <span className="w-4 h-4 flex items-center justify-center" aria-label={t('tasks.state.waiting')}>
         <span className="w-2 h-2 rounded-full bg-amber-500" />
       </span>
     )
   }
   if (state === 'done-fresh') {
-    // 작은 뉴트럴 점.
     return (
-      <span className="w-4 h-4 flex items-center justify-center" aria-label="새 결과">
+      <span className="w-4 h-4 flex items-center justify-center" aria-label={t('tasks.state.doneFresh')}>
         <span className="w-2 h-2 rounded-full bg-neutral-900 dark:bg-neutral-100" />
       </span>
     )
   }
   if (state === 'done-seen') {
-    // 읽기 전 점과 같은 크기(2x2)의 빈 원. 4x4 슬롯 안에 센터 정렬.
     return (
-      <span className="w-4 h-4 flex items-center justify-center" aria-label="완료">
+      <span className="w-4 h-4 flex items-center justify-center" aria-label={t('tasks.state.done')}>
         <span className="w-2 h-2 rounded-full border border-neutral-300 dark:border-neutral-600" />
       </span>
     )
@@ -761,15 +717,14 @@ function StateIndicator({ state }: { state: SessionState }) {
       <Warning
         weight="fill"
         className="w-4 h-4 text-red-600 dark:text-red-500"
-        aria-label="실패"
+        aria-label={t('tasks.state.failed')}
       />
     )
   }
-  // failed-seen
   return (
     <Warning
       className="w-4 h-4 text-red-300 dark:text-red-800"
-      aria-label="실패 (확인됨)"
+      aria-label={t('tasks.state.failedSeen')}
     />
   )
 }
@@ -817,8 +772,8 @@ function TemplateRow({
             e.stopPropagation()
             onRun()
           }}
-          aria-label={t('tasks.session') || t('tasks.startSession') || 'Session'}
-          title={t('tasks.session') || t('tasks.startSession') || 'Session'}
+          aria-label={t('tasks.session')}
+          title={t('tasks.session')}
           className={clsx(
             'shrink-0 w-6 h-6 rounded-sm flex items-center justify-center transition-colors',
             'opacity-0 group-hover:opacity-100',
@@ -847,12 +802,13 @@ function SessionTabBar({
   onChange: (k: SessionTabKey) => void
   counts: Record<SessionTabKey, number>
 }) {
+  const t = useT()
   const tabs: Array<{ key: SessionTabKey; label: string }> = [
-    { key: 'all', label: '전체' },
-    { key: 'waiting', label: '답변 필요' },
-    { key: 'working', label: '진행 중' },
-    { key: 'done', label: '완료' },
-    { key: 'failed', label: '실패' },
+    { key: 'all', label: t('tasks.tab.all') },
+    { key: 'waiting', label: t('tasks.tab.waiting') },
+    { key: 'working', label: t('tasks.tab.working') },
+    { key: 'done', label: t('tasks.tab.done') },
+    { key: 'failed', label: t('tasks.tab.failed') },
   ]
   return (
     <div className="shrink-0 px-3 pt-1 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950">
@@ -927,7 +883,7 @@ function RowMoreMenu({
           if (hasAny) setOpen((v) => !v)
         }}
         disabled={!hasAny}
-        aria-label="더보기"
+        aria-label={t('tasks.more')}
         aria-haspopup="menu"
         aria-expanded={open}
         className={clsx(
@@ -966,7 +922,7 @@ function RowMoreMenu({
             ) : (
               <PushPin className="w-3.5 h-3.5" />
             )}
-            {pinned ? '고정 해제' : '고정'}
+            {pinned ? t('tasks.unpin') : t('tasks.pin')}
           </button>
           <button
             type="button"
@@ -983,7 +939,7 @@ function RowMoreMenu({
             )}
           >
             <PencilSimple className="w-3.5 h-3.5" />
-            제목 변경
+            {t('tasks.rename')}
           </button>
           <div className="my-1 border-t border-neutral-100 dark:border-neutral-800" />
           <button
@@ -1001,7 +957,7 @@ function RowMoreMenu({
             )}
           >
             <Trash className="w-3.5 h-3.5" />
-            {t('tasks.delete') || '삭제'}
+            {t('tasks.delete')}
           </button>
         </div>
       )}

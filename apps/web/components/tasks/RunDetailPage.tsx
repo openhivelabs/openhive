@@ -19,7 +19,7 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'reac
 import { flushSync } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { AskUserModal } from '@/components/modals/AskUserModal'
+import { AskInlineCard } from '@/components/tasks/AskInlineCard'
 import { useT } from '@/lib/i18n'
 import { postAnswer, type AskUserQuestion } from '@/lib/api/sessions'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
@@ -109,6 +109,13 @@ type ChatItem =
       author: string
       summary: string
     }
+  | {
+      kind: 'ask'
+      id: string
+      toolCallId: string
+      questions: AskUserQuestion[]
+      agentRole?: string
+    }
   | { kind: 'error'; id: string; text: string }
 
 function summarizeTool(e: TranscriptEntry): string {
@@ -165,12 +172,10 @@ function buildChat(
         })
         break
       case 'ask_user':
-        out.push({
-          kind: 'assistant',
-          id,
-          author: e.agent_role ?? 'lead',
-          text: '질문이 있습니다. 오른쪽에서 답변을 남겨주세요.',
-        })
+        // Pending ask (if any) is rendered as a live inline card below, after
+        // the base transcript loop. Already-answered asks don't need a
+        // standalone bubble — the following `user_answer` entry renders the
+        // user's choice, which is self-explanatory in context.
         break
       case 'user_answer': {
         const r =
@@ -224,7 +229,6 @@ export function RunDetailPage() {
   const [summary, setSummary] = useState<SessionSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
-  const [showAsk, setShowAsk] = useState(false)
   const [sending, setSending] = useState(false)
   const [pendingUserMessages, setPendingUserMessages] = useState<
     { id: string; text: string }[]
@@ -377,32 +381,54 @@ export function RunDetailPage() {
       ? tasks.find((x) => x.sessions.some((r) => r.id === summary.session_id))
       : null) ?? null
   const pendingAsk = summary?.pending_ask ?? null
-
-  useEffect(() => {
-    if (pendingAsk) setShowAsk(true)
-  }, [pendingAsk?.toolCallId])
+  const [answerBusy, setAnswerBusy] = useState(false)
 
   const submitAnswers = async (answers: Record<string, string>) => {
-    if (!pendingAsk) return
-    try {
-      await postAnswer(pendingAsk.toolCallId, { answers })
+    if (!pendingAsk || !id) return
+    const snapshot = pendingAsk
+    // Optimistic: drop the ask card this frame. Network + resume can take
+    // hundreds of ms; leaving the card visible reads as a UI glitch.
+    flushSync(() => {
+      setAnswerBusy(true)
       setSummary((prev) => (prev ? { ...prev, pending_ask: null } : prev))
+    })
+    try {
+      await postAnswer(snapshot.toolCallId, {
+        answers,
+        sessionId: id,
+        locale: useAppStore.getState().locale,
+      })
     } catch (e) {
       console.error(e)
+      // Restore so the user can retry.
+      setSummary((prev) =>
+        prev ? { ...prev, pending_ask: snapshot } : prev,
+      )
     } finally {
-      setShowAsk(false)
+      setAnswerBusy(false)
     }
   }
 
   const skipAsk = async () => {
-    if (!pendingAsk) return
-    try {
-      await postAnswer(pendingAsk.toolCallId, { skipped: true })
+    if (!pendingAsk || !id) return
+    const snapshot = pendingAsk
+    flushSync(() => {
+      setAnswerBusy(true)
       setSummary((prev) => (prev ? { ...prev, pending_ask: null } : prev))
+    })
+    try {
+      await postAnswer(snapshot.toolCallId, {
+        skipped: true,
+        sessionId: id,
+        locale: useAppStore.getState().locale,
+      })
     } catch (e) {
       console.error(e)
+      setSummary((prev) =>
+        prev ? { ...prev, pending_ask: snapshot } : prev,
+      )
     } finally {
-      setShowAsk(false)
+      setAnswerBusy(false)
     }
   }
 
@@ -432,8 +458,17 @@ export function RunDetailPage() {
       if (serverTexts.has(m.text.trim())) continue
       base.push({ kind: 'user', id: m.id, text: m.text, pending: true })
     }
+    if (pendingAsk) {
+      base.push({
+        kind: 'ask',
+        id: `ask-${pendingAsk.toolCallId}`,
+        toolCallId: pendingAsk.toolCallId,
+        questions: (pendingAsk.questions as AskUserQuestion[]) ?? [],
+        agentRole: pendingAsk.agentRole,
+      })
+    }
     return base
-  }, [summary, team, pendingUserMessages])
+  }, [summary, team, pendingUserMessages, pendingAsk])
 
   // Once the server transcript catches up with a pending bubble, drop it
   // from state so it doesn't linger as a stale entry.
@@ -473,7 +508,7 @@ export function RunDetailPage() {
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text, locale: useAppStore.getState().locale }),
         },
       )
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -551,22 +586,6 @@ export function RunDetailPage() {
         </div>
       </div>
 
-      {/* Pending ask banner */}
-      {pendingAsk && !showAsk && (
-        <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
-          <div className="text-[13px] text-amber-800">
-            {t('session.waitingForInput')} ({pendingAsk.questions.length})
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowAsk(true)}
-            className="text-[12px] bg-amber-600 text-white px-2.5 py-1 rounded hover:bg-amber-700"
-          >
-            {t('session.answerCta')}
-          </button>
-        </div>
-      )}
-
       {/* Split: chat | artifacts */}
       <div className="flex-1 min-h-0 flex">
         {/* Chat column — scroll area + composer are regular flex children so
@@ -578,9 +597,21 @@ export function RunDetailPage() {
         >
           <div className="flex-1 min-h-0 overflow-y-auto scrollbar-quiet">
             <div className="max-w-[760px] mx-auto px-6 pt-6 pb-4 space-y-4">
-              {chat.map((item) => (
-                <ChatBubble key={item.id} item={item} />
-              ))}
+              {chat.map((item) => {
+                if (item.kind === 'ask') {
+                  return (
+                    <AskInlineCard
+                      key={item.id}
+                      questions={item.questions}
+                      agentRole={item.agentRole}
+                      onSubmit={submitAnswers}
+                      onSkip={skipAsk}
+                      busy={answerBusy}
+                    />
+                  )
+                }
+                return <ChatBubble key={item.id} item={item} />
+              })}
               {running && (
                 <div className="flex items-center gap-2 text-[12px] text-neutral-400 px-1">
                   <Sparkle className="w-3.5 h-3.5 animate-pulse" />
@@ -700,13 +731,6 @@ export function RunDetailPage() {
         </aside>
       </div>
 
-      <AskUserModal
-        open={showAsk && !!pendingAsk}
-        questions={(pendingAsk?.questions as AskUserQuestion[]) ?? []}
-        agentRole={pendingAsk?.agentRole}
-        onSubmit={submitAnswers}
-        onSkip={skipAsk}
-      />
     </div>
   )
 }
@@ -1087,6 +1111,10 @@ function ChatBubble({ item }: { item: ChatItem }) {
         </div>
       </div>
     )
+  }
+  if (item.kind === 'ask') {
+    // Handled inline at the map site where submit/skip callbacks live.
+    return null
   }
   // error
   return (

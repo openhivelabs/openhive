@@ -4,9 +4,11 @@ import { NextResponse } from 'next/server'
 import { listForSession as listArtifactsForSession } from '@/lib/server/artifacts'
 import {
   buildTranscript,
+  deleteSession,
   eventsForSession,
   getSession,
   sessionDir,
+  updateMeta,
 } from '@/lib/server/sessions'
 import { usageForSession } from '@/lib/server/usage'
 
@@ -84,9 +86,14 @@ export async function GET(
     mime: a.mime,
   }))
   const usage = usageForSession(sessionId)
-  const pendingAsk = meta.status === 'running'
-    ? pendingAskFromEvents(events as EventRow[])
-    : null
+  // Pending ask is a property of the EVENT LOG, not meta.status. Any session
+  // whose events end with an unanswered user_question has a live tool call
+  // the user can still answer — regardless of whether meta says 'running'
+  // (live generator) or 'needs_input' (generator died but question remains).
+  // `error` sessions are the only category that can't have an answerable ask.
+  const pendingAsk = meta.status === 'error'
+    ? null
+    : pendingAskFromEvents(events as EventRow[])
   // For running chat sessions there is no transcript.jsonl yet — it's only
   // written on finalize. Build one on the fly from events so the chat UI
   // always has a full history, live or historical.
@@ -101,4 +108,52 @@ export async function GET(
     usage,
     pending_ask: pendingAsk,
   })
+}
+
+/** Mutate a small allowlist of meta fields (title, pinned). Anything else is
+ *  ignored. Returns the updated meta so the client can sync without a refetch. */
+export async function PATCH(
+  req: Request,
+  ctx: { params: Promise<{ sessionId: string }> },
+) {
+  const { sessionId } = await ctx.params
+  let body: { title?: string | null; pinned?: boolean }
+  try {
+    body = (await req.json()) as { title?: string | null; pinned?: boolean }
+  } catch {
+    return NextResponse.json({ detail: 'invalid json' }, { status: 400 })
+  }
+  const patch: Partial<{ title: string | null; pinned: boolean }> = {}
+  if ('title' in body) {
+    if (body.title === null) patch.title = null
+    else if (typeof body.title === 'string') {
+      const trimmed = body.title.trim()
+      patch.title = trimmed.length > 0 ? trimmed.slice(0, 200) : null
+    }
+  }
+  if ('pinned' in body && typeof body.pinned === 'boolean') {
+    patch.pinned = body.pinned
+  }
+  if (Object.keys(patch).length === 0) {
+    return NextResponse.json({ detail: 'no fields to update' }, { status: 400 })
+  }
+  const next = updateMeta(sessionId, patch)
+  if (!next) {
+    return NextResponse.json({ detail: 'session not found' }, { status: 404 })
+  }
+  return NextResponse.json(next)
+}
+
+/** Permanently delete the session's on-disk state. After this, GET returns 404
+ *  and listForTeam/listSessionsFor no longer include the row. */
+export async function DELETE(
+  _req: Request,
+  ctx: { params: Promise<{ sessionId: string }> },
+) {
+  const { sessionId } = await ctx.params
+  const existed = deleteSession(sessionId)
+  if (!existed) {
+    return NextResponse.json({ detail: 'session not found' }, { status: 404 })
+  }
+  return NextResponse.json({ ok: true })
 }

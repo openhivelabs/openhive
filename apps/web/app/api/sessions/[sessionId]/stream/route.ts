@@ -1,13 +1,11 @@
 import { attach, END, forceEvict, isActive } from '@/lib/server/engine/session-registry'
-import { eventsForSession, finishSession, getSession } from '@/lib/server/sessions'
+import { eventsForSession, getSession } from '@/lib/server/sessions'
 
-// An "active" run with no event for this long is a zombie — the engine
-// generator died silently (HMR, uncaught rejection) but the registry
-// still thinks it's live. We evict + reconcile on the next reconnect.
-// Exclusions: kinds that legitimately park for arbitrary durations.
-//   - user_question: waiting on ask_user answer
-//   - turn_finished: chat session parked on inbox.pop() awaiting the next
-//     user message (see engine/session.ts runTeamBody loop)
+// An "active" run with no event for this long AND whose last event isn't a
+// legitimate park (turn_finished / user_question) is a true zombie — the
+// engine generator died silently (HMR, uncaught rejection) but the registry
+// still thinks it's live. Evict so the next attach goes through the replay
+// path and the session shows as idle (resumable via POST /messages).
 const ZOMBIE_THRESHOLD_MS = 120_000
 const IDLE_PARK_KINDS = new Set(['user_question', 'turn_finished'])
 
@@ -34,10 +32,6 @@ export async function GET(
 ) {
   const { sessionId } = await ctx.params
   if (isActive(sessionId)) {
-    // Staleness sniff: if the registry thinks this run is live but no
-    // event has been appended in >120s and the last event wasn't an
-    // ask_user, the engine generator is effectively dead. Evict so the
-    // replay/reconcile path can mark it interrupted.
     try {
       const allEvents = eventsForSession(sessionId)
       const latest = allEvents[allEvents.length - 1]
@@ -52,9 +46,12 @@ export async function GET(
     }
   }
   if (!isActive(sessionId)) {
-    // Finished or unknown — replay from DB. 404 only when neither.
-    const events = eventsForSession(sessionId)
-    if (events.length === 0) {
+    // Replay from disk. We no longer synthesize terminal events here — the
+    // session is either idle (resumable; no terminal needed, client exits
+    // on [DONE]) or error (run_error already on disk from driveSession).
+    // Orphaned 'running' sessions are demoted to 'idle' at boot, so they
+    // also land in the idle-replay branch.
+    if (!getSession(sessionId) && eventsForSession(sessionId).length === 0) {
       return new Response(JSON.stringify({ detail: 'run not found' }), {
         status: 404,
         headers: { 'Content-Type': 'application/json' },
@@ -112,7 +109,8 @@ export async function GET(
           onAbort()
         }
       } else {
-        // Replay from DB.
+        // Replay from disk — no synthesis. Idle sessions are resumable, so
+        // forcing a terminal here would lie to the UI ("this chat is done").
         try {
           const rows = eventsForSession(sessionId)
           for (const row of rows) {
@@ -128,44 +126,6 @@ export async function GET(
                 data: row.data,
               }),
             )
-          }
-          // If the stored event log doesn't include a terminal marker (common
-          // for runs whose server process died mid-flight), synthesize one
-          // from the runs-table status so clients stop waiting on a stream
-          // that will never produce another real event.
-          const alreadyTerminal = rows.some(
-            (r) => r.kind === 'run_finished' || r.kind === 'run_error',
-          )
-          if (!alreadyTerminal) {
-            let meta = getSession(sessionId)
-            // Zombie reconciliation: the engine isn't running this session
-            // (isActive=false checked above) but meta.json still says
-            // 'running' — engine process died mid-flight. Mark it
-            // interrupted so the UI stops spinning forever.
-            if (meta && meta.status === 'running') {
-              try { await finishSession(sessionId, { error: 'interrupted' }) }
-              catch { /* best-effort */ }
-              meta = { ...meta, status: 'interrupted', error: 'interrupted' }
-            }
-            const row = meta
-              ? { status: meta.status, output: meta.output, error: meta.error }
-              : undefined
-            if (row && row.status !== 'running') {
-              controller.enqueue(
-                sseFrame({
-                  kind: row.error ? 'run_error' : 'run_finished',
-                  ts: Date.now() / 1000,
-                  session_id: sessionId,
-                  depth: 0,
-                  node_id: null,
-                  tool_call_id: null,
-                  tool_name: null,
-                  data: row.error
-                    ? { error: row.error }
-                    : { output: row.output ?? '' },
-                }),
-              )
-            }
           }
         } catch {
           /* client gone, drop */
