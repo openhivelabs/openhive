@@ -45,7 +45,6 @@ from typing import Any
 
 from docx import Document
 from docx.oxml.ns import qn
-from docx.shared import Pt, RGBColor
 from lxml import etree
 
 
@@ -265,6 +264,8 @@ def _fetch_image(ref: str) -> tuple[bytes, str]:
 def op_set_style(doc, target: str, *, font: str | None = None,
                  size: int | None = None, color=None,
                  bold: bool | None = None, italic: bool | None = None) -> None:
+    from docx.shared import Pt, RGBColor
+
     steps = parse_selector(target)
     if len(steps) != 1 or steps[0].kind not in {"heading", "paragraph"}:
         raise OpError("set_style target must be 'heading:N' or 'paragraph:N'")

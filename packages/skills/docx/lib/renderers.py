@@ -14,9 +14,9 @@ from typing import Any
 
 from docx import Document
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
-from docx.shared import Inches, Pt, RGBColor
+from docx.shared import Inches, Pt
 from lxml import etree
 
 from .themes import Theme
@@ -28,6 +28,8 @@ from .themes import Theme
 
 
 def _rgb(c: tuple[int, int, int]) -> RGBColor:
+    from docx.shared import RGBColor
+
     return RGBColor(c[0], c[1], c[2])
 
 
@@ -248,6 +250,8 @@ def render_image(doc, block: dict, theme: Theme) -> None:
 
 
 def render_page_break(doc, block: dict, theme: Theme) -> None:
+    from docx.enum.text import WD_BREAK
+
     p = doc.add_paragraph()
     p.add_run().add_break(WD_BREAK.PAGE)
 
