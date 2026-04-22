@@ -19,8 +19,22 @@ import path from 'node:path'
 
 import { sessionsRoot } from '../paths'
 
+/** @deprecated use flushIntervalMs() */
 export const FLUSH_INTERVAL_MS = 100
+/** @deprecated use flushThreshold() */
 export const FLUSH_THRESHOLD = 10
+
+/** Read flush interval (ms) from env each call. Invalid/≤0 → 100. */
+export function flushIntervalMs(): number {
+  const v = Number.parseInt(process.env.OPENHIVE_EVENT_FLUSH_INTERVAL_MS ?? '', 10)
+  return Number.isFinite(v) && v > 0 ? v : 100
+}
+
+/** Read flush threshold from env each call. Invalid/≤0 → 10. */
+export function flushThreshold(): number {
+  const v = Number.parseInt(process.env.OPENHIVE_EVENT_FLUSH_THRESHOLD ?? '', 10)
+  return Number.isFinite(v) && v > 0 ? v : 10
+}
 
 interface Queue {
   buf: string[]
@@ -57,7 +71,7 @@ export function enqueueEvent(sessionId: string, rowJsonl: string): void {
   const q = ensureQueue(sessionId)
   q.buf.push(rowJsonl)
 
-  if (q.buf.length >= FLUSH_THRESHOLD) {
+  if (q.buf.length >= flushThreshold()) {
     if (q.timer) {
       clearTimeout(q.timer)
       q.timer = null
@@ -71,7 +85,7 @@ export function enqueueEvent(sessionId: string, rowJsonl: string): void {
       const cur = queues.get(sessionId)
       if (cur) cur.timer = null
       void triggerFlush(sessionId)
-    }, FLUSH_INTERVAL_MS)
+    }, flushIntervalMs())
     // Don't block process shutdown on the timer; flushAll() drains on SIGTERM.
     q.timer.unref?.()
   }
