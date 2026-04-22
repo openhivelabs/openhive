@@ -27,7 +27,12 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 `
 
 export function teamDbPath(companySlug: string, teamSlug: string): string {
-  const dir = teamDir(companySlug, teamSlug)
+  // Honor OPENHIVE_DATA_DIR env directly so tests that swap tmp dirs per-test
+  // don't get pinned to the cached getSettings() value.
+  const envRoot = process.env.OPENHIVE_DATA_DIR
+  const dir = envRoot
+    ? path.join(envRoot, 'companies', companySlug, 'teams', teamSlug)
+    : teamDir(companySlug, teamSlug)
   fs.mkdirSync(dir, { recursive: true })
   return path.join(dir, 'data.db')
 }
@@ -42,7 +47,8 @@ function openTeamDb(companySlug: string, teamSlug: string): BetterSqliteDatabase
   const conn = new Database(file)
   conn.pragma('journal_mode = WAL')
   conn.pragma('foreign_keys = ON')
-  // Bootstrap is idempotent — cheap to run every open.
+  const busyMs = Number.parseInt(process.env.OPENHIVE_DB_BUSY_TIMEOUT_MS ?? '5000', 10)
+  conn.pragma(`busy_timeout = ${Number.isFinite(busyMs) && busyMs > 0 ? busyMs : 5000}`)
   conn.exec(BOOTSTRAP_SCHEMA)
   return conn
 }
@@ -53,9 +59,33 @@ export function withTeamDb<T>(
   fn: (conn: BetterSqliteDatabase) => T,
 ): T {
   const conn = openTeamDb(companySlug, teamSlug)
+  const timeoutMs = Number.parseInt(
+    process.env.OPENHIVE_DB_QUERY_TIMEOUT_MS ?? '10000',
+    10,
+  )
+  const ms = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 10000
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    try {
+      ;(conn as unknown as { interrupt?: () => void }).interrupt?.()
+    } catch {
+      /* ignore — interrupt can race with close */
+    }
+  }, ms)
   try {
     return fn(conn)
+  } catch (exc) {
+    if (timedOut) {
+      const err = new Error(`timeout: query exceeded ${ms}ms`) as Error & {
+        code?: string
+      }
+      err.code = 'timeout'
+      throw err
+    }
+    throw exc
   } finally {
+    clearTimeout(timer)
     conn.close()
   }
 }
@@ -137,30 +167,159 @@ export function describeSchema(
 const SELECT_RE = /^\s*(SELECT|WITH)\b/i
 const DDL_RE = /^\s*(CREATE|ALTER|DROP|TRUNCATE|RENAME)\b/i
 
+/**
+ * Return true if `sql` contains more than one statement. We strip line and
+ * block comments, then check whether any non-whitespace character appears
+ * after the first top-level semicolon (ignoring semicolons inside string
+ * literals).
+ */
+/** Strip SQL line and block comments; return the remaining text. */
+export function stripSqlComments(sql: string): string {
+  let out = ''
+  let i = 0
+  let inSingle = false
+  let inDouble = false
+  while (i < sql.length) {
+    const c = sql[i]
+    const next = sql[i + 1]
+    if (!inSingle && !inDouble) {
+      if (c === '-' && next === '-') {
+        while (i < sql.length && sql[i] !== '\n') i++
+        continue
+      }
+      if (c === '/' && next === '*') {
+        i += 2
+        while (i < sql.length && !(sql[i] === '*' && sql[i + 1] === '/')) i++
+        i += 2
+        continue
+      }
+    }
+    if (!inDouble && c === "'") inSingle = !inSingle
+    else if (!inSingle && c === '"') inDouble = !inDouble
+    out += c
+    i++
+  }
+  return out
+}
+
+/**
+ * A statement is "destructive" if it can delete wide swathes of data without
+ * explicit restriction. The LLM must pass `confirm_destructive: true` at the
+ * tool layer before we run these.
+ */
+export function isDestructiveSql(sql: string): boolean {
+  const stripped = stripSqlComments(sql).trim()
+  if (/^\s*DROP\s+TABLE\b/i.test(stripped)) return true
+  if (/^\s*DROP\s+INDEX\b/i.test(stripped)) return true
+  if (/^\s*TRUNCATE\b/i.test(stripped)) return true
+  if (/^\s*DELETE\s+FROM\b/i.test(stripped) && !/\bWHERE\b/i.test(stripped)) return true
+  if (/^\s*UPDATE\b/i.test(stripped) && !/\bWHERE\b/i.test(stripped)) return true
+  return false
+}
+
+export function hasMultipleStatements(sql: string): boolean {
+  let i = 0
+  let inSingle = false
+  let inDouble = false
+  let inLineComment = false
+  let inBlockComment = false
+  let sawStatementEnd = false
+  while (i < sql.length) {
+    const c = sql[i]
+    const next = sql[i + 1]
+    if (inLineComment) {
+      if (c === '\n') inLineComment = false
+      i++
+      continue
+    }
+    if (inBlockComment) {
+      if (c === '*' && next === '/') {
+        inBlockComment = false
+        i += 2
+        continue
+      }
+      i++
+      continue
+    }
+    if (inSingle) {
+      if (c === "'") inSingle = false
+      i++
+      continue
+    }
+    if (inDouble) {
+      if (c === '"') inDouble = false
+      i++
+      continue
+    }
+    if (c === '-' && next === '-') {
+      inLineComment = true
+      i += 2
+      continue
+    }
+    if (c === '/' && next === '*') {
+      inBlockComment = true
+      i += 2
+      continue
+    }
+    if (c === "'") {
+      inSingle = true
+      i++
+      continue
+    }
+    if (c === '"') {
+      inDouble = true
+      i++
+      continue
+    }
+    if (c === ';') {
+      sawStatementEnd = true
+      i++
+      continue
+    }
+    if (sawStatementEnd && c !== undefined && !/\s/.test(c)) {
+      return true
+    }
+    i++
+  }
+  return false
+}
+
 export interface QueryResult {
   columns: string[]
   rows: Record<string, unknown>[]
+}
+
+export type SqlParam = string | number | bigint | null | Uint8Array
+
+export interface RunQueryOptions {
+  params?: SqlParam[]
 }
 
 export function runQuery(
   companySlug: string,
   teamSlug: string,
   sql: string,
+  opts: RunQueryOptions = {},
 ): QueryResult {
+  if (hasMultipleStatements(sql)) {
+    const err = new Error('multi_statement: only one SQL statement per call')
+    ;(err as Error & { code?: string }).code = 'multi_statement'
+    throw err
+  }
   if (!SELECT_RE.test(sql)) {
     throw new Error('run_query accepts only SELECT/WITH statements')
   }
   return withTeamDb(companySlug, teamSlug, (conn) => {
     const stmt = conn.prepare(sql)
-    // better-sqlite3 infers column names via .columns() only for prepared
-    // SELECT statements. Fall back to keys of first row if empty.
     let columns: string[] = []
     try {
       columns = stmt.columns().map((c) => c.name)
     } catch {
-      /* not a SELECT with columns — fallthrough */
+      /* not a SELECT with columns */
     }
-    const rows = stmt.all() as Record<string, unknown>[]
+    const rows = (opts.params && opts.params.length > 0
+      ? stmt.all(...opts.params)
+      : stmt.all()) as Record<string, unknown>[]
     if (columns.length === 0 && rows.length > 0) {
       columns = Object.keys(rows[0] ?? {})
     }
@@ -174,18 +333,32 @@ export interface ExecResult {
   ddl: boolean
 }
 
+export interface RunExecOptions {
+  source?: string
+  note?: string | null
+  params?: SqlParam[]
+}
+
 export function runExec(
   companySlug: string,
   teamSlug: string,
   sql: string,
-  opts: { source?: string; note?: string | null } = {},
+  opts: RunExecOptions = {},
 ): ExecResult {
+  if (hasMultipleStatements(sql)) {
+    const err = new Error('multi_statement: only one SQL statement per call')
+    ;(err as Error & { code?: string }).code = 'multi_statement'
+    throw err
+  }
   const isDdl = DDL_RE.test(sql)
   const source = opts.source ?? 'ai'
   const note = opts.note ?? null
   return withTeamDb(companySlug, teamSlug, (conn) => {
     const tx = conn.transaction(() => {
-      const info = conn.prepare(sql).run()
+      const stmt = conn.prepare(sql)
+      const info = opts.params && opts.params.length > 0
+        ? stmt.run(...opts.params)
+        : stmt.run()
       if (isDdl) {
         conn
           .prepare(
@@ -204,12 +377,13 @@ export function runExec(
 // -------- template install --------
 
 function templatesRoot(): string {
-  return path.join(packagesRoot(), 'templates')
+  return process.env.OPENHIVE_TEMPLATES_DIR ?? path.join(packagesRoot(), 'templates')
 }
 
 export interface InstallTemplateResult {
   ok: true
   template: string
+  tables_created: string[]
 }
 
 export function installTemplate(
@@ -225,6 +399,18 @@ export function installTemplate(
   }
   const script = fs.readFileSync(file, 'utf8')
   return withTeamDb(companySlug, teamSlug, (conn) => {
+    const listTables = (): Set<string> =>
+      new Set(
+        (
+          conn
+            .prepare(
+              `SELECT name FROM sqlite_master
+                WHERE type='table' AND name NOT LIKE 'sqlite_%'`,
+            )
+            .all() as { name: string }[]
+        ).map((r) => r.name),
+      )
+    const before = listTables()
     const tx = conn.transaction(() => {
       conn.exec(script)
       conn
@@ -235,6 +421,11 @@ export function installTemplate(
         .run(Date.now(), `template:${templateName}`, script, null)
     })
     tx()
-    return { ok: true, template: templateName }
+    const after = listTables()
+    const created: string[] = []
+    for (const t of after) {
+      if (!before.has(t) && t !== 'schema_migrations') created.push(t)
+    }
+    return { ok: true, template: templateName, tables_created: created.sort() }
   })
 }

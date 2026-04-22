@@ -30,8 +30,8 @@ import type { ChatMessage } from '../providers/types'
 import * as sessionsStore from '../sessions'
 import { type SkillDef, getSkill, matchSkillHints } from '../skills/loader'
 import { readSkillFile, runSkill, runSkillScript } from '../skills/runner'
-import * as teamDataStore from '../team-data'
 import { type Tool, toolsToOpenAI } from '../tools/base'
+import { teamDataTools } from '../tools/team-data-tool'
 import { webFetchTool } from '../tools/webfetch'
 import { recordUsage } from '../usage'
 import * as askuser from './askuser'
@@ -486,7 +486,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     tools.push(...todoTools(sessionId))
   }
   if (teamSlugs) {
-    tools.push(...teamDataTools(teamSlugs, true))
+    tools.push(...teamDataTools(teamSlugs, persona.tools))
   }
   tools.push(webFetchTool())
 
@@ -1517,65 +1517,6 @@ async function* runSkillInvocation(opts: SkillInvocationOpts): AsyncGenerator<Ev
     { content: resultContent, is_error: resultError },
     { depth, node_id: nodeId, tool_call_id: toolCallId, tool_name: toolName },
   )
-}
-
-// -------- team-data tools --------
-
-function teamDataTools(teamSlugs: [string, string], allowWrite: boolean): Tool[] {
-  const [companySlug, teamSlug] = teamSlugs
-  const tools: Tool[] = [
-    {
-      name: 'describe_schema',
-      description:
-        "List tables, columns, row counts, and recent schema migrations in this team's " +
-        'data store. Always call this before writing SQL so you know what exists.',
-      parameters: { type: 'object', properties: {}, additionalProperties: false },
-      handler: async () => JSON.stringify(teamDataStore.describeSchema(companySlug, teamSlug)),
-      hint: 'Reading schema…',
-    },
-    {
-      name: 'sql_query',
-      description:
-        "Run a read-only SQL query (SELECT or WITH) against this team's data store. " +
-        'Returns {columns, rows}. Use to look up existing records before acting.',
-      parameters: {
-        type: 'object',
-        properties: {
-          sql: { type: 'string', description: 'A SELECT/WITH statement.' },
-        },
-        required: ['sql'],
-      },
-      handler: async (args) =>
-        JSON.stringify(teamDataStore.runQuery(companySlug, teamSlug, String(args.sql ?? ''))),
-      hint: 'Querying data…',
-    },
-  ]
-  if (allowWrite) {
-    tools.push({
-      name: 'sql_exec',
-      description:
-        'Run a write query (INSERT/UPDATE/DELETE) or DDL (CREATE/ALTER) against this ' +
-        "team's data store. DDL is recorded in schema_migrations. Prefer ALTER over " +
-        'DROP; use the `data` JSON column for ad-hoc fields before adding new columns.',
-      parameters: {
-        type: 'object',
-        properties: {
-          sql: { type: 'string' },
-          note: { type: 'string', description: 'Why this change. Optional.' },
-        },
-        required: ['sql'],
-      },
-      handler: async (args) =>
-        JSON.stringify(
-          teamDataStore.runExec(companySlug, teamSlug, String(args.sql ?? ''), {
-            source: 'ai',
-            note: typeof args.note === 'string' ? args.note : null,
-          }),
-        ),
-      hint: 'Writing data…',
-    })
-  }
-  return tools
 }
 
 // -------- agent-skill plumbing (progressive disclosure) --------

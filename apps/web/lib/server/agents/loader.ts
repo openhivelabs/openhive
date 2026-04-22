@@ -25,13 +25,17 @@ export const MAX_READABLE_FILE_BYTES = 256 * 1024
 
 export type PersonaKind = 'file' | 'dir'
 
+export type WritePolicy = boolean | 'ask'
+
 export interface ToolsManifest {
   skills: string[]
   mcp_servers: string[]
   team_data_read: boolean
-  team_data_write: boolean
+  team_data_write: WritePolicy
+  team_data_ddl: WritePolicy
   team_data_allowed_tables: string[]
   team_data_write_fields: string[]
+  team_data_templates: string[]
   knowledge_exposure: 'summary' | 'full' | 'none'
   notes: string
 }
@@ -42,11 +46,18 @@ function defaultToolsManifest(): ToolsManifest {
     mcp_servers: [],
     team_data_read: true,
     team_data_write: false,
+    team_data_ddl: false,
     team_data_allowed_tables: [],
     team_data_write_fields: [],
+    team_data_templates: [],
     knowledge_exposure: 'full',
     notes: '',
   }
+}
+
+function parsePolicy(v: unknown): WritePolicy {
+  if (v === 'ask') return 'ask'
+  return !!v
 }
 
 export interface PersonaDef {
@@ -152,9 +163,11 @@ function parseToolsYaml(file: string): ToolsManifest {
     skills: stringList(data.skills),
     mcp_servers: stringList(data.mcp ?? data.mcp_servers),
     team_data_read: td.read !== false,
-    team_data_write: !!td.write,
+    team_data_write: parsePolicy(td.write),
+    team_data_ddl: parsePolicy(td.ddl),
     team_data_allowed_tables: stringList(td.tables),
     team_data_write_fields: stringList(td.write_fields),
+    team_data_templates: stringList(td.templates),
     knowledge_exposure: exposure,
     notes: String(data.notes ?? '').trim(),
   }
