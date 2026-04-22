@@ -142,25 +142,32 @@ export interface QueryResult {
   rows: Record<string, unknown>[]
 }
 
+export type SqlParam = string | number | bigint | null | Uint8Array
+
+export interface RunQueryOptions {
+  params?: SqlParam[]
+}
+
 export function runQuery(
   companySlug: string,
   teamSlug: string,
   sql: string,
+  opts: RunQueryOptions = {},
 ): QueryResult {
   if (!SELECT_RE.test(sql)) {
     throw new Error('run_query accepts only SELECT/WITH statements')
   }
   return withTeamDb(companySlug, teamSlug, (conn) => {
     const stmt = conn.prepare(sql)
-    // better-sqlite3 infers column names via .columns() only for prepared
-    // SELECT statements. Fall back to keys of first row if empty.
     let columns: string[] = []
     try {
       columns = stmt.columns().map((c) => c.name)
     } catch {
-      /* not a SELECT with columns — fallthrough */
+      /* not a SELECT with columns */
     }
-    const rows = stmt.all() as Record<string, unknown>[]
+    const rows = (opts.params && opts.params.length > 0
+      ? stmt.all(...opts.params)
+      : stmt.all()) as Record<string, unknown>[]
     if (columns.length === 0 && rows.length > 0) {
       columns = Object.keys(rows[0] ?? {})
     }
@@ -174,18 +181,27 @@ export interface ExecResult {
   ddl: boolean
 }
 
+export interface RunExecOptions {
+  source?: string
+  note?: string | null
+  params?: SqlParam[]
+}
+
 export function runExec(
   companySlug: string,
   teamSlug: string,
   sql: string,
-  opts: { source?: string; note?: string | null } = {},
+  opts: RunExecOptions = {},
 ): ExecResult {
   const isDdl = DDL_RE.test(sql)
   const source = opts.source ?? 'ai'
   const note = opts.note ?? null
   return withTeamDb(companySlug, teamSlug, (conn) => {
     const tx = conn.transaction(() => {
-      const info = conn.prepare(sql).run()
+      const stmt = conn.prepare(sql)
+      const info = opts.params && opts.params.length > 0
+        ? stmt.run(...opts.params)
+        : stmt.run()
       if (isDdl) {
         conn
           .prepare(
