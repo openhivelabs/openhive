@@ -3,8 +3,14 @@
 import {
   CaretDown,
   CaretRight,
+  ChatCircle,
+  CircleNotch,
   Clock,
+  DotsThreeVertical,
   FileText,
+  PencilSimple,
+  PushPin,
+  PushPinSlash,
   Play,
   Plus,
   Sparkle,
@@ -13,7 +19,7 @@ import {
 } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { useParams, useRouter } from 'next/navigation'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { type CreateTaskInput, NewTaskModal } from '@/components/modals/NewTaskModal'
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal'
 import { useT } from '@/lib/i18n'
@@ -30,10 +36,113 @@ import {
 
 /** "Task = 템플릿, Session = 영속 채팅" 모델의 인박스 레이아웃.
  *  왼쪽 = 템플릿 rail, 오른쪽 = 세션 평면 리스트.
- *  상태는 working / waiting / idle 3개만. failed / interrupted 는 idle로 접히고
- *  마지막 메시지가 실패 이유를 담는다. needs_input = waiting. */
+ *  시각 상태 5종:
+ *   - working  = running (스피너)
+ *   - waiting  = needs_input / pendingAsk (답변 필요, 강조)
+ *   - done-fresh = done & 아직 viewedAt 없음 (살짝 튀게 — 새 결과 배지)
+ *   - done-seen  = done & viewedAt 있음 (평범)
+ *   - failed   = 실패 (원인은 session.error 에. interrupted/cancelled 포함) */
 
-type SessionState = 'working' | 'waiting' | 'idle'
+type SessionState =
+  | 'working'
+  | 'waiting'
+  | 'done-fresh'
+  | 'done-seen'
+  | 'failed-fresh'
+  | 'failed-seen'
+
+/** 인박스 버킷 우선순위 — 숫자 작을수록 위.
+ *  1) 유저 액션 블록: waiting → failed-fresh
+ *  2) FYI 신규: done-fresh
+ *  3) 진행 중: working
+ *  4) 아카이브(확인됨): done-seen / failed-seen — 시간순 */
+const STATE_BUCKET: Record<SessionState, number> = {
+  waiting: 0,
+  'failed-fresh': 1,
+  'done-fresh': 2,
+  working: 3,
+  'done-seen': 4,
+  'failed-seen': 4,
+}
+
+type SessionTabKey = 'all' | 'waiting' | 'working' | 'done' | 'failed'
+
+/** 탭별로 어떤 SessionState 들이 포함되는지. 'all' 은 전부. */
+function stateInTab(state: SessionState, tab: SessionTabKey): boolean {
+  if (tab === 'all') return true
+  if (tab === 'waiting') return state === 'waiting'
+  if (tab === 'working') return state === 'working'
+  if (tab === 'done') return state === 'done-fresh' || state === 'done-seen'
+  return state === 'failed-fresh' || state === 'failed-seen'
+}
+
+/** 세션 고정/제목 변경/읽음 플래그는 현재 localStorage persist.
+ *  (백엔드 meta.json 에 저장 필요해지면 이후 마이그레이션.) */
+const LS_PINNED_KEY = 'openhive.sessions.pinned'
+const LS_TITLES_KEY = 'openhive.sessions.titles'
+const LS_VIEWED_KEY = 'openhive.sessions.viewed'
+
+function loadPinnedIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(LS_PINNED_KEY)
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? new Set(arr.filter((x) => typeof x === 'string')) : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+function savePinnedIds(ids: Set<string>) {
+  try {
+    localStorage.setItem(LS_PINNED_KEY, JSON.stringify(Array.from(ids)))
+  } catch {
+    /* quota/private-mode — ignore */
+  }
+}
+
+function loadRenamedTitles(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(LS_TITLES_KEY)
+    if (!raw) return {}
+    const obj = JSON.parse(raw)
+    if (!obj || typeof obj !== 'object') return {}
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof k === 'string' && typeof v === 'string') out[k] = v
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function saveRenamedTitles(map: Record<string, string>) {
+  try {
+    localStorage.setItem(LS_TITLES_KEY, JSON.stringify(map))
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadViewedIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(LS_VIEWED_KEY)
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? new Set(arr.filter((x) => typeof x === 'string')) : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+function saveViewedIds(ids: Set<string>) {
+  try {
+    localStorage.setItem(LS_VIEWED_KEY, JSON.stringify(Array.from(ids)))
+  } catch {
+    /* ignore */
+  }
+}
 
 /** 라이브(task.sessions 기반)든 아카이브(sessions store 기반)든 동일 모양으로 뽑아
  *  리스트 렌더링을 단일화한다. Phase 2b에서 source=task.sessions 경로는 제거 예정. */
@@ -51,18 +160,24 @@ interface UnifiedSession {
   relTime: string
   /** 클릭 시 페이지 이동할 수 있는 UUID 가 있는지. */
   navigable: boolean
+  /** 사용자가 고정한 세션. 정렬 시 맨 위. (아직 목업 단계) */
+  pinned?: boolean
 }
 
-function stateFromRun(r: Session): SessionState {
+function stateFromRun(r: Session, isViewed: boolean): SessionState {
   if (r.pendingAsk || r.status === 'needs_input') return 'waiting'
   if (r.status === 'running') return 'working'
-  return 'idle'
+  const seen = !!r.viewedAt || isViewed
+  if (r.status === 'failed') return seen ? 'failed-seen' : 'failed-fresh'
+  return seen ? 'done-seen' : 'done-fresh'
 }
 
-function stateFromSession(s: Session): SessionState {
+function stateFromSession(s: Session, isViewed: boolean): SessionState {
   if (s.pendingAsk || s.status === 'needs_input') return 'waiting'
   if (s.status === 'running') return 'working'
-  return 'idle'
+  const seen = !!s.viewedAt || isViewed
+  if (s.status === 'failed') return seen ? 'failed-seen' : 'failed-fresh'
+  return seen ? 'done-seen' : 'done-fresh'
 }
 
 /** "0 9 * * *" → "09:00 (매일)" 등 대략적 설명. cron-parser 없이 */
@@ -155,10 +270,47 @@ export function TasksTab() {
   const hydrateSessionsForTeam = useSessionsStore((s) => s.hydrateForTeam)
   const reattachSessionsStore = useSessionsStore((s) => s.reattach)
   const markSessionViewed = useSessionsStore((s) => s.markViewed)
+  const markRunViewed = useTasksStore((s) => s.markRunViewed)
   const removeSession = useSessionsStore((s) => s.removeSession)
 
   const [showNew, setShowNew] = useState(false)
   const { collapsed, toggle: toggleSection } = useCollapsedSections()
+  // 세션 고정 & 제목 변경은 localStorage persist. SSR-safe: 첫 렌더 기본값 →
+  // useEffect 에서 읽어 동기화.
+  const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set())
+  const [renamedTitles, setRenamedTitles] = useState<Record<string, string>>({})
+  const [viewedIds, setViewedIds] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    setPinnedIds(loadPinnedIds())
+    setRenamedTitles(loadRenamedTitles())
+    setViewedIds(loadViewedIds())
+  }, [])
+  const markViewedLocal = (id: string) => {
+    setViewedIds((prev) => {
+      if (prev.has(id)) return prev
+      const next = new Set(prev)
+      next.add(id)
+      saveViewedIds(next)
+      return next
+    })
+  }
+  const togglePinned = (id: string) => {
+    setPinnedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      savePinnedIds(next)
+      return next
+    })
+  }
+  const setRenamedTitle = (id: string, title: string) => {
+    setRenamedTitles((prev) => {
+      const next = { ...prev, [id]: title }
+      saveRenamedTitles(next)
+      return next
+    })
+  }
+  const [sessionTab, setSessionTab] = useState<SessionTabKey>('all')
 
   useEffect(() => {
     if (!team) return
@@ -198,7 +350,7 @@ export function TasksTab() {
           taskId: task.id,
           title: task.title,
           preview: preview.slice(0, 140),
-          state: stateFromRun(session),
+          state: stateFromRun(session, viewedIds.has(session.id ?? '')),
           timestampIso: session.endedAt ?? session.startedAt,
           relTime: fmtRelative(session.endedAt ?? session.startedAt, t, locale),
           navigable: !!session.id,
@@ -219,22 +371,57 @@ export function TasksTab() {
       map.set(key, {
         id: s.id,
         taskId: s.taskId,
-        title: ownerTask?.title ?? s.goal.split('\n')[0]?.slice(0, 80) ?? '세션',
-        preview: (existing?.preview && stateFromSession(s) !== 'idle'
+        title: ownerTask?.title ?? s.goal.split('\n')[0] ?? '세션',
+        preview: (existing?.preview && stateFromSession(s, viewedIds.has(s.id)) !== 'done-seen'
           ? existing.preview
           : preview
         ).slice(0, 140),
-        state: stateFromSession(s),
+        state: stateFromSession(s, viewedIds.has(s.id)),
         timestampIso: s.endedAt ?? s.startedAt,
         relTime: fmtRelative(s.endedAt ?? s.startedAt, t, locale),
         navigable: true,
       })
     }
 
-    return Array.from(map.values()).sort(
-      (a, b) => Date.parse(b.timestampIso) - Date.parse(a.timestampIso),
-    )
-  }, [teamTasks, teamSessions, tasks, t, locale])
+    const rows = Array.from(map.values())
+    // Pin / rename overlay 적용.
+    const overlaid = rows.map((r) => {
+      const id = r.id ?? ''
+      return {
+        ...r,
+        pinned: pinnedIds.has(id),
+        title: renamedTitles[id] ?? r.title,
+      }
+    })
+    return overlaid.sort((a, b) => {
+      if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1
+      const bucketDiff = STATE_BUCKET[a.state] - STATE_BUCKET[b.state]
+      if (bucketDiff !== 0) return bucketDiff
+      return Date.parse(b.timestampIso) - Date.parse(a.timestampIso)
+    })
+  }, [teamTasks, teamSessions, tasks, t, locale, pinnedIds, renamedTitles, viewedIds])
+
+  const sessionTabCounts = useMemo(() => {
+    const counts: Record<SessionTabKey, number> = {
+      all: unifiedSessions.length,
+      waiting: 0,
+      working: 0,
+      done: 0,
+      failed: 0,
+    }
+    for (const s of unifiedSessions) {
+      if (s.state === 'waiting') counts.waiting++
+      else if (s.state === 'working') counts.working++
+      else if (s.state === 'done-fresh' || s.state === 'done-seen') counts.done++
+      else counts.failed++
+    }
+    return counts
+  }, [unifiedSessions])
+
+  const visibleSessions = useMemo(
+    () => unifiedSessions.filter((s) => stateInTab(s.state, sessionTab)),
+    [unifiedSessions, sessionTab],
+  )
 
   const { scheduledTemplates, draftTemplates } = useMemo(() => {
     const sorted = [...teamTasks].sort(
@@ -249,8 +436,6 @@ export function TasksTab() {
       ),
     }
   }, [teamTasks])
-  const hasAnyTemplate =
-    scheduledTemplates.length + draftTemplates.length > 0
 
   const selectedTask = teamTasks.find((x) => x.id === selectedTaskId) ?? null
 
@@ -287,9 +472,22 @@ export function TasksTab() {
     void startSessionFromTask(task, team)
   }
 
+  /** 새 채팅 화면으로 이동. 거기서 첫 메시지 입력 → 세션 생성 → `/s/{id}` 로. */
+  const goNewChat = () => {
+    if (!params?.companySlug || !params?.teamSlug) return
+    router.push(`/${params.companySlug}/${params.teamSlug}/new`)
+  }
+
   const openSession = (u: UnifiedSession) => {
-    if (u.id && u.navigable && params?.companySlug && params?.teamSlug) {
+    // viewedAt 을 두 스토어 모두에 세팅 — 같은 세션이 task.sessions 에도,
+    // 독립 sessions store 에도 존재할 수 있어서 양쪽 다 찍는다. (각 액션은
+    // 이미 본 세션이면 no-op.)
+    if (u.id) {
       markSessionViewed(u.id)
+      if (u.taskId) markRunViewed(u.taskId, u.id)
+      markViewedLocal(u.id)
+    }
+    if (u.id && u.navigable && params?.companySlug && params?.teamSlug) {
       router.push(`/${params.companySlug}/${params.teamSlug}/s/${u.id}`)
       return
     }
@@ -316,99 +514,94 @@ export function TasksTab() {
       <div className="flex-1 min-h-0 flex">
         {/* Templates rail */}
         <aside className="w-[280px] shrink-0 border-r border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 flex flex-col">
-          <div className="px-4 py-3 flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800">
-            <div className="text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
-              {t('tasks.templates') || '템플릿'}
-            </div>
+          {/* 상단 CTA — 업무(템플릿) 만들기 / 즉석 채팅 시작. 사이드바 모든 상태에서
+              최상단에 고정. */}
+          <div className="shrink-0 px-3 py-3 grid grid-cols-2 gap-2 border-b border-neutral-100 dark:border-neutral-800">
             <button
               type="button"
               onClick={() => setShowNew(true)}
-              className="text-[12px] text-neutral-500 hover:text-neutral-900 inline-flex items-center gap-1"
+              className="inline-flex items-center justify-center gap-1 text-[13px] bg-neutral-900 text-white px-2 py-1.5 rounded-sm hover:bg-neutral-800"
             >
-              <Plus className="w-3 h-3" />
-              {t('tasks.new')}
+              <Plus weight="bold" className="w-3.5 h-3.5" />
+              새 업무
+            </button>
+            <button
+              type="button"
+              onClick={goNewChat}
+              disabled={!team}
+              className="inline-flex items-center justify-center gap-1 text-[13px] border border-neutral-300 dark:border-neutral-700 text-neutral-800 dark:text-neutral-100 px-2 py-1.5 rounded-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <ChatCircle weight="regular" className="w-3.5 h-3.5" />
+              새 채팅
             </button>
           </div>
 
-          {!hasAnyTemplate ? (
-            <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
-              <FileText className="w-6 h-6 text-neutral-300" weight="light" />
-              <div className="text-[12.5px] text-neutral-400 leading-snug">
-                {t('tasks.empty')}
-              </div>
-              <Button size="sm" variant="outline" onClick={() => setShowNew(true)}>
-                <Plus className="w-3.5 h-3.5" />
-                {t('tasks.new')}
-              </Button>
-            </div>
-          ) : (
-            <div className="flex-1 overflow-y-auto">
-              {/* Drafts 먼저 (자주 쓰는 것) */}
-              {draftTemplates.length > 0 && (
-                <CollapsibleSection
-                  icon={<FileText className="w-3.5 h-3.5" />}
-                  label={t('tasks.drafts') || '드래프트'}
-                  count={draftTemplates.length}
-                  collapsed={collapsed.drafts}
-                  onToggle={() => toggleSection('drafts')}
-                >
-                  {draftTemplates.map((task) => (
-                    <TemplateRow
-                      key={task.id}
-                      task={task}
-                      onRun={() => play(task)}
-                      onEdit={() => selectTaskAsDraft(task.id)}
-                    />
-                  ))}
-                </CollapsibleSection>
+          <div className="flex-1 overflow-y-auto">
+            {/* 드래프트 — 일회성 템플릿 */}
+            <CollapsibleSection
+              icon={<FileText className="w-3.5 h-3.5" />}
+              label={t('tasks.drafts') || '드래프트'}
+              count={draftTemplates.length}
+              collapsed={collapsed.drafts}
+              onToggle={() => toggleSection('drafts')}
+            >
+              {draftTemplates.length === 0 ? (
+                <div className="px-4 py-3 text-[12px] text-neutral-400 dark:text-neutral-500">
+                  없음
+                </div>
+              ) : (
+                draftTemplates.map((task) => (
+                  <TemplateRow
+                    key={task.id}
+                    task={task}
+                    onRun={() => play(task)}
+                    onEdit={() => selectTaskAsDraft(task.id)}
+                  />
+                ))
               )}
-              {/* Scheduled 는 아래쪽. cron 동작하는 애들. */}
-              {scheduledTemplates.length > 0 && (
-                <CollapsibleSection
-                  icon={<Clock className="w-3.5 h-3.5" />}
-                  label={t('tasks.scheduled') || '스케줄'}
-                  count={scheduledTemplates.length}
-                  collapsed={collapsed.scheduled}
-                  onToggle={() => toggleSection('scheduled')}
-                  accent="amber"
-                >
-                  {scheduledTemplates.map((task) => (
-                    <TemplateRow
-                      key={task.id}
-                      task={task}
-                      onRun={() => play(task)}
-                      onEdit={() => selectTaskAsDraft(task.id)}
-                    />
-                  ))}
-                </CollapsibleSection>
+            </CollapsibleSection>
+            {/* 스케줄 — cron 걸린 템플릿 */}
+            <CollapsibleSection
+              icon={<Clock className="w-3.5 h-3.5" />}
+              label={t('tasks.scheduled') || '스케줄'}
+              count={scheduledTemplates.length}
+              collapsed={collapsed.scheduled}
+              onToggle={() => toggleSection('scheduled')}
+              accent="amber"
+            >
+              {scheduledTemplates.length === 0 ? (
+                <div className="px-4 py-3 text-[12px] text-neutral-400 dark:text-neutral-500">
+                  없음
+                </div>
+              ) : (
+                scheduledTemplates.map((task) => (
+                  <TemplateRow
+                    key={task.id}
+                    task={task}
+                    onRun={() => play(task)}
+                    onEdit={() => selectTaskAsDraft(task.id)}
+                  />
+                ))
               )}
-            </div>
-          )}
+            </CollapsibleSection>
+          </div>
         </aside>
 
         {/* Session inbox */}
         <main className="flex-1 flex flex-col min-w-0">
-          <div className="px-6 py-3 flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900">
-            <div className="text-[14px] font-medium text-neutral-900 dark:text-neutral-100">
-              {t('tasks.sessions') || '세션'}
-              <span className="ml-1.5 font-mono text-neutral-400">
-                {unifiedSessions.length}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowNew(true)}
-              className="inline-flex items-center gap-1.5 text-[13px] bg-neutral-900 text-white px-3 py-1.5 rounded-sm hover:bg-neutral-800"
-            >
-              <Sparkle className="w-3.5 h-3.5" />
-              {t('tasks.startSession') || '새 세션'}
-            </button>
-          </div>
-
-          {unifiedSessions.length === 0 ? (
+          <SessionTabBar
+            active={sessionTab}
+            onChange={setSessionTab}
+            counts={sessionTabCounts}
+          />
+          {visibleSessions.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-2 text-neutral-400 text-[13px]">
-              <div>{t('tasks.sessionsEmpty') || '아직 세션이 없습니다'}</div>
-              {draftTemplates[0] && (
+              <div>
+                {unifiedSessions.length === 0
+                  ? t('tasks.sessionsEmpty') || '아직 세션이 없습니다'
+                  : '이 탭에는 세션이 없습니다'}
+              </div>
+              {unifiedSessions.length === 0 && draftTemplates[0] && (
                 <Button size="sm" variant="outline" onClick={() => play(draftTemplates[0]!)}>
                   <Sparkle className="w-3.5 h-3.5" />
                   {draftTemplates[0]?.title}
@@ -417,18 +610,33 @@ export function TasksTab() {
             </div>
           ) : (
             <div className="flex-1 overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800">
-              {unifiedSessions.map((u) => (
-                <SessionInboxRow
-                  key={u.id ?? `${u.taskId}:${u.timestampIso}`}
-                  session={u}
-                  onOpen={() => openSession(u)}
-                  onDelete={
-                    u.id && u.state === 'idle'
-                      ? () => removeSession(u.id as string)
-                      : undefined
-                  }
-                />
-              ))}
+              {visibleSessions.map((u) => {
+                const sid = u.id ?? ''
+                const canDelete =
+                  !!sid &&
+                  (u.state === 'done-fresh' ||
+                    u.state === 'done-seen' ||
+                    u.state === 'failed-fresh' ||
+                    u.state === 'failed-seen')
+                return (
+                  <SessionInboxRow
+                    key={sid || `${u.taskId}:${u.timestampIso}`}
+                    session={u}
+                    onOpen={() => openSession(u)}
+                    onPinToggle={sid ? () => togglePinned(sid) : undefined}
+                    onRename={
+                      sid
+                        ? () => {
+                            const input = window.prompt('새 제목', u.title)
+                            const trimmed = input?.trim()
+                            if (trimmed) setRenamedTitle(sid, trimmed)
+                          }
+                        : undefined
+                    }
+                    onDelete={canDelete ? () => removeSession(sid) : undefined}
+                  />
+                )
+              })}
             </div>
           )}
         </main>
@@ -511,30 +719,59 @@ function CollapsibleSection({
   )
 }
 
-function StateDot({ state }: { state: SessionState }) {
+/** 행 맨 앞 상태 아이콘 — "모두 원형" 한 패밀리.
+ *  실루엣이 전부 동그라미, 내부 글리프와 fill/outline 으로만 상태 차별화.
+ *  컬러는 실패에만. 나머지는 뉴트럴. */
+function StateIndicator({ state }: { state: SessionState }) {
   if (state === 'working') {
     return (
-      <span className="relative flex w-2 h-2 shrink-0" title="작업 중">
-        <span className="absolute inset-0 rounded-full bg-emerald-500 animate-ping opacity-75" />
-        <span className="relative rounded-full w-2 h-2 bg-emerald-500" />
-      </span>
-    )
-  }
-  if (state === 'waiting') {
-    return (
-      <span
-        className="w-2 h-2 rounded-full bg-amber-500 shrink-0"
-        title="답변 대기"
+      <CircleNotch
+        weight="bold"
+        className="w-4 h-4 text-neutral-500 dark:text-neutral-400 animate-spin"
+        aria-label="실행 중"
       />
     )
   }
-  return <span className="w-2 h-2 rounded-full bg-neutral-300 shrink-0" title="대기" />
-}
-
-function StateLabel({ state }: { state: SessionState }) {
-  if (state === 'working') return <span className="text-emerald-600">작업 중</span>
-  if (state === 'waiting') return <span className="text-amber-600">답변 대기</span>
-  return <span className="text-neutral-400">대기</span>
+  if (state === 'waiting') {
+    // 작은 주황 점. 4x4 슬롯 안에 센터 정렬.
+    return (
+      <span className="w-4 h-4 flex items-center justify-center" aria-label="답변 필요">
+        <span className="w-2 h-2 rounded-full bg-amber-500" />
+      </span>
+    )
+  }
+  if (state === 'done-fresh') {
+    // 작은 뉴트럴 점.
+    return (
+      <span className="w-4 h-4 flex items-center justify-center" aria-label="새 결과">
+        <span className="w-2 h-2 rounded-full bg-neutral-900 dark:bg-neutral-100" />
+      </span>
+    )
+  }
+  if (state === 'done-seen') {
+    // 읽기 전 점과 같은 크기(2x2)의 빈 원. 4x4 슬롯 안에 센터 정렬.
+    return (
+      <span className="w-4 h-4 flex items-center justify-center" aria-label="완료">
+        <span className="w-2 h-2 rounded-full border border-neutral-300 dark:border-neutral-600" />
+      </span>
+    )
+  }
+  if (state === 'failed-fresh') {
+    return (
+      <Warning
+        weight="fill"
+        className="w-4 h-4 text-red-600 dark:text-red-500"
+        aria-label="실패"
+      />
+    )
+  }
+  // failed-seen
+  return (
+    <Warning
+      className="w-4 h-4 text-red-300 dark:text-red-800"
+      aria-label="실패 (확인됨)"
+    />
+  )
 }
 
 function TemplateRow({
@@ -600,13 +837,189 @@ function TemplateRow({
   )
 }
 
+/** 세션 목록 상단 탭 바 — 상태별 필터. 밑줄 형태로 심플. */
+function SessionTabBar({
+  active,
+  onChange,
+  counts,
+}: {
+  active: SessionTabKey
+  onChange: (k: SessionTabKey) => void
+  counts: Record<SessionTabKey, number>
+}) {
+  const tabs: Array<{ key: SessionTabKey; label: string }> = [
+    { key: 'all', label: '전체' },
+    { key: 'waiting', label: '답변 필요' },
+    { key: 'working', label: '진행 중' },
+    { key: 'done', label: '완료' },
+    { key: 'failed', label: '실패' },
+  ]
+  return (
+    <div className="shrink-0 px-3 pt-1 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950">
+      <div className="flex items-center gap-0.5">
+        {tabs.map((tab) => {
+          const isActive = active === tab.key
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => onChange(tab.key)}
+              className={clsx(
+                'relative px-2.5 py-1.5 text-[13px] transition-colors -mb-px border-b-2',
+                isActive
+                  ? 'border-neutral-900 text-neutral-900 dark:border-neutral-100 dark:text-neutral-100 font-medium'
+                  : 'border-transparent text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100',
+              )}
+            >
+              {tab.label}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/** 행 끝의 더보기 버튼(`⋮`). 드롭다운에 고정 / 제목 변경 / 삭제 3개. */
+function RowMoreMenu({
+  pinned,
+  onPinToggle,
+  onRename,
+  onDelete,
+}: {
+  pinned?: boolean
+  onPinToggle?: () => void
+  onRename?: () => void
+  onDelete?: () => void
+}) {
+  const t = useT()
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDocClick = (e: MouseEvent) => {
+      if (!ref.current) return
+      if (!ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onEsc)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onEsc)
+    }
+  }, [open])
+
+  const hasAny = !!onPinToggle || !!onRename || !!onDelete
+
+  const itemClass =
+    'w-full text-left px-3 py-1.5 text-[13px] flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed'
+
+  return (
+    <div className="relative shrink-0" ref={ref}>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          if (hasAny) setOpen((v) => !v)
+        }}
+        disabled={!hasAny}
+        aria-label="더보기"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={clsx(
+          'w-6 h-6 rounded-sm flex items-center justify-center transition-opacity',
+          // 호버 시(또는 메뉴 열림 시) 만 노출. 부모 row 의 group 훅을 사용.
+          open ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus:opacity-100',
+          !hasAny
+            ? 'text-neutral-200 dark:text-neutral-800 cursor-default'
+            : 'text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100 dark:text-neutral-500 dark:hover:text-neutral-100 dark:hover:bg-neutral-800',
+        )}
+      >
+        <DotsThreeVertical weight="bold" className="w-4 h-4" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-7 z-20 min-w-[150px] bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-sm shadow-md py-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!onPinToggle}
+            onClick={(e) => {
+              e.stopPropagation()
+              setOpen(false)
+              onPinToggle?.()
+            }}
+            className={clsx(
+              itemClass,
+              'text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800',
+            )}
+          >
+            {pinned ? (
+              <PushPinSlash className="w-3.5 h-3.5" />
+            ) : (
+              <PushPin className="w-3.5 h-3.5" />
+            )}
+            {pinned ? '고정 해제' : '고정'}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!onRename}
+            onClick={(e) => {
+              e.stopPropagation()
+              setOpen(false)
+              onRename?.()
+            }}
+            className={clsx(
+              itemClass,
+              'text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800',
+            )}
+          >
+            <PencilSimple className="w-3.5 h-3.5" />
+            제목 변경
+          </button>
+          <div className="my-1 border-t border-neutral-100 dark:border-neutral-800" />
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!onDelete}
+            onClick={(e) => {
+              e.stopPropagation()
+              setOpen(false)
+              onDelete?.()
+            }}
+            className={clsx(
+              itemClass,
+              'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40',
+            )}
+          >
+            <Trash className="w-3.5 h-3.5" />
+            {t('tasks.delete') || '삭제'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SessionInboxRow({
   session,
   onOpen,
+  onPinToggle,
+  onRename,
   onDelete,
 }: {
   session: UnifiedSession
   onOpen: () => void
+  onPinToggle?: () => void
+  onRename?: () => void
   onDelete?: () => void
 }) {
   const t = useT()
@@ -616,47 +1029,34 @@ function SessionInboxRow({
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => e.key === 'Enter' && onOpen()}
-      className="group px-6 py-3 hover:bg-white dark:hover:bg-neutral-900 cursor-pointer flex items-start gap-3"
+      className="group px-4 py-2 cursor-pointer flex items-center gap-3 hover:bg-neutral-50 dark:hover:bg-neutral-900 transition-colors"
     >
-      <div className="pt-1.5">
-        <StateDot state={session.state} />
+      <div className="shrink-0 w-4 h-4 flex items-center justify-center">
+        <StateIndicator state={session.state} />
       </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-2">
-          <span className="text-[14px] font-medium text-neutral-900 dark:text-neutral-100 truncate">
-            {session.title}
-          </span>
-        </div>
-        <div className="text-[13px] text-neutral-500 dark:text-neutral-400 mt-0.5 truncate">
-          {session.preview || t('tasks.noSessionPreview') || '—'}
-        </div>
-      </div>
-      <div className="shrink-0 text-right pt-0.5 flex items-start gap-2">
-        <div>
-          <div
-            className="text-[11px] font-mono text-neutral-400"
-            suppressHydrationWarning
-          >
-            {session.relTime}
-          </div>
-          <div className="text-[11px] mt-0.5">
-            <StateLabel state={session.state} />
-          </div>
-        </div>
-        {onDelete && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete()
-            }}
-            aria-label={t('tasks.delete')}
-            className="w-6 h-6 rounded-sm text-neutral-300 hover:text-red-600 hover:bg-red-50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-          >
-            <Trash className="w-3 h-3" />
-          </button>
+      <span
+        title={session.title}
+        className={clsx(
+          'flex-1 min-w-0 truncate text-[14px]',
+          session.state === 'done-seen' || session.state === 'failed-seen'
+            ? 'font-normal text-neutral-500 dark:text-neutral-400'
+            : 'font-medium text-neutral-900 dark:text-neutral-100',
         )}
-      </div>
+      >
+        {session.title}
+      </span>
+      <span
+        className="shrink-0 text-[11px] font-mono text-neutral-400 tabular-nums"
+        suppressHydrationWarning
+      >
+        {session.relTime}
+      </span>
+      <RowMoreMenu
+        pinned={session.pinned}
+        onPinToggle={onPinToggle}
+        onRename={onRename}
+        onDelete={onDelete}
+      />
     </div>
   )
 }

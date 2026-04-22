@@ -16,12 +16,13 @@ import {
 } from '@phosphor-icons/react'
 import { useParams, useRouter } from 'next/navigation'
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AskUserModal } from '@/components/modals/AskUserModal'
 import { useT } from '@/lib/i18n'
 import { postAnswer, type AskUserQuestion } from '@/lib/api/sessions'
-import { useCurrentTeam } from '@/lib/stores/useAppStore'
+import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
 import { useTasksStore } from '@/lib/stores/useTasksStore'
 
 interface SessionArtifact {
@@ -212,8 +213,13 @@ export function RunDetailPage() {
   const router = useRouter()
   const t = useT()
   const team = useCurrentTeam()
+  // Left sidebar (TeamPanel) is 220px expanded / 52px collapsed; right
+  // artifacts aside is fixed at 272px. To keep the chat column centered to
+  // the viewport regardless of collapse state, we pad the chat column's
+  // left by the difference (168px) when the team panel is collapsed.
+  const teamPanelCollapsed = useAppStore((s) => s.teamPanelCollapsed)
+  const chatColOffsetPx = teamPanelCollapsed ? 168 : 0
   const tasks = useTasksStore((s) => s.tasks)
-  const updateRun = useTasksStore((s) => s.updateRun)
   const id = params?.sessionId ?? null
   const [summary, setSummary] = useState<SessionSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -222,49 +228,155 @@ export function RunDetailPage() {
   const [sending, setSending] = useState(false)
   const [pendingUserMessages, setPendingUserMessages] = useState<
     { id: string; text: string }[]
-  >([])
+  >(() => {
+    // Seed from NewChatPage handoff: the user's first message was typed there
+    // but the session only exists now. Without this, the bubble briefly
+    // disappears between /new navigation and the first summary fetch.
+    if (typeof window === 'undefined' || !params?.sessionId) return []
+    try {
+      const key = `openhive:pending:${params.sessionId}`
+      const text = sessionStorage.getItem(key)
+      if (text) {
+        sessionStorage.removeItem(key)
+        return [{ id: `handoff-${Date.now()}`, text }]
+      }
+    } catch {
+      /* sessionStorage unavailable */
+    }
+    return []
+  })
   const [sendError, setSendError] = useState<string | null>(null)
+  // True only while the AI is actively producing output in the current turn.
+  // Flips on node_started/token/tool_call/ask_user, off on turn_finished/
+  // run_finished/run_error. A chat session parks in running status between
+  // turns, so we can't use summary.status for the spinner.
+  const [aiActive, setAiActive] = useState(false)
 
   useEffect(() => {
     if (!id) {
       setSummary(null)
       setLoading(false)
+      setAiActive(false)
       return
     }
     let cancelled = false
-    setLoading(true)
-    setNotFound(false)
-    void (async () => {
+    let es: EventSource | null = null
+    let refetchTimer: ReturnType<typeof setTimeout> | null = null
+    let inflight = false
+    // If events arrive while a fetch is inflight, set this so we kick off
+    // one more fetch when the current one resolves — otherwise late events
+    // (tokens after the first refetch started) never get reflected.
+    let dirty = false
+    setAiActive(false)
+
+    const fetchSummary = async () => {
+      if (cancelled) return
+      if (inflight) {
+        dirty = true
+        return
+      }
+      inflight = true
+      dirty = false
       try {
         const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`)
         if (!res.ok) {
           if (!cancelled) {
-            setSummary(null)
-            setNotFound(true)
+            if (res.status === 404) setNotFound(true)
           }
           return
         }
         const data = (await res.json()) as SessionSummary
-        if (cancelled) return
-        setSummary(data)
+        if (!cancelled) setSummary(data)
       } catch {
-        if (!cancelled) setSummary(null)
+        /* transient — will refetch on next event */
       } finally {
+        inflight = false
         if (!cancelled) setLoading(false)
+        if (dirty && !cancelled) {
+          dirty = false
+          void fetchSummary()
+        }
       }
-    })()
+    }
+
+    const scheduleRefetch = () => {
+      if (refetchTimer) return
+      refetchTimer = setTimeout(() => {
+        refetchTimer = null
+        void fetchSummary()
+      }, 60)
+    }
+
+    setLoading(true)
+    setNotFound(false)
+
+    void fetchSummary().then(() => {
+      if (cancelled) return
+      es = new EventSource(`/api/sessions/${encodeURIComponent(id)}/stream`)
+      es.onmessage = (ev) => {
+        if (ev.data === '[DONE]') {
+          es?.close()
+          es = null
+          setAiActive(false)
+          void fetchSummary()
+          return
+        }
+        try {
+          const evt = JSON.parse(ev.data) as { kind?: string }
+          switch (evt.kind) {
+            case 'run_started':
+            case 'node_started':
+            case 'token':
+            case 'tool_call':
+              setAiActive(true)
+              break
+            case 'turn_finished':
+            case 'run_finished':
+            case 'run_error':
+            case 'ask_user':
+            case 'user_question':
+              setAiActive(false)
+              break
+            case 'user_message':
+              // New user input kicks off the next turn; the matching
+              // node_started will flip aiActive on immediately after.
+              break
+          }
+        } catch {
+          /* non-JSON frame (shouldn't happen) */
+        }
+        scheduleRefetch()
+      }
+      es.onerror = () => {
+        // EventSource fires onerror on transient hiccups too (the browser is
+        // about to auto-reconnect — readyState === CONNECTING). Only tear
+        // down when the connection is permanently closed; otherwise
+        // previously we killed the subscription on the first blip and the
+        // user had to hard-refresh to see any further AI output.
+        if (es && es.readyState === EventSource.CLOSED) {
+          es = null
+          // Connection is gone for good — do a final refetch so any events
+          // that arrived during the teardown are reflected.
+          void fetchSummary()
+        }
+      }
+    })
+
     return () => {
       cancelled = true
+      if (refetchTimer) clearTimeout(refetchTimer)
+      if (es) es.close()
     }
   }, [id])
 
+  // 드래프트/세션 분리 이후 session 은 sessions store 의 1급 레코드로 관리됨.
+  // 이 화면의 데이터 소스는 서버 summary — task 참조는 오직 화면 컨텍스트
+  // (제목/참고자료 등) 용도. pendingAsk 는 서버 summary 를 truth 로 사용한다.
   const task =
     (summary?.session_id
       ? tasks.find((x) => x.sessions.some((r) => r.id === summary.session_id))
       : null) ?? null
-  const session =
-    task?.sessions.find((r) => r.id === summary?.session_id) ?? null
-  const pendingAsk = session?.pendingAsk ?? summary?.pending_ask ?? null
+  const pendingAsk = summary?.pending_ask ?? null
 
   useEffect(() => {
     if (pendingAsk) setShowAsk(true)
@@ -274,7 +386,6 @@ export function RunDetailPage() {
     if (!pendingAsk) return
     try {
       await postAnswer(pendingAsk.toolCallId, { answers })
-      if (task && session) updateRun(task.id, session.id, { pendingAsk: undefined })
       setSummary((prev) => (prev ? { ...prev, pending_ask: null } : prev))
     } catch (e) {
       console.error(e)
@@ -287,7 +398,6 @@ export function RunDetailPage() {
     if (!pendingAsk) return
     try {
       await postAnswer(pendingAsk.toolCallId, { skipped: true })
-      if (task && session) updateRun(task.id, session.id, { pendingAsk: undefined })
       setSummary((prev) => (prev ? { ...prev, pending_ask: null } : prev))
     } catch (e) {
       console.error(e)
@@ -297,23 +407,66 @@ export function RunDetailPage() {
   }
 
   const chat = useMemo(() => {
-    if (!summary) return [] as ChatItem[]
+    if (!summary) {
+      // Summary hasn't loaded yet — still render handoff pending bubbles so
+      // the message stays visible across the /new → /s/{id} transition.
+      return pendingUserMessages.map((m) => ({
+        kind: 'user' as const,
+        id: m.id,
+        text: m.text,
+        pending: true,
+      }))
+    }
     const base = buildChat(summary, team)
-    // Optimistic append — keeps the user message visible while the server
-    // is still processing / before the transcript catches up.
+    // Drop pending bubbles whose text already appears as goal or user_message
+    // in the transcript — avoids duplicates once the server catches up.
+    const serverTexts = new Set<string>()
+    if (summary.goal) serverTexts.add(summary.goal.trim())
+    for (const e of summary.transcript) {
+      if (e.kind === 'user_message' || e.kind === 'goal') {
+        const t = String(e.text ?? '').trim()
+        if (t) serverTexts.add(t)
+      }
+    }
     for (const m of pendingUserMessages) {
+      if (serverTexts.has(m.text.trim())) continue
       base.push({ kind: 'user', id: m.id, text: m.text, pending: true })
     }
     return base
   }, [summary, team, pendingUserMessages])
 
+  // Once the server transcript catches up with a pending bubble, drop it
+  // from state so it doesn't linger as a stale entry.
+  useEffect(() => {
+    if (!summary || pendingUserMessages.length === 0) return
+    const serverTexts = new Set<string>()
+    if (summary.goal) serverTexts.add(summary.goal.trim())
+    for (const e of summary.transcript) {
+      if (e.kind === 'user_message' || e.kind === 'goal') {
+        const t = String(e.text ?? '').trim()
+        if (t) serverTexts.add(t)
+      }
+    }
+    const next = pendingUserMessages.filter(
+      (m) => !serverTexts.has(m.text.trim()),
+    )
+    if (next.length !== pendingUserMessages.length) {
+      setPendingUserMessages(next)
+    }
+  }, [summary, pendingUserMessages])
+
   async function sendMessage(raw: string) {
     const text = raw.trim()
     if (!text || !id || sending) return
     const localId = `pending-${Date.now()}`
-    setPendingUserMessages((prev) => [...prev, { id: localId, text }])
-    setSending(true)
-    setSendError(null)
+    // Force the optimistic bubble to paint this frame — otherwise React
+    // batches these sets with the subsequent setSummary/refetch work and
+    // the user perceives a ~1s gap before their message appears.
+    flushSync(() => {
+      setPendingUserMessages((prev) => [...prev, { id: localId, text }])
+      setSending(true)
+      setSendError(null)
+    })
     try {
       const res = await fetch(
         `/api/sessions/${encodeURIComponent(id)}/messages`,
@@ -371,7 +524,10 @@ export function RunDetailPage() {
     )
   }
 
-  const running = summary.status === 'running'
+  // Show the "진행 중…" spinner only when the AI is actively generating.
+  // A chat session's server-side status stays 'running' while idle between
+  // turns, so we drive this from live engine events instead.
+  const running = aiActive && !pendingAsk
   const title = task?.title ?? summary.goal.split('\n')[0]?.slice(0, 80) ?? 'Session'
   const references = task?.references ?? []
 
@@ -414,8 +570,12 @@ export function RunDetailPage() {
       {/* Split: chat | artifacts */}
       <div className="flex-1 min-h-0 flex">
         {/* Chat column — scroll area + composer are regular flex children so
-         *  the scrollbar never sits behind the input. */}
-        <div className="flex-1 min-w-0 flex flex-col">
+         *  the scrollbar never sits behind the input. paddingLeft keeps the
+         *  chat centered to the viewport when the left sidebar collapses. */}
+        <div
+          className="flex-1 min-w-0 flex flex-col transition-[padding]"
+          style={{ paddingLeft: chatColOffsetPx }}
+        >
           <div className="flex-1 min-h-0 overflow-y-auto scrollbar-quiet">
             <div className="max-w-[760px] mx-auto px-6 pt-6 pb-4 space-y-4">
               {chat.map((item) => (
@@ -900,7 +1060,7 @@ function ChatBubble({ item }: { item: ChatItem }) {
     return (
       <div className="flex justify-end">
         <div
-          className={`max-w-[80%] rounded-2xl rounded-br-sm bg-neutral-900 text-neutral-50 dark:bg-neutral-100 dark:text-neutral-900 px-4 py-3 text-[15.5px] whitespace-pre-wrap leading-relaxed ${
+          className={`max-w-[80%] rounded-2xl rounded-br-sm bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100 px-4 py-3 text-[15.5px] whitespace-pre-wrap leading-relaxed ${
             item.pending ? 'opacity-60' : ''
           }`}
         >
@@ -911,7 +1071,7 @@ function ChatBubble({ item }: { item: ChatItem }) {
   }
   if (item.kind === 'assistant') {
     return (
-      <div className="px-4 py-3 text-[15.5px] text-neutral-900 dark:text-neutral-100 leading-relaxed">
+      <div className="text-[15.5px] text-neutral-900 dark:text-neutral-100 leading-relaxed">
         <Markdown text={item.text} />
       </div>
     )

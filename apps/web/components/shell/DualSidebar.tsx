@@ -1,6 +1,6 @@
 'use client'
 
-import { Buildings, GearSix, Plus, Users } from '@phosphor-icons/react'
+import { Buildings, GearSix, Plus, SidebarSimple } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import Link from 'next/link'
 import { useSelectedLayoutSegment } from 'next/navigation'
@@ -9,6 +9,7 @@ import { CompanySettingsModal } from '@/components/modals/CompanySettingsModal'
 import { NewTeamModal } from '@/components/modals/NewTeamModal'
 import { TeamSettingsModal } from '@/components/modals/TeamSettingsModal'
 import { CompanyRail } from '@/components/shell/CompanyRail'
+import { TeamIcon } from '@/components/shell/TeamIcon'
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
 
@@ -22,6 +23,8 @@ export function DualSidebar() {
   const companies = useAppStore((s) => s.companies)
   const currentCompanyId = useAppStore((s) => s.currentCompanyId)
   const currentTeamId = useAppStore((s) => s.currentTeamId)
+  const collapsed = useAppStore((s) => s.teamPanelCollapsed)
+  const toggleTeamPanel = useAppStore((s) => s.toggleTeamPanel)
 
   const [newTeamCompanyId, setNewTeamCompanyId] = useState<string | null>(null)
   const [teamSettings, setTeamSettings] = useState<{ companyId: string; teamId: string } | null>(
@@ -40,8 +43,58 @@ export function DualSidebar() {
     <>
       <CompanyRail />
 
-      <aside className="w-[220px] shrink-0 border-r border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 flex flex-col">
-        {selectedCompany && (
+      <aside
+        className={clsx(
+          'shrink-0 border-r border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 flex flex-col transition-[width]',
+          collapsed ? 'w-[52px]' : 'w-[220px]',
+        )}
+      >
+        {selectedCompany && (collapsed ? (
+          /* ── 접힌 상태 : 52px 세로 레일 — 상단은 토글 버튼만 ── */
+          <>
+            <div className="px-2 pt-3 pb-2 flex flex-col items-center border-b border-neutral-100 dark:border-neutral-800">
+              <button
+                type="button"
+                onClick={toggleTeamPanel}
+                aria-label="팀 패널 펼치기"
+                title="팀 패널 펼치기"
+                className="w-9 h-9 rounded-md flex items-center justify-center text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+              >
+                <SidebarSimple className="w-[18px] h-[18px]" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto py-2 flex flex-col items-center gap-1.5">
+              {selectedCompany.teams.map((team) => {
+                const isActive = currentTeamId === team.id
+                return (
+                  <Link
+                    key={team.id}
+                    href={`/${selectedCompany.slug}/${team.slug}/${tab}`}
+                    title={team.name}
+                    className={clsx(
+                      'w-9 h-9 rounded-md flex items-center justify-center shrink-0 cursor-pointer',
+                      isActive
+                        ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200 ring-1 ring-amber-200 dark:ring-amber-800/60'
+                        : 'text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800',
+                    )}
+                  >
+                    <TeamIcon name={team.icon} className="w-4 h-4" />
+                  </Link>
+                )
+              })}
+              <button
+                type="button"
+                onClick={() => setNewTeamCompanyId(selectedCompany.id)}
+                aria-label={t('sidebar.newTeam')}
+                title={t('sidebar.newTeam')}
+                className="w-9 h-9 rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 text-neutral-400 hover:text-neutral-700 hover:border-neutral-500 flex items-center justify-center cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </>
+        ) : (
+          /* ── 펼친 상태 : 220px 기본 패널 ── */
           <>
             <div className="px-3 pt-3 pb-2 flex items-center gap-2 border-b border-neutral-100 dark:border-neutral-800 group">
               <Buildings className="w-4 h-4 text-neutral-500 shrink-0" />
@@ -52,9 +105,18 @@ export function DualSidebar() {
                 type="button"
                 aria-label={t('sidebar.companySettings')}
                 onClick={() => setCompanySettingsId(selectedCompany.id)}
-                className="w-6 h-6 flex items-center justify-center text-neutral-400 opacity-0 group-hover:opacity-100 hover:text-neutral-700 cursor-pointer"
+                className="w-7 h-7 flex items-center justify-center rounded-sm text-neutral-500 opacity-0 group-hover:opacity-100 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
               >
-                <GearSix className="w-3.5 h-3.5" />
+                <GearSix className="w-[18px] h-[18px]" />
+              </button>
+              <button
+                type="button"
+                aria-label="팀 패널 접기"
+                title="팀 패널 접기"
+                onClick={toggleTeamPanel}
+                className="w-7 h-7 flex items-center justify-center rounded-sm text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+              >
+                <SidebarSimple className="w-[18px] h-[18px]" />
               </button>
             </div>
             <div className="flex-1 overflow-y-auto py-2">
@@ -83,7 +145,10 @@ export function DualSidebar() {
                             : 'text-neutral-700 dark:text-neutral-200',
                         )}
                       >
-                        <Users className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+                        <TeamIcon
+                          name={team.icon}
+                          className="w-3.5 h-3.5 text-neutral-400 shrink-0"
+                        />
                         <span className="flex-1 truncate">{team.name}</span>
                       </Link>
                       <button
@@ -92,9 +157,9 @@ export function DualSidebar() {
                         onClick={() =>
                           setTeamSettings({ companyId: selectedCompany.id, teamId: team.id })
                         }
-                        className="w-6 h-6 flex items-center justify-center text-neutral-400 opacity-0 group-hover:opacity-100 hover:text-neutral-700 cursor-pointer"
+                        className="mr-1 w-7 h-7 flex items-center justify-center rounded-sm text-neutral-500 opacity-0 group-hover:opacity-100 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
                       >
-                        <GearSix className="w-3.5 h-3.5" />
+                        <GearSix className="w-[18px] h-[18px]" />
                       </button>
                     </div>
                   )
@@ -109,7 +174,7 @@ export function DualSidebar() {
               </button>
             </div>
           </>
-        )}
+        ))}
       </aside>
 
       <NewTeamModal

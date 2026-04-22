@@ -3,13 +3,12 @@ import {
   type AskUserQuestion,
   type SessionEvent,
   attachSession,
-  startSession,
   stopBackendSession,
 } from '../api/sessions'
 import { deleteTask as apiDeleteTask, fetchTasks, saveTask as apiSaveTask } from '../api/tasks'
 import { t as translate } from '../i18n'
 import { mockTasks } from '../mock/tasks'
-import type { Message, PendingAsk, Session, Task, TaskStatus, Team } from '../types'
+import type { Message, PendingAsk, Session, Task, Team } from '../types'
 import { useAppStore } from './useAppStore'
 import { useCanvasStore } from './useCanvasStore'
 import { useDrawerStore } from './useDrawerStore'
@@ -35,27 +34,6 @@ function composePrompt(task: Task): string {
     }
   }
   return parts.join('\n')
-}
-
-export function taskStatus(task: Task): TaskStatus {
-  if (task.sessions.length === 0) {
-    return task.mode === 'scheduled' ? 'scheduled' : 'draft'
-  }
-  // Concurrency: a task can have multiple live sessions (user hits Play twice, or
-  // cron fires while a manual session is mid-flight). Prioritise active states
-  // across ALL sessions rather than defaulting to `sessions[last]`, otherwise a fresh
-  // short-lived session (e.g. a cancellation) can mask an older session that's still
-  // waiting on the user.
-  const hasPendingAsk = task.sessions.some(
-    (r) => r.status === 'running' && r.pendingAsk,
-  )
-  if (hasPendingAsk) return 'needs_input'
-  if (task.sessions.some((r) => r.status === 'needs_input')) return 'needs_input'
-  if (task.sessions.some((r) => r.status === 'running')) return 'running'
-  const latest = task.sessions[task.sessions.length - 1]!
-  if (latest.status === 'failed') return 'failed'
-  // done — cron tasks loop back to scheduled after a successful session
-  return task.mode === 'scheduled' ? 'scheduled' : 'done'
 }
 
 // ─── Persistence (debounced fire-and-forget) ─────────────────────────────────
@@ -121,7 +99,7 @@ interface TasksState {
   ) => void
 
   /** Session a task via the streaming engine. Creates a new Session and drives events. */
-  startSessionFromTask: (task: Task, team: Team) => Promise<void>
+  startSessionFromTask: (task: Task, team: Team) => Promise<string | null>
   /** Reconnect to any in-flight backend sessions (survives reload/navigation). */
   reattachSessions: (team: Team) => void
   /** Abort an active session. Safe to call when no session is active (no-op). */
@@ -303,7 +281,7 @@ async function consumeRunStream(
             error: errMsg,
           })
           syncSession({
-            status: errMsg === 'interrupted' || errMsg === 'cancelled' ? 'interrupted' : 'failed',
+            status: 'failed',
             endedAt,
             error: errMsg,
           })
@@ -522,52 +500,16 @@ export const useTasksStore = create<TasksState>((set, get) => ({
   },
 
   startSessionFromTask: async (task, team) => {
+    // Drafts/templates are pure samples — never embed sessions into the Task.
+    // Executing a draft just copies its composed prompt into a new standalone
+    // session that references the task by id (for provenance).
     const fullPrompt = composePrompt(task)
-    const localSessionId = makeId('session')
-    const session: Session = {
-      id: localSessionId,
-      clientSessionId: localSessionId,
+    const session = await useSessionsStore.getState().startSession({
+      team,
       taskId: task.id,
-      teamId: team.id,
       goal: fullPrompt,
-      status: 'running',
-      startedAt: new Date().toISOString(),
-      messages: [],
-    }
-    get().addRun(task.id, session)
-    let backendSessionId: string
-    try {
-      const r = await startSession(team, fullPrompt, {
-        locale: useAppStore.getState().locale,
-        taskId: task.id,
-      })
-      backendSessionId = r.sessionId
-    } catch (e) {
-      get().updateRun(task.id, localSessionId, {
-        status: 'failed',
-        endedAt: new Date().toISOString(),
-        error: e instanceof Error ? e.message : String(e),
-      })
-      return
-    }
-    get().updateRun(task.id, localSessionId, { id: backendSessionId, clientSessionId: localSessionId })
-    // Mirror into the sessions store — temporary bridge during the task/session
-    // decoupling refactor. The Done column reads from sessions store, so fresh
-    // sessions need to appear there as they finish.
-    {
-      const archiveSession: Session = {
-        id: backendSessionId,
-        clientSessionId: localSessionId,
-        taskId: task.id,
-        teamId: team.id,
-        goal: fullPrompt,
-        status: 'running',
-        startedAt: session.startedAt,
-        messages: [],
-      }
-      useSessionsStore.getState().upsertSession(archiveSession)
-    }
-    await consumeRunStream(get, set, task, team, backendSessionId, backendSessionId)
+    })
+    return session?.id ?? null
   },
 
   reattachSessions: (team) => {

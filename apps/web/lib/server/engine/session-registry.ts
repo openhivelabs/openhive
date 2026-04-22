@@ -198,6 +198,25 @@ async function driveSession(
       } else if (event.kind === 'run_error') {
         const err = String(event.data.error ?? 'error')
         await sessionsStore.finishSession(event.session_id, { error: err })
+      } else if (event.kind === 'turn_finished') {
+        // 턴 완료 = AI 가 이번 턴 생성을 끝내고 inbox 에 파킹. 세션 프로세스는
+        // 살아있지만 유저 관점에서는 "끝난 상태" — 리스트 스피너가 멈춰야 함.
+        // 다음 user_message 가 오면 다시 running 으로 flip.
+        const output =
+          typeof event.data.output === 'string'
+            ? (event.data.output as string)
+            : null
+        sessionsStore.updateMeta(event.session_id, {
+          status: 'finished',
+          output,
+          finished_at: Date.now(),
+        })
+      } else if (event.kind === 'user_message') {
+        // 새 턴 시작 — idle 에서 다시 running 으로.
+        sessionsStore.updateMeta(event.session_id, {
+          status: 'running',
+          finished_at: null,
+        })
       }
     }
   } catch (exc) {

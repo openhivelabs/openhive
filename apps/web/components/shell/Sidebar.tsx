@@ -1,6 +1,7 @@
 'use client'
 
-import { Buildings, CaretRight, GearSix, Plus, Users } from '@phosphor-icons/react'
+import { Buildings, CaretRight, GearSix, Plus } from '@phosphor-icons/react'
+import { TeamIcon } from '@/components/shell/TeamIcon'
 import { clsx } from 'clsx'
 import { useState } from 'react'
 import { CompanySettingsModal } from '@/components/modals/CompanySettingsModal'
@@ -104,7 +105,7 @@ export function Sidebar() {
                             isActive ? 'text-amber-900' : 'text-neutral-600',
                           )}
                         >
-                          <Users className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+                          <TeamIcon name={team.icon} className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
                           <span className="flex-1 truncate">{team.name}</span>
                           <span className="text-[14px] text-neutral-400 font-mono">
                             {team.agents.length}

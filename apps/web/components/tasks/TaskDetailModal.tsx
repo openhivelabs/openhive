@@ -18,7 +18,7 @@ import { type AskUserQuestion, postAnswer } from '@/lib/api/sessions'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { useT } from '@/lib/i18n'
 import { useCurrentTeam } from '@/lib/stores/useAppStore'
-import { taskStatus, useTasksStore } from '@/lib/stores/useTasksStore'
+import { useTasksStore } from '@/lib/stores/useTasksStore'
 import type { Task, TaskReference } from '@/lib/types'
 import { Button } from '../ui/Button'
 import { formatDuration, runElapsedMs, useTicker } from './shared'
@@ -148,7 +148,6 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
 
   useEscapeClose(task, onClose)
 
-  const status = task ? taskStatus(task) : 'idle'
   // If the user opened a specific session card (Running/Done column), honor that
   // choice — otherwise multiple session cards for the same task would all collapse
   // to the same "latest" session, and per-session output/artifacts look blank.
@@ -176,7 +175,8 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
     if (pendingAsk && selectedSessionId) setShowAsk(true)
   }, [pendingAsk?.toolCallId, selectedSessionId])
 
-  // For sessions that have ended (done / failed / interrupted), pull the final
+  // For sessions that have ended (done / failed — failed includes user-cancelled
+  // and server-interrupted, see error field), pull the final
   // Lead output + any generated artifacts from the session store so each
   // done card shows that session's unique deliverable. Re-fetched per session so
   // switching cards doesn't leak previous data.
@@ -216,7 +216,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
       cancelled = true
     }
   }, [endedSessionId])
-  const isRunning = status === 'running' || status === 'needs_input'
+  const isRunning = latest?.status === 'running' || latest?.status === 'needs_input'
   const now = useTicker(isRunning && !!latest && !latest.endedAt)
   const elapsedMs = latest ? runElapsedMs(latest, now) : 0
 
@@ -293,7 +293,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
           <div className="flex-1 min-w-0">
             <div className="text-[16px] font-semibold text-neutral-900">{task.title}</div>
             <div className="text-[13px] text-neutral-500 mt-0.5 flex items-center gap-2 flex-wrap">
-              <span>{t(`tasks.status.${statusKey(status)}`)}</span>
+              <span>{t(task.mode === 'scheduled' ? 'tasks.status.scheduled' : 'tasks.status.draft')}</span>
               {latest && (
                 <span
                   className="font-mono text-neutral-600"
@@ -544,7 +544,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
               {t('tasks.answer')} ({pendingAsk.questions.length})
             </Button>
           )}
-          {team && status !== 'running' && (
+          {team && latest?.status !== 'running' && (
             <Button
               size="sm"
               variant={latest ? 'outline' : 'primary'}
@@ -556,7 +556,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
               {t('tasks.runNow')}
             </Button>
           )}
-          {status === 'running' && latest && (
+          {latest?.status === 'running' && (
             <Button
               size="sm"
               variant="outline"
@@ -596,11 +596,6 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
       />
     </div>
   )
-}
-
-function statusKey(s: string): string {
-  if (s === 'needs_input') return 'needsInput'
-  return s
 }
 
 function formatBytes(b: number): string {

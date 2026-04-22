@@ -45,7 +45,8 @@ interface ServerSessionRow {
 function mapServerStatus(row: ServerSessionRow): Session['status'] {
   if (row.status === 'running') return 'running'
   if (row.status === 'finished') return 'done'
-  if (row.error === 'interrupted' || row.error === 'cancelled') return 'interrupted'
+  // Both server 'error' and 'interrupted' collapse to client 'failed'.
+  // Cause is preserved in row.error ('interrupted' | 'cancelled' | <message>).
   return 'failed'
 }
 
@@ -249,6 +250,20 @@ async function consumeStream(
                 : 'trace.askAnswered',
             ),
           )
+          break
+        case 'turn_finished':
+          // 한 턴 끝 — 세션은 살아있지만 "지금 작업 중" 은 아님. 리스트 스피너 멈춤.
+          get().updateSession(session.id, {
+            status: 'done',
+            endedAt: new Date().toISOString(),
+          })
+          break
+        case 'user_message':
+          // 새 턴 시작 — 다시 running 으로 flip.
+          get().updateSession(session.id, {
+            status: 'running',
+            endedAt: undefined,
+          })
           break
         case 'run_error':
           pushSystem(

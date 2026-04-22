@@ -14,6 +14,8 @@ export type EventKind =
   | 'checkpoint'
   | 'user_question'
   | 'user_answered'
+  | 'turn_finished'
+  | 'user_message'
 
 export interface AskUserOption {
   label: string

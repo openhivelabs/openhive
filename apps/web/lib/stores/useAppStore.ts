@@ -8,6 +8,7 @@ import type { CanvasMode, Company, Team } from '../types'
 const LOCALE_KEY = 'openhive.locale'
 const THEME_KEY = 'openhive.theme'
 const DEFAULT_MODEL_KEY = 'openhive.defaultModel'
+const TEAM_PANEL_COLLAPSED_KEY = 'openhive.sidebar.teamPanelCollapsed'
 
 export type Theme = 'light' | 'dark' | 'system'
 
@@ -38,6 +39,25 @@ function applyThemeClass(t: Theme) {
   if (typeof document === 'undefined') return
   const resolved = resolveTheme(t)
   document.documentElement.classList.toggle('dark', resolved === 'dark')
+}
+
+function readTeamPanelCollapsed(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage.getItem(TEAM_PANEL_COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeTeamPanelCollapsed(v: boolean) {
+  if (typeof window === 'undefined') return
+  try {
+    if (v) window.localStorage.setItem(TEAM_PANEL_COLLAPSED_KEY, '1')
+    else window.localStorage.removeItem(TEAM_PANEL_COLLAPSED_KEY)
+  } catch {
+    /* ignore */
+  }
 }
 
 function readDefaultModel(): DefaultModel | null {
@@ -80,6 +100,10 @@ export function hydrateLocaleFromStorage() {
   if (dm !== useAppStore.getState().defaultModel) {
     useAppStore.setState({ defaultModel: dm })
   }
+  const collapsed = readTeamPanelCollapsed()
+  if (useAppStore.getState().teamPanelCollapsed !== collapsed) {
+    useAppStore.setState({ teamPanelCollapsed: collapsed })
+  }
 }
 
 function writeLocale(l: Locale) {
@@ -111,12 +135,15 @@ interface AppState {
   locale: Locale
   theme: Theme
   defaultModel: DefaultModel | null
+  /** 팀 목록 패널 접힘 상태 — localStorage persist. 브라우저별로 유지. */
+  teamPanelCollapsed: boolean
 
   setCompany: (id: string) => void
   setTeam: (id: string) => void
   setMode: (mode: CanvasMode) => void
   toggleSidebar: () => void
   toggleDrawer: () => void
+  toggleTeamPanel: () => void
   setLocale: (l: Locale) => void
   setTheme: (t: Theme) => void
   setDefaultModel: (m: DefaultModel | null) => void
@@ -152,6 +179,7 @@ export const useAppStore = create<AppState>((set, get) => {
     locale: 'en',
     theme: 'system',
     defaultModel: null,
+    teamPanelCollapsed: false,
 
     setCompany: (id) =>
       set((state) => {
@@ -166,6 +194,12 @@ export const useAppStore = create<AppState>((set, get) => {
     setMode: (mode) => set({ mode }),
     toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
     toggleDrawer: () => set((s) => ({ drawerOpen: !s.drawerOpen })),
+    toggleTeamPanel: () =>
+      set((s) => {
+        const next = !s.teamPanelCollapsed
+        writeTeamPanelCollapsed(next)
+        return { teamPanelCollapsed: next }
+      }),
     setLocale: (l) => {
       writeLocale(l)
       set({ locale: l })

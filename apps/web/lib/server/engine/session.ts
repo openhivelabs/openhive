@@ -143,6 +143,13 @@ function newId(prefix: string): string {
   return `${prefix}_${crypto.randomBytes(4).toString('hex')}`
 }
 
+/** 세션 ID 는 외부(URL · meta.json · 이벤트 스트림 · 스토리지 경로)로 노출되므로
+ *  충돌 가능성 낮고 외부 시스템과 호환 좋은 uuid v4 를 쓴다. 내부 id(tool_call,
+ *  sibling, todo) 들은 prefix 형태 유지. */
+function newSessionId(): string {
+  return crypto.randomUUID()
+}
+
 // -------- history compaction helpers (Phase B token savings) --------
 
 /** Walk the history, build a tool_call_id → (name, args) map from assistant
@@ -325,7 +332,7 @@ export async function* runTeam(
   goal: string,
   opts: SessionTeamOpts = {},
 ): AsyncGenerator<Event> {
-  const sessionId = newId('session')
+  const sessionId = newSessionId()
   const sem = getRunSemaphore()
 
   const queued = sem.locked()

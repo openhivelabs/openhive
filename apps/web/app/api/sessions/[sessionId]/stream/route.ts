@@ -4,9 +4,12 @@ import { eventsForSession, finishSession, getSession } from '@/lib/server/sessio
 // An "active" run with no event for this long is a zombie — the engine
 // generator died silently (HMR, uncaught rejection) but the registry
 // still thinks it's live. We evict + reconcile on the next reconnect.
-// We exclude user_question as the last event because those legitimately
-// wait on human input for arbitrary durations.
+// Exclusions: kinds that legitimately park for arbitrary durations.
+//   - user_question: waiting on ask_user answer
+//   - turn_finished: chat session parked on inbox.pop() awaiting the next
+//     user message (see engine/session.ts runTeamBody loop)
 const ZOMBIE_THRESHOLD_MS = 120_000
+const IDLE_PARK_KINDS = new Set(['user_question', 'turn_finished'])
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,7 +43,7 @@ export async function GET(
       const latest = allEvents[allEvents.length - 1]
       if (latest) {
         const ageMs = Date.now() - latest.ts * 1000
-        if (ageMs > ZOMBIE_THRESHOLD_MS && latest.kind !== 'user_question') {
+        if (ageMs > ZOMBIE_THRESHOLD_MS && !IDLE_PARK_KINDS.has(latest.kind)) {
           forceEvict(sessionId)
         }
       }

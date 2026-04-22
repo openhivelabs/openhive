@@ -38,6 +38,9 @@ export interface Team {
   id: string
   slug: string
   name: string
+  /** 사이드바에 표시되는 팀 아이콘 이름 (phosphor 아이콘 이름 문자열).
+   *  값 없으면 기본 'Users' 로 렌더. */
+  icon?: string
   agents: Agent[]
   edges: ReportingEdge[]
   entryAgentId?: string | null
@@ -88,7 +91,6 @@ export type CanvasMode = 'design' | 'run'
 export type DrawerTab = 'chat' | 'data' | 'triggers' | 'artifacts'
 
 export type TaskMode = 'now' | 'scheduled'
-export type TaskStatus = 'draft' | 'scheduled' | 'running' | 'needs_input' | 'done' | 'failed'
 export type SessionStatus = 'running' | 'needs_input' | 'done' | 'failed'
 
 export interface PendingAsk {
@@ -108,7 +110,7 @@ export interface Session {
   taskId: string | null
   teamId: string
   goal: string
-  status: SessionStatus | 'interrupted'
+  status: SessionStatus
   /** ISO timestamps. */
   startedAt: string
   endedAt?: string

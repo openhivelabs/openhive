@@ -1,6 +1,7 @@
 'use client'
 
 import { DownloadSimple, Trash, X } from '@phosphor-icons/react'
+import { clsx } from 'clsx'
 import { useEffect, useState } from 'react'
 import { deleteTeam } from '@/lib/api/companies'
 import { downloadFrame } from '@/lib/api/frames'
@@ -9,6 +10,11 @@ import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import type { Team } from '@/lib/types'
+import {
+  DEFAULT_TEAM_ICON_KEY,
+  TEAM_ICONS,
+  resolveTeamIcon,
+} from '../shell/TeamIcon'
 import { Button } from '../ui/Button'
 
 interface Props {
@@ -87,11 +93,17 @@ export function TeamSettingsModal({ open, companyId, teamId, onClose }: Props) {
         <div className="px-5 py-4 space-y-4">
           <div>
             <label className="text-[15px] font-medium text-neutral-600">{t('teamSettings.name')}</label>
-            <input
-              value={draft.name}
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              className="mt-1 w-full px-3 py-1.5 text-[15px] rounded-sm border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-300"
-            />
+            <div className="mt-1 flex items-stretch gap-2">
+              <IconPickerButton
+                value={draft.icon ?? DEFAULT_TEAM_ICON_KEY}
+                onChange={(k) => setDraft({ ...draft, icon: k })}
+              />
+              <input
+                value={draft.name}
+                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                className="flex-1 px-3 py-1.5 text-[15px] rounded-sm border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-300"
+              />
+            </div>
           </div>
 
           <div>
@@ -167,6 +179,69 @@ export function TeamSettingsModal({ open, companyId, teamId, onClose }: Props) {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** 아이콘 선택 버튼 — 클릭하면 팝오버로 아이콘 그리드가 뜸. 선택하면 닫힘. */
+function IconPickerButton({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (key: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const Current = resolveTeamIcon(value)
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="팀 아이콘 선택"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className="h-full w-10 flex items-center justify-center rounded-sm border border-neutral-300 text-neutral-700 hover:bg-neutral-50"
+      >
+        <Current className="w-4 h-4" />
+      </button>
+      {open && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setOpen(false)}
+            aria-hidden
+          />
+          <div
+            role="dialog"
+            className="absolute left-0 top-[calc(100%+4px)] z-50 w-[260px] rounded-md border border-neutral-200 bg-white shadow-lg p-2 grid grid-cols-6 gap-1"
+          >
+            {Object.entries(TEAM_ICONS).map(([key, Icon]) => {
+              const isActive = key === value
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => {
+                    onChange(key)
+                    setOpen(false)
+                  }}
+                  aria-label={key}
+                  title={key}
+                  className={clsx(
+                    'w-9 h-9 rounded-sm flex items-center justify-center transition-colors',
+                    isActive
+                      ? 'bg-neutral-900 text-white'
+                      : 'text-neutral-600 hover:bg-neutral-100',
+                  )}
+                >
+                  <Icon className="w-4 h-4" />
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
     </div>
   )
 }
