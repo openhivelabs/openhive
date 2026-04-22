@@ -20,9 +20,7 @@ function make(): LimitFunction {
   const raw = process.env.OPENHIVE_PYTHON_CONCURRENCY
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN
   const n =
-    Number.isFinite(parsed) && parsed > 0
-      ? parsed
-      : Math.max(2, Math.min(os.cpus().length, 4))
+    Number.isFinite(parsed) && parsed > 0 ? parsed : Math.max(2, Math.min(os.cpus().length, 4))
   return pLimit(n)
 }
 

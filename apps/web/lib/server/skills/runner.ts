@@ -16,12 +16,9 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { acquireSkillSlot } from './concurrency'
+import { MAX_READABLE_FILE_BYTES, type SkillDef, resolveWithinSkill } from './loader'
 import which from './which'
-import {
-  MAX_READABLE_FILE_BYTES,
-  resolveWithinSkill,
-  type SkillDef,
-} from './loader'
 
 export const DEFAULT_TIMEOUT_MS = 120_000
 export const STDOUT_CAP_BYTES = 8 * 1024
@@ -122,9 +119,7 @@ function filesFromEnvelope(
         ? entry.name
         : path.relative(outputDir, abs).split(path.sep).join('/') || path.basename(abs)
     const mime =
-      typeof entry.mime === 'string' && entry.mime.length > 0
-        ? entry.mime
-        : guessMime(abs)
+      typeof entry.mime === 'string' && entry.mime.length > 0 ? entry.mime : guessMime(abs)
     out.push({ name, path: abs, mime, size })
   }
   return out.length > 0 ? out : undefined
@@ -183,12 +178,9 @@ const MIME_BY_EXT: Record<string, string> = {
   '.csv': 'text/csv',
   '.html': 'text/html',
   '.pdf': 'application/pdf',
-  '.pptx':
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  '.docx':
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  '.xlsx':
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -250,14 +242,8 @@ async function runSubprocess(
     child.on('close', (code) => {
       clearTimeout(timer)
       resolve({
-        stdout: truncate(
-          Buffer.concat(stdoutChunks).toString('utf8'),
-          STDOUT_CAP_BYTES,
-        ),
-        stderr: truncate(
-          Buffer.concat(stderrChunks).toString('utf8'),
-          STDOUT_CAP_BYTES,
-        ),
+        stdout: truncate(Buffer.concat(stdoutChunks).toString('utf8'), STDOUT_CAP_BYTES),
+        stderr: truncate(Buffer.concat(stderrChunks).toString('utf8'), STDOUT_CAP_BYTES),
         exitCode: code ?? -1,
         timedOut,
       })
@@ -305,9 +291,7 @@ export async function runSkill(
   opts: { timeoutMs?: number } = {},
 ): Promise<SkillResult> {
   if (skill.kind !== 'typed' || !skill.entrypoint || !skill.runtime) {
-    throw new Error(
-      `runSkill requires a typed skill with an entrypoint, got ${skill.kind}`,
-    )
+    throw new Error(`runSkill requires a typed skill with an entrypoint, got ${skill.kind}`)
   }
   fs.mkdirSync(outputDir, { recursive: true })
   const before = snapshot(outputDir)
@@ -318,7 +302,7 @@ export async function runSkill(
     OPENHIVE_SKILL_NAME: skill.name,
   }
   const pyFlags = skill.runtime === 'python' ? PYTHON_COLD_START_FLAGS : []
-  const result = await runSubprocess({
+  const spawnOpts: SpawnOpts = {
     cmd: [bin, ...pyFlags, skill.entrypoint],
     // cwd = outputDir so relative --out paths land in the artifact directory
     // and the before/after snapshot can actually register new files. Scripts
@@ -329,7 +313,13 @@ export async function runSkill(
     stdinBytes: Buffer.from(JSON.stringify(args), 'utf8'),
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     outputDir,
-  })
+  }
+  // Python runs go through the global concurrency limiter; Node skills
+  // spawn freely (they're cheap and uncontended).
+  const result =
+    skill.runtime === 'python'
+      ? await acquireSkillSlot(() => runSubprocess(spawnOpts))
+      : await runSubprocess(spawnOpts)
   const structured = parseFinalJsonLine(result.stdout)
   const snapshotFiles = collectNewFiles(outputDir, before)
   const envelopeFiles = structured ? filesFromEnvelope(structured, outputDir) : undefined
@@ -338,7 +328,11 @@ export async function runSkill(
   // sessions/{uuid}/ layout clean ("artifacts/ only exists when files
   // were actually generated").
   if (files.length === 0 && before.size === 0) {
-    try { fs.rmdirSync(outputDir) } catch { /* dir might have stray non-file entries */ }
+    try {
+      fs.rmdirSync(outputDir)
+    } catch {
+      /* dir might have stray non-file entries */
+    }
   }
   const structuredFailure = structured && structured.ok === false
   return {
@@ -391,7 +385,7 @@ export async function runSkillScript(
     OPENHIVE_SKILL_DIR: skill.skillDir,
   }
   const pyFlags = runtime === 'python' ? PYTHON_COLD_START_FLAGS : []
-  const result = await runSubprocess({
+  const spawnOpts: SpawnOpts = {
     cmd: [bin, ...pyFlags, resolved, ...(opts.args ?? [])],
     // cwd = outputDir: relative --out paths land in artifacts, snapshot works.
     cwd: outputDir,
@@ -399,7 +393,11 @@ export async function runSkillScript(
     stdinBytes: Buffer.from(opts.stdinText ?? '', 'utf8'),
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     outputDir,
-  })
+  }
+  const result =
+    runtime === 'python'
+      ? await acquireSkillSlot(() => runSubprocess(spawnOpts))
+      : await runSubprocess(spawnOpts)
   const structured = parseFinalJsonLine(result.stdout)
   const snapshotFiles = collectNewFiles(outputDir, before)
   const envelopeFiles = structured ? filesFromEnvelope(structured, outputDir) : undefined
@@ -408,7 +406,11 @@ export async function runSkillScript(
   // sessions/{uuid}/ layout clean ("artifacts/ only exists when files
   // were actually generated").
   if (files.length === 0 && before.size === 0) {
-    try { fs.rmdirSync(outputDir) } catch { /* dir might have stray non-file entries */ }
+    try {
+      fs.rmdirSync(outputDir)
+    } catch {
+      /* dir might have stray non-file entries */
+    }
   }
   const structuredFailure = structured && structured.ok === false
   return {
@@ -420,11 +422,35 @@ export async function runSkillScript(
 }
 
 const BINARY_EXTS = new Set([
-  '.pdf', '.docx', '.pptx', '.xlsx', '.doc', '.ppt', '.xls',
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.bmp', '.tiff',
-  '.zip', '.tar', '.gz', '.7z', '.rar',
-  '.mp3', '.mp4', '.wav', '.mov', '.avi',
-  '.woff', '.woff2', '.ttf', '.otf',
+  '.pdf',
+  '.docx',
+  '.pptx',
+  '.xlsx',
+  '.doc',
+  '.ppt',
+  '.xls',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.ico',
+  '.bmp',
+  '.tiff',
+  '.zip',
+  '.tar',
+  '.gz',
+  '.7z',
+  '.rar',
+  '.mp3',
+  '.mp4',
+  '.wav',
+  '.mov',
+  '.avi',
+  '.woff',
+  '.woff2',
+  '.ttf',
+  '.otf',
 ])
 
 export function readSkillFile(
