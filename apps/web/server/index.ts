@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
@@ -22,8 +21,7 @@ const isProd = process.env.NODE_ENV === 'production'
 if (isProd) {
   // After `tsc` emits to apps/web/dist-server/server/index.js, the Vite build
   // output lives at apps/web/dist (one level up from dist-server/server).
-  const __filename = fileURLToPath(import.meta.url)
-  const __dirname = path.dirname(__filename)
+  // __dirname is available at runtime (CommonJS emit).
   const distDir = path.resolve(__dirname, '../../dist')
 
   // Serve static assets from dist/. `root` is interpreted relative to CWD,
