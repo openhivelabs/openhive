@@ -7,15 +7,13 @@
 
 export async function registerNode() {
   try {
-    const { needsMigration, migrateLegacyDb } = await import(
-      './lib/server/legacy-db-migration'
-    )
+    const { needsMigration, migrateLegacyDb } = await import('./lib/server/legacy-db-migration')
     if (needsMigration()) {
       const counts = migrateLegacyDb()
       console.log(
         `boot: legacy DB migrated — ${counts.sessions} sessions, ${counts.events} events, ` +
-        `${counts.artifacts} artifacts, ${counts.usageRows} usage rows, ` +
-        `${counts.messages} messages, ${counts.panels} panels, ${counts.oauth} oauth`,
+          `${counts.artifacts} artifacts, ${counts.usageRows} usage rows, ` +
+          `${counts.messages} messages, ${counts.panels} panels, ${counts.oauth} oauth`,
       )
     }
   } catch (exc) {
@@ -23,11 +21,9 @@ export async function registerNode() {
   }
 
   const { startScheduler } = await import('./lib/server/scheduler/scheduler')
-  const {
-    backfillTranscripts,
-    markOrphanedSessionsIdle,
-    pruneLegacyArtifactsRoot,
-  } = await import('./lib/server/sessions')
+  const { backfillTranscripts, markOrphanedSessionsIdle, pruneLegacyArtifactsRoot } = await import(
+    './lib/server/sessions'
+  )
 
   try {
     const n = await markOrphanedSessionsIdle()
@@ -64,17 +60,10 @@ export async function registerNode() {
   startScheduler()
 
   try {
-    const { flushAll } = await import('./lib/server/sessions/event-writer')
-    const shutdown = async (signal: string) => {
-      try {
-        await flushAll()
-      } catch (exc) {
-        console.error(`shutdown (${signal}): event flush failed`, exc)
-      }
-    }
-    process.once('SIGTERM', () => { void shutdown('SIGTERM') })
-    process.once('SIGINT', () => { void shutdown('SIGINT') })
-    process.once('beforeExit', () => { void shutdown('beforeExit') })
+    const { registerEventWriterShutdown } = await import(
+      './lib/server/sessions/event-writer-shutdown'
+    )
+    registerEventWriterShutdown()
   } catch (exc) {
     console.error('boot: event-writer shutdown hook setup failed', exc)
   }
