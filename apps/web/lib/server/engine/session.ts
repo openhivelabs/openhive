@@ -486,7 +486,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     tools.push(...todoTools(sessionId))
   }
   if (teamSlugs) {
-    tools.push(...teamDataTools(teamSlugs, true))
+    tools.push(...teamDataTools(teamSlugs, persona.tools.team_data_write === true))
   }
   tools.push(webFetchTool())
 
