@@ -14,13 +14,9 @@ import urllib.request
 from typing import Any
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
-from reportlab.lib.pagesizes import A4, LETTER, legal
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import inch
 from reportlab.platypus import (
-    HRFlowable, Image as RLImage, KeepTogether, ListFlowable, ListItem,
-    PageBreak, Paragraph, Preformatted, Spacer, Table, TableStyle,
+    KeepTogether, Paragraph, Spacer, Table, TableStyle,
 )
 
 from .themes import Theme
@@ -43,6 +39,7 @@ class Ctx:
                    italic: bool = False, left_indent: float = 0,
                    right_indent: float = 0, first_line_indent: float = 0,
                    leading: float | None = None, font: str | None = None) -> ParagraphStyle:
+        from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
         t = self.theme
         sz = size or t.size_body
         align_map = {"left": TA_LEFT, "center": TA_CENTER,
@@ -159,6 +156,7 @@ def render_numbered(block: dict, theme: Theme, ctx: Ctx) -> list:
 
 def _list_flowable(items: list, theme: Theme, ctx: Ctx, *, ordered: bool) -> ListFlowable:
     """Flatten (2-level max) nested items into reportlab ListFlowable."""
+    from reportlab.platypus import ListFlowable, ListItem
     style = ctx.style_body()
     entries = []
     i = 0
@@ -237,6 +235,8 @@ def _table_style(style: str, theme: Theme, n_body_rows: int) -> TableStyle:
 
 
 def render_image(block: dict, theme: Theme, ctx: Ctx) -> list:
+    from reportlab.lib.units import inch
+    from reportlab.platypus import Image as RLImage
     path = _resolve_image(block["path"])
     width = block.get("width_in", 4.0) * inch
     from PIL import Image as PILImage
@@ -255,6 +255,7 @@ def render_image(block: dict, theme: Theme, ctx: Ctx) -> list:
 
 
 def render_page_break(block: dict, theme: Theme, ctx: Ctx) -> list:
+    from reportlab.platypus import PageBreak
     return [PageBreak()]
 
 
@@ -272,6 +273,7 @@ def render_quote(block: dict, theme: Theme, ctx: Ctx) -> list:
 
 
 def render_code(block: dict, theme: Theme, ctx: Ctx) -> list:
+    from reportlab.platypus import Preformatted
     style = ParagraphStyle(
         name="Code",
         fontName=theme.mono_font,
@@ -289,6 +291,7 @@ def render_code(block: dict, theme: Theme, ctx: Ctx) -> list:
 
 
 def render_horizontal_rule(block: dict, theme: Theme, ctx: Ctx) -> list:
+    from reportlab.platypus import HRFlowable
     return [
         Spacer(1, 6),
         HRFlowable(width="100%", thickness=0.5, color=_rl_color(theme.muted)),
@@ -419,6 +422,7 @@ def _escape_text(s: str) -> str:
 
 
 def resolve_page_size(size_name: str, orientation: str) -> tuple[float, float]:
+    from reportlab.lib.pagesizes import A4, LETTER, legal
     sz = {"A4": A4, "Letter": LETTER, "Legal": legal}.get(size_name, A4)
     w, h = sz
     if orientation == "landscape":
