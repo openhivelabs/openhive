@@ -19,16 +19,11 @@
 
 import { CronExpressionParser } from 'cron-parser'
 import { getSettings } from '../config'
-import { runTeam } from '../engine/session'
+import { start as startRegistryRun } from '../engine/session-registry'
 import { toTeamSpec, type TeamSpec } from '../engine/team'
 import { listCompanies } from '../companies'
 import { refreshDuePanels } from '../panels/refresher'
 import { listTasks, saveTask } from '../tasks'
-import {
-  appendSessionEvent,
-  finishSession,
-  startSession,
-} from '../sessions'
 
 interface SchedulerState {
   inflight: Set<string>
@@ -156,47 +151,20 @@ async function fire(task: Record<string, unknown>): Promise<void> {
   }
 
   const prompt = composePrompt(task)
-  let seq = 0
-  let capturedSessionId: string | null = null
+  // Delegate through the shared registry entry point instead of driving the
+  // engine loop ourselves. This gives scheduled runs everything interactive
+  // runs get: auto-title generation, team_snapshot persistence for resume,
+  // turn_finished → idle status flips, and consistent event-writer batching.
   try {
-    for await (const event of runTeam(teamSpec, prompt, {
-      teamSlugs: [resolved.companySlug, resolved.teamSlug],
-      locale: 'en',
-    })) {
-      if (event.kind === 'run_started') {
-        capturedSessionId = event.session_id
-        startSession(event.session_id, teamSpec.id, prompt, taskId || null)
-      }
-      appendSessionEvent({
-        sessionId: event.session_id,
-        seq,
-        ts: event.ts,
-        kind: event.kind,
-        depth: event.depth,
-        nodeId: event.node_id,
-        toolCallId: event.tool_call_id,
-        toolName: event.tool_name,
-        data: event.data,
-      })
-      seq += 1
-      if (event.kind === 'run_finished') {
-        await finishSession(event.session_id, {
-          output:
-            typeof event.data.output === 'string'
-              ? (event.data.output as string)
-              : null,
-        })
-      } else if (event.kind === 'run_error') {
-        await finishSession(event.session_id, {
-          error: String(event.data.error ?? 'error'),
-        })
-      }
-    }
+    await startRegistryRun(
+      teamSpec,
+      prompt,
+      [resolved.companySlug, resolved.teamSlug],
+      'en',
+      taskId || null,
+    )
   } catch (exc) {
     console.error(`scheduler: runTeam raised for task ${taskId}`, exc)
-    if (capturedSessionId) {
-      await finishSession(capturedSessionId, { error: 'scheduler exception' })
-    }
   }
 
   // Stamp lastFiredAt so the next tick uses it as the cron anchor.

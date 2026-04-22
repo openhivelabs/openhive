@@ -31,13 +31,20 @@ export interface AskUserQuestion {
 
 export async function postAnswer(
   toolCallId: string,
-  payload: { answers?: Record<string, string>; skipped?: boolean },
+  payload: {
+    answers?: Record<string, string>
+    skipped?: boolean
+    sessionId?: string
+    locale?: string
+  },
 ): Promise<void> {
   const res = await fetch('/api/sessions/answer', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       tool_call_id: toolCallId,
+      session_id: payload.sessionId ?? null,
+      locale: payload.locale ?? null,
       answers: payload.answers ?? null,
       skipped: payload.skipped ?? false,
     }),
@@ -106,6 +113,32 @@ export async function startSession(
 
 export async function stopBackendSession(sessionId: string): Promise<void> {
   await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/stop`, { method: 'POST' })
+}
+
+/** Mutate session metadata (title / pinned). Silently fails on network error —
+ *  callers do optimistic local updates and don't roll back on server failure.
+ *  (A user who can't reach their own local server has bigger problems.) */
+export async function patchSession(
+  sessionId: string,
+  patch: { title?: string | null; pinned?: boolean },
+): Promise<void> {
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+  } catch {
+    /* local-first: swallow */
+  }
+}
+
+export async function deleteSessionRequest(sessionId: string): Promise<void> {
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+  } catch {
+    /* best-effort */
+  }
 }
 
 /** Attach to an already-running (or finished) run by id. Replays persisted

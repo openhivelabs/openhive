@@ -17,24 +17,62 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import type { TeamSpec } from './engine/team'
 
 import { artifactsRoot, sessionsRoot } from './paths'
 import { enqueueEvent, flushSession } from './sessions/event-writer'
+
+/** Session status — lives independently of any single Node process.
+ *    running      = a turn is currently being generated (live tokens flowing)
+ *    needs_input  = parked on an unanswered ask_user question. The engine
+ *                   literally cannot proceed until the user answers (or skips).
+ *                   Distinct from `idle` because the UI must keep surfacing
+ *                   this as a pending action — otherwise the user navigates
+ *                   away, the orange dot disappears on their next visit, and
+ *                   the session sits forever waiting.
+ *    idle         = turn done, waiting for the next user message. Resumable.
+ *    error        = errored out in a way we don't auto-recover from.
+ *
+ *  Notes:
+ *  - "Process died while mid-turn" is NOT a status. On boot we demote
+ *    `running` → `idle`; the next user message resurrects the generator via
+ *    resume(). Old values ('finished', 'interrupted') still on disk from
+ *    before this redesign are normalized to `idle` on read — sessions are
+ *    always resumable unless the user explicitly deleted them. */
+export type SessionStatus = 'running' | 'needs_input' | 'idle' | 'error'
 
 export interface SessionMeta {
   id: string
   task_id: string | null
   team_id: string
   goal: string
-  status: 'running' | 'finished' | 'error' | 'interrupted'
+  status: SessionStatus
   output: string | null
   error: string | null
   started_at: number
   finished_at: number | null
   artifact_count: number
-  /** Optional human-friendly title generated asynchronously from the goal.
-   *  null/undefined means "not generated yet" — UI falls back to goal slice. */
+  /** Optional human-friendly title generated asynchronously from the goal,
+   *  or set manually via rename. null/undefined = "not set" — UI falls back
+   *  to goal slice. */
   title?: string | null
+  /** User-pinned sessions sort to the top of the inbox. Persisted so it
+   *  survives reload / device switch. */
+  pinned?: boolean
+  /** TeamSpec at session-start time. Needed on resume to reconstruct the
+   *  engine state for a follow-up message after the original process died.
+   *  Optional on the type so legacy sessions (pre-resume-refactor) still
+   *  load — those can't be resumed but don't break listing. */
+  team_snapshot?: TeamSpec
+}
+
+function normalizeStatus(raw: unknown): SessionStatus {
+  if (raw === 'running') return 'running'
+  if (raw === 'needs_input') return 'needs_input'
+  if (raw === 'error') return 'error'
+  // 'finished', 'interrupted', and anything unknown collapse to idle. Idle
+  // means "no live generator right now — send a message to continue."
+  return 'idle'
 }
 
 /** Row shape returned by listing queries — same fields as meta plus any future
@@ -98,7 +136,11 @@ export function artifactDirForSession(sessionId: string): string {
 
 function readMeta(sessionId: string): SessionMeta | null {
   try {
-    return JSON.parse(fs.readFileSync(sessionMetaPath(sessionId), 'utf8')) as SessionMeta
+    const raw = JSON.parse(fs.readFileSync(sessionMetaPath(sessionId), 'utf8')) as SessionMeta
+    // Coerce legacy statuses ('finished', 'interrupted') into the new 3-value
+    // enum. This is a pure read-time remap; on-disk file is left alone until
+    // something writes it back via updateMeta/writeMeta.
+    return { ...raw, status: normalizeStatus(raw.status) }
   } catch {
     return null
   }
@@ -136,10 +178,14 @@ export function updateMetaTitle(sessionId: string, title: string | null): void {
 }
 
 function statusForMeta(status: string, error: string | null): SessionMeta['status'] {
-  if (error === 'interrupted' || error === 'cancelled') return 'interrupted'
   if (status === 'running') return 'running'
-  if (status === 'error') return 'error'
-  return 'finished'
+  if (status === 'error' || (error && error !== 'interrupted' && error !== 'cancelled')) {
+    return 'error'
+  }
+  // 'interrupted' / 'cancelled' are no longer terminal — the session is just
+  // parked without a live generator and becomes resumable via the messages
+  // endpoint. Everything that isn't actively running or hard-errored is idle.
+  return 'idle'
 }
 
 // ---------- lifecycle ----------
@@ -149,6 +195,7 @@ export function startSession(
   teamId: string,
   goal: string,
   taskId: string | null = null,
+  teamSnapshot: TeamSpec | null = null,
 ): void {
   const now = Date.now()
   writeMeta(sessionId, {
@@ -162,6 +209,10 @@ export function startSession(
     started_at: now,
     finished_at: null,
     artifact_count: 0,
+    // Snapshot the team spec so follow-up messages can resume this session
+    // after the original process died, without the client having to re-POST
+    // the whole team structure.
+    team_snapshot: teamSnapshot ?? undefined,
   })
   // Touch events.jsonl so tail-style readers don't ENOENT.
   fs.closeSync(fs.openSync(sessionEventsPath(sessionId), 'a'))
@@ -202,13 +253,13 @@ export async function finalizeSession(
   }
   const artifactCount = fs.existsSync(artDir) ? fs.readdirSync(artDir).length : 0
 
-  const prevStatus = meta.status === 'running'
-    ? (opts.error ? 'error' : 'finished')
-    : meta.status
-
+  // finalizeSession now only gets called for errors or explicit cancels —
+  // non-error parks go through `updateMeta({ status: 'idle' })` in the
+  // registry's turn_finished handler instead. The status we land on is
+  // either 'error' (hard failure) or 'idle' (everything else, resumable).
   writeMeta(sessionId, {
     ...meta,
-    status: statusForMeta(prevStatus, opts.error ?? meta.error),
+    status: statusForMeta(meta.status, opts.error ?? meta.error),
     output: opts.output ?? meta.output,
     error: opts.error ?? meta.error,
     finished_at: meta.finished_at ?? Date.now(),
@@ -299,6 +350,20 @@ export function getSession(sessionId: string): SessionMeta | null {
   return readMeta(sessionId)
 }
 
+/** Permanently remove a session's on-disk footprint: the session dir
+ *  (meta.json + events.jsonl + transcript.jsonl + artifacts/ + usage.json)
+ *  AND the hashed artifact payload dir under artifactsRoot/. Safe to call
+ *  when files are missing. Returns true if the session dir existed. */
+export function deleteSession(sessionId: string): boolean {
+  const dir = sessionDir(sessionId)
+  const existed = fs.existsSync(dir)
+  try { fs.rmSync(dir, { recursive: true, force: true }) }
+  catch { /* best-effort */ }
+  try { fs.rmSync(artifactDirForSession(sessionId), { recursive: true, force: true }) }
+  catch { /* best-effort */ }
+  return existed
+}
+
 export function listSessionsFor(opts: {
   teamId?: string | null
   taskId?: string | null
@@ -313,14 +378,57 @@ export function listSessionsFor(opts: {
   return metas.slice(0, lim)
 }
 
-/** Any session whose meta.json still says status='running' on boot was in flight
- *  when the process died. Mark them interrupted and finalize transcript. */
-export async function markOrphanedSessionsInterrupted(): Promise<number> {
+/** Any session whose meta.json still says status='running' on boot was in
+ *  flight when the process died. Demote them to `idle` so they stop showing
+ *  as live and become resumable. We do NOT finalize the transcript or write
+ *  an error — the session isn't failed, it's just waiting. The next user
+ *  message re-launches the engine via session-registry.resume(). */
+/** Scan a session's events.jsonl and decide what its "real" status is based
+ *  on what happened, not what meta.status happens to say. Used at boot to
+ *  reconcile sessions whose meta drifted from reality (e.g. ask_user fired
+ *  before the driveSession status-flip transition existed, or a crash
+ *  between emitting an event and writing meta). */
+function reconcileStatusFromEvents(sessionId: string): SessionStatus | null {
+  const events = eventsForSession(sessionId)
+  if (events.length === 0) return null
+  // Unanswered ask_user → needs_input. The engine is parked on the tool call
+  // and the user can still answer it (the stored tool_call_id is the key).
+  const answered = new Set<string>()
+  for (const e of events) {
+    if (e.kind === 'user_answered' && e.tool_call_id) answered.add(e.tool_call_id)
+  }
+  const latestQuestion = [...events]
+    .reverse()
+    .find((e) => e.kind === 'user_question' && e.tool_call_id)
+  if (latestQuestion && !answered.has(latestQuestion.tool_call_id!)) {
+    return 'needs_input'
+  }
+  // Hard error already recorded — respect it.
+  const hasError = events.some((e) => e.kind === 'run_error')
+  if (hasError) return 'error'
+  // Everything else: turn-finished parks, mid-turn process deaths, etc. all
+  // collapse to idle. Resumable via follow-up message.
+  return 'idle'
+}
+
+/** Boot-time reconciliation. Walks every session and fixes meta.status that
+ *  can't possibly be `running` anymore (the process just started — nothing
+ *  is actively generating). Looks at events.jsonl to tell apart genuine
+ *  idle sessions from sessions parked on an unanswered ask_user, so the
+ *  inbox surfaces the right color on first paint even without an SSE
+ *  attach. */
+export async function markOrphanedSessionsIdle(): Promise<number> {
   let n = 0
   for (const id of listSessionIds()) {
     const meta = readMeta(id)
-    if (!meta || meta.status !== 'running') continue
-    await finalizeSession(id, { error: 'interrupted' })
+    if (!meta) continue
+    if (meta.status !== 'running') continue
+    const real = reconcileStatusFromEvents(id) ?? 'idle'
+    updateMeta(id, {
+      status: real,
+      // finished_at only makes sense for non-live states.
+      finished_at: real === 'running' ? null : (meta.finished_at ?? Date.now()),
+    })
     n += 1
   }
   return n

@@ -15,6 +15,7 @@ import { closeUserInbox, runTeam } from './session'
 import { generateTitle } from '../sessions/title'
 import type { Event } from '../events/schema'
 import type { TeamSpec } from './team'
+import type { ChatMessage } from '../providers/types'
 
 /** Sentinel pushed into a listener queue when the run is over. */
 const END = Symbol('session-end')
@@ -125,8 +126,80 @@ export async function start(
     abort: new AbortController(),
   }
 
-  void driveSession(handle, team, goal, teamSlugs, locale, taskId, ready, readyErr)
+  void driveSession(handle, team, goal, teamSlugs, locale, taskId, null, ready, readyErr)
   return readyPromise
+}
+
+/** Re-enter a parked session with a new user message. Rebuilds the Lead's
+ *  chat history from events.jsonl, then drives a fresh engine run that emits
+ *  `user_message` (for the follow-up) and replies. Returns true if the
+ *  session existed on disk and a new handle was registered. */
+export async function resume(
+  team: TeamSpec,
+  sessionId: string,
+  text: string,
+  teamSlugs: [string, string] | null,
+  locale: string,
+): Promise<boolean> {
+  if (isActive(sessionId)) {
+    // Already live — caller should push onto the inbox instead of spinning up
+    // a duplicate generator.
+    return false
+  }
+  const meta = sessionsStore.getSession(sessionId)
+  if (!meta) return false
+  const history = buildLeadHistoryFromEvents(sessionId, meta.goal)
+
+  const handle: SessionHandle = {
+    sessionId,
+    events: [],
+    listeners: new Set(),
+    finished: false,
+    abort: new AbortController(),
+  }
+  let ready: (sessionId: string) => void = () => {}
+  let readyErr: (err: unknown) => void = () => {}
+  const readyPromise = new Promise<string>((resolve, reject) => {
+    ready = resolve
+    readyErr = reject
+  })
+  void driveSession(
+    handle,
+    team,
+    text,
+    teamSlugs,
+    locale,
+    meta.task_id,
+    { sessionId, history },
+    ready,
+    readyErr,
+  )
+  await readyPromise
+  return true
+}
+
+/** Rebuild the Lead's chat history from the persisted event log so a resumed
+ *  generator sees the conversation as if it never stopped. Collapses the
+ *  transcript to alternating user/assistant turns; intermediate tool calls
+ *  and sub-agent work are deliberately dropped — the Lead only needs
+ *  conversational context, the details are already in events.jsonl for the
+ *  UI to render. */
+function buildLeadHistoryFromEvents(
+  sessionId: string,
+  initialGoal: string,
+): ChatMessage[] {
+  const events = sessionsStore.eventsForSession(sessionId)
+  const history: ChatMessage[] = [{ role: 'user', content: initialGoal }]
+  for (const ev of events) {
+    if (ev.kind === 'user_message') {
+      const text = typeof ev.data.text === 'string' ? ev.data.text : ''
+      if (text) history.push({ role: 'user', content: text })
+    } else if (ev.kind === 'node_finished' && ev.depth === 0) {
+      const out = typeof ev.data.output === 'string' ? ev.data.output : ''
+      if (out.trim()) history.push({ role: 'assistant', content: out })
+    }
+  }
+  return history
 }
 
 async function driveSession(
@@ -136,15 +209,22 @@ async function driveSession(
   teamSlugs: [string, string] | null,
   locale: string,
   taskId: string | null,
+  resume: { sessionId: string; history: ChatMessage[] } | null,
   ready: (sessionId: string) => void,
   readyErr: (err: unknown) => void,
 ): Promise<void> {
-  let seq = 0
+  // Start at seq=current events count when resuming so appendSessionEvent
+  // keeps monotonic ordering across sessions that span multiple processes.
+  let seq = resume
+    ? sessionsStore.eventsForSession(resume.sessionId).length
+    : 0
   let capturedSessionId: string | null = null
-  let dbStarted = false
+  // On resume the on-disk meta already exists — skip the fresh startSession
+  // + auto-title work. On cold start, run_started triggers both.
+  let dbStarted = !!resume
 
   try {
-    for await (const event of runTeam(team, goal, { teamSlugs, locale })) {
+    for await (const event of runTeam(team, goal, { teamSlugs, locale, resume: resume ?? undefined })) {
       if (handle.abort.signal.aborted) {
         if (capturedSessionId && dbStarted) {
           await sessionsStore.finishSession(capturedSessionId, { error: 'cancelled' })
@@ -160,7 +240,7 @@ async function driveSession(
       }
 
       if (event.kind === 'run_started' && !dbStarted) {
-        sessionsStore.startSession(event.session_id, team.id, goal, taskId)
+        sessionsStore.startSession(event.session_id, team.id, goal, taskId, team)
         dbStarted = true
         // Fire-and-forget auto-title generation. Must not block the run, must
         // not throw, and only writes meta.title on success.
@@ -190,32 +270,50 @@ async function driveSession(
       for (const q of handle.listeners) q.push(event)
 
       if (event.kind === 'run_finished') {
+        // Chat sessions rarely hit this — runTeamBody only emits run_finished
+        // when the inbox is closed (explicit stop). Treat as idle-with-output:
+        // keep the session resumable unless the user deleted it.
         const output =
           typeof event.data.output === 'string'
             ? (event.data.output as string)
             : null
-        await sessionsStore.finishSession(event.session_id, { output })
+        sessionsStore.updateMeta(event.session_id, {
+          status: 'idle',
+          output,
+          finished_at: Date.now(),
+        })
       } else if (event.kind === 'run_error') {
         const err = String(event.data.error ?? 'error')
         await sessionsStore.finishSession(event.session_id, { error: err })
       } else if (event.kind === 'turn_finished') {
-        // 턴 완료 = AI 가 이번 턴 생성을 끝내고 inbox 에 파킹. 세션 프로세스는
-        // 살아있지만 유저 관점에서는 "끝난 상태" — 리스트 스피너가 멈춰야 함.
-        // 다음 user_message 가 오면 다시 running 으로 flip.
+        // Turn done, generator parks on inbox.pop. UI stops spinning; the
+        // session is now resumable via a follow-up POST /messages.
         const output =
           typeof event.data.output === 'string'
             ? (event.data.output as string)
             : null
         sessionsStore.updateMeta(event.session_id, {
-          status: 'finished',
+          status: 'idle',
           output,
           finished_at: Date.now(),
         })
       } else if (event.kind === 'user_message') {
-        // 새 턴 시작 — idle 에서 다시 running 으로.
+        // New turn starts — flip idle → running.
         sessionsStore.updateMeta(event.session_id, {
           status: 'running',
           finished_at: null,
+        })
+      } else if (event.kind === 'user_question') {
+        // Engine is parked on an ask_user tool call. Status must reflect
+        // that the user has a blocker, not just "running" — otherwise the
+        // inbox won't keep the row in "needs answer" after a page reload.
+        sessionsStore.updateMeta(event.session_id, {
+          status: 'needs_input',
+        })
+      } else if (event.kind === 'user_answered') {
+        // Answer (or skip) delivered — engine resumes token generation.
+        sessionsStore.updateMeta(event.session_id, {
+          status: 'running',
         })
       }
     }

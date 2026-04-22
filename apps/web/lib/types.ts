@@ -127,6 +127,11 @@ export interface Session {
   messages: Message[]
   /** Set the first time the user opened the finished session. Drives unread dot. */
   viewedAt?: string
+  /** User-renamed display title. When unset, UI falls back to goal slice or
+   *  the server-generated auto-title. */
+  title?: string | null
+  /** User-pinned sessions sort to the top of the inbox. */
+  pinned?: boolean
 }
 
 export interface TaskReference {

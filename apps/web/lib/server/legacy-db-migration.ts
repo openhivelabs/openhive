@@ -131,10 +131,14 @@ function tableExists(conn: BetterSqliteDatabase, name: string): boolean {
 }
 
 function statusForMeta(status: string, error: string | null): SessionMeta['status'] {
-  if (error === 'interrupted' || error === 'cancelled') return 'interrupted'
   if (status === 'running') return 'running'
-  if (status === 'error') return 'error'
-  return 'finished'
+  if (status === 'error' || (error && error !== 'interrupted' && error !== 'cancelled')) {
+    return 'error'
+  }
+  // Legacy 'finished' / 'interrupted' / 'cancelled' all migrate to 'idle' —
+  // the post-refactor model treats any non-running, non-errored session as
+  // resumable. The original error string stays in `error` as a hint.
+  return 'idle'
 }
 
 export function migrateLegacyDb(): {

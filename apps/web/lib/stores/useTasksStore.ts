@@ -7,7 +7,6 @@ import {
 } from '../api/sessions'
 import { deleteTask as apiDeleteTask, fetchTasks, saveTask as apiSaveTask } from '../api/tasks'
 import { t as translate } from '../i18n'
-import { mockTasks } from '../mock/tasks'
 import type { Message, PendingAsk, Session, Task, Team } from '../types'
 import { useAppStore } from './useAppStore'
 import { useCanvasStore } from './useCanvasStore'
@@ -365,14 +364,14 @@ export const useTasksStore = create<TasksState>((set, get) => ({
         set({ tasks: healed, hydrated: true })
         return
       }
-      // First boot: seed mock data so the UI isn't blank, and persist it.
-      set({ tasks: mockTasks, hydrated: true })
-      for (const t of mockTasks) {
-        apiSaveTask(t).catch((e) => console.warn('[tasks] seed save failed', e))
-      }
+      // Empty server = genuinely empty. Don't auto-seed mock data — the user
+      // starts with a blank inbox and creates what they need. (Previously we
+      // seeded `mockTasks` here, which caused wiped state to regrow itself on
+      // the next /tasks load.)
+      set({ tasks: [], hydrated: true })
     } catch (e) {
-      console.error('[tasks] hydrate failed; using mock data in-memory', e)
-      set({ tasks: mockTasks, hydrated: true })
+      console.error('[tasks] hydrate failed; starting with empty list', e)
+      set({ tasks: [], hydrated: true })
     }
   },
 
@@ -513,14 +512,16 @@ export const useTasksStore = create<TasksState>((set, get) => ({
   },
 
   reattachSessions: (team) => {
-    // For every task in this team whose latest session is still "running" and has
-    // a backend session id, attach a new stream. No-op if an attach is already
-    // live (identified by an entry in activeAborts).
+    // Re-attach live streams for sessions that aren't in a terminal state.
+    // `needs_input` counts as non-terminal because an ask_user tool call is
+    // still open server-side — answering it via the /answer endpoint resumes
+    // the engine, and we need the stream hooked up to relay the follow-on
+    // events.
     for (const t of get().tasks) {
       if (t.teamId !== team.id) continue
       const session = t.sessions[t.sessions.length - 1]
       if (!session) continue
-      if (session.status !== 'running') continue
+      if (session.status !== 'running' && session.status !== 'needs_input') continue
       if (activeAborts.has(session.id)) continue
       void consumeRunStream(get, set, t, team, session.id, session.id)
     }
