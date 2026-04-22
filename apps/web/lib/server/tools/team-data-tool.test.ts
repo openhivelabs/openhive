@@ -134,3 +134,91 @@ describe('db_exec permissions + destructive gate', () => {
     expect(out.error_code).toBe('multi_statement')
   })
 })
+
+describe('db_explain', () => {
+  let tmp: string
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openhive-tdtool-'))
+    process.env.OPENHIVE_DATA_DIR = tmp
+  })
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true })
+    delete process.env.OPENHIVE_DATA_DIR
+  })
+
+  it('returns a plan for a SELECT', async () => {
+    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const exec = tools.find((t) => t.name === 'db_exec')!
+    const explain = tools.find((t) => t.name === 'db_explain')!
+    await exec.handler({ sql: 'CREATE TABLE t (id INTEGER PRIMARY KEY, x INT)' })
+    const out = JSON.parse(
+      (await explain.handler({ sql: 'SELECT * FROM t WHERE x = 1' })) as string,
+    )
+    expect(out.ok).toBe(true)
+    expect(Array.isArray(out.plan)).toBe(true)
+  })
+
+  it('rejects non-SELECT', async () => {
+    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const explain = tools.find((t) => t.name === 'db_explain')!
+    const out = JSON.parse(
+      (await explain.handler({ sql: 'DELETE FROM t' })) as string,
+    )
+    expect(out.error_code).toBe('not_a_select')
+  })
+})
+
+describe('db_install_template', () => {
+  let tmp: string
+  let tmpl: string
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openhive-tdtool-'))
+    tmpl = fs.mkdtempSync(path.join(os.tmpdir(), 'openhive-tmpl-'))
+    fs.mkdirSync(path.join(tmpl, 'crm'))
+    fs.writeFileSync(
+      path.join(tmpl, 'crm', 'install.sql'),
+      'CREATE TABLE leads (id INTEGER PRIMARY KEY);',
+    )
+    process.env.OPENHIVE_DATA_DIR = tmp
+    process.env.OPENHIVE_TEMPLATES_DIR = tmpl
+  })
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true })
+    fs.rmSync(tmpl, { recursive: true, force: true })
+    delete process.env.OPENHIVE_DATA_DIR
+    delete process.env.OPENHIVE_TEMPLATES_DIR
+  })
+
+  it('denies templates not in whitelist', async () => {
+    const tools = teamDataTools(['acme', 'sales'], manifest({ team_data_templates: ['inbox'] }))
+    const t = tools.find((x) => x.name === 'db_install_template')!
+    const out = JSON.parse((await t.handler({ template_name: 'crm' })) as string)
+    expect(out.error_code).toBe('unknown_template')
+  })
+
+  it('installs whitelisted template', async () => {
+    const tools = teamDataTools(['acme', 'sales'], manifest({ team_data_templates: ['crm'] }))
+    const t = tools.find((x) => x.name === 'db_install_template')!
+    const out = JSON.parse((await t.handler({ template_name: 'crm' })) as string)
+    expect(out.ok).toBe(true)
+    expect(out.tables_created).toContain('leads')
+  })
+})
+
+describe('db_read_guide', () => {
+  it('rejects unknown topic', async () => {
+    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const t = tools.find((x) => x.name === 'db_read_guide')!
+    const out = JSON.parse((await t.handler({ topic: 'bogus' })) as string)
+    expect(out.error_code).toBe('unknown_topic')
+    expect(out.valid).toContain('hybrid-schema')
+  })
+
+  it('returns markdown for a known topic', async () => {
+    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const t = tools.find((x) => x.name === 'db_read_guide')!
+    const out = JSON.parse((await t.handler({ topic: 'hybrid-schema' })) as string)
+    expect(out.ok).toBe(true)
+    expect(out.content).toMatch(/hybrid/i)
+  })
+})

@@ -4,7 +4,10 @@
  * envelope) so the LLM can self-correct via `error_code` + `suggestion`.
  */
 
+import fs from 'node:fs'
+import path from 'node:path'
 import type { ToolsManifest, WritePolicy } from '../agents/loader'
+import { packagesRoot } from '../paths'
 import {
   type SqlParam,
   describeSchema,
@@ -13,6 +16,7 @@ import {
   isDestructiveSql,
   runExec,
   runQuery,
+  withTeamDb,
 } from '../team-data'
 import type { Tool } from './base'
 
@@ -278,7 +282,7 @@ export function teamDataTools(
           note: typeof args.note === 'string' ? args.note : null,
           params: paramsFromArgs(args),
         })
-        return JSON.stringify({ ok: true, ...res, elapsed_ms: Date.now() - started })
+        return JSON.stringify({ ...res, ok: true, elapsed_ms: Date.now() - started })
       } catch (exc) {
         const code = errorCodeOf(exc) ?? 'syntax'
         return JSON.stringify(
@@ -293,6 +297,153 @@ export function teamDataTools(
       }
     },
     hint: 'Writing data…',
+  })
+
+  tools.push({
+    name: 'db_explain',
+    description:
+      'Return the SQLite `EXPLAIN QUERY PLAN` for a SELECT/WITH statement. Use before ' +
+      'long queries to see if indexes are being hit. Returns {plan: [{id, parent, detail}]}.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sql: { type: 'string' },
+        params: { type: 'array', items: {} },
+      },
+      required: ['sql'],
+    },
+    handler: async (args) => {
+      if (!manifest.team_data_read) {
+        return JSON.stringify(
+          deny('read_denied', 'Persona has team_data.read: false', 'Enable read access.'),
+        )
+      }
+      const sql = String(args.sql ?? '')
+      if (!SELECT_RE.test(sql)) {
+        return JSON.stringify(
+          deny('not_a_select', 'db_explain only supports SELECT/WITH', 'Rewrite as a SELECT.'),
+        )
+      }
+      if (hasMultipleStatements(sql)) {
+        return JSON.stringify(
+          deny('multi_statement', 'Only one statement per call', 'Split into separate calls.'),
+        )
+      }
+      try {
+        const bindings = paramsFromArgs(args)
+        const rows = withTeamDb(companySlug, teamSlug, (conn) => {
+          const stmt = conn.prepare(`EXPLAIN QUERY PLAN ${sql}`)
+          return (bindings.length > 0 ? stmt.all(...bindings) : stmt.all()) as Record<
+            string,
+            unknown
+          >[]
+        })
+        return JSON.stringify({ ok: true, plan: rows })
+      } catch (exc) {
+        return JSON.stringify(
+          deny(
+            errorCodeOf(exc) ?? 'syntax',
+            exc instanceof Error ? exc.message : String(exc),
+            'Fix the SQL and retry.',
+          ),
+        )
+      }
+    },
+    hint: 'Planning…',
+  })
+
+  tools.push({
+    name: 'db_install_template',
+    description:
+      "Install a pre-defined schema template (bundled SQL script) into this team's data.db. " +
+      "Only templates whitelisted in this persona's tools.yaml (team_data.templates) are " +
+      'allowed. Returns {tables_created: [...]}. Use as an alternative to designing the ' +
+      "schema from scratch when a template fits the user's intent.",
+    parameters: {
+      type: 'object',
+      properties: {
+        template_name: { type: 'string' },
+      },
+      required: ['template_name'],
+    },
+    handler: async (args) => {
+      if (policyPass(manifest.team_data_ddl) !== 'pass') {
+        return JSON.stringify(
+          deny(
+            'ddl_denied',
+            'Installing a template runs DDL; team_data.ddl must be true',
+            'Ask the user to enable ddl for this persona.',
+          ),
+        )
+      }
+      const name = String(args.template_name ?? '')
+      if (!manifest.team_data_templates.includes(name)) {
+        return JSON.stringify(
+          deny(
+            'unknown_template',
+            `Template "${name}" not in whitelist`,
+            `Valid: ${JSON.stringify(manifest.team_data_templates)}. Ask the user to whitelist it in tools.yaml.`,
+          ),
+        )
+      }
+      try {
+        const res = installTemplate(companySlug, teamSlug, name)
+        return JSON.stringify({ ...res, ok: true })
+      } catch (exc) {
+        const code = errorCodeOf(exc) ?? 'internal'
+        return JSON.stringify(
+          deny(
+            code === 'ENOENT' ? 'unknown_template' : code,
+            exc instanceof Error ? exc.message : String(exc),
+            'Check the template name and OPENHIVE_TEMPLATES_DIR.',
+          ),
+        )
+      }
+    },
+    hint: 'Installing template…',
+  })
+
+  const GUIDE_TOPICS = ['hybrid-schema', 'json1', 'indexes', 'patterns', 'perf'] as const
+  tools.push({
+    name: 'db_read_guide',
+    description:
+      'Load a deeper reference guide for DB design. Topics: hybrid-schema (columns vs JSON1), ' +
+      'json1 (extract/set/each recipes), indexes (expr/partial/covering), patterns (upsert, ' +
+      'soft-delete, FTS5, rollups), perf (reading EXPLAIN, avoiding N+1). Call only when ' +
+      'you need specifics — the tool descriptions carry the basics.',
+    parameters: {
+      type: 'object',
+      properties: {
+        topic: { type: 'string', enum: GUIDE_TOPICS as unknown as string[] },
+      },
+      required: ['topic'],
+    },
+    handler: async (args) => {
+      const topic = String(args.topic ?? '')
+      if (!(GUIDE_TOPICS as readonly string[]).includes(topic)) {
+        return JSON.stringify({
+          ok: false,
+          error_code: 'unknown_topic',
+          message: `Unknown topic "${topic}"`,
+          suggestion: `Valid topics: ${GUIDE_TOPICS.join(', ')}.`,
+          valid: GUIDE_TOPICS,
+        })
+      }
+      const file = path.join(packagesRoot(), 'skills', 'db', 'reference', `${topic}.md`)
+      try {
+        const content = fs.readFileSync(file, 'utf8')
+        return JSON.stringify({ ok: true, topic, content })
+      } catch {
+        return JSON.stringify(
+          deny(
+            'guide_missing',
+            `Guide file not found: ${file}`,
+            'Report this to the operator — the guide bundle may be incomplete.',
+          ),
+        )
+      }
+    },
+    hint: 'Loading guide…',
   })
 
   return tools
