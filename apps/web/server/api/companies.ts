@@ -5,6 +5,8 @@ import {
   deleteCompany,
   deleteTeam,
   listCompanies,
+  reorderCompanies,
+  reorderTeams,
   saveCompany,
   saveTeam,
 } from '@/lib/server/companies'
@@ -48,6 +50,25 @@ companies.put('/', async (c) => {
     return c.json({ detail: 'company.slug or company.id required' }, 400)
   }
   saveCompany(company)
+  return c.json({ ok: true })
+})
+
+// PUT /api/companies/reorder — { order: slug[] }
+companies.put('/reorder', async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { order?: unknown }
+  const order = Array.isArray(body.order) ? body.order.filter((s): s is string => typeof s === 'string') : null
+  if (!order) return c.json({ detail: 'order: string[] required' }, 400)
+  reorderCompanies(order)
+  return c.json({ ok: true })
+})
+
+// PUT /api/companies/:companySlug/teams/reorder — { order: slug[] }
+companies.put('/:companySlug/teams/reorder', async (c) => {
+  const companySlug = c.req.param('companySlug')
+  const body = (await c.req.json().catch(() => ({}))) as { order?: unknown }
+  const order = Array.isArray(body.order) ? body.order.filter((s): s is string => typeof s === 'string') : null
+  if (!order) return c.json({ detail: 'order: string[] required' }, 400)
+  reorderTeams(companySlug, order)
   return c.json({ ok: true })
 })
 

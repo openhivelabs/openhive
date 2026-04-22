@@ -22,6 +22,7 @@ export interface TeamDict extends Record<string, unknown> {
   id?: string
   slug?: string
   name?: string
+  order?: number
 }
 
 export interface CompanyDict extends Record<string, unknown> {
@@ -29,6 +30,16 @@ export interface CompanyDict extends Record<string, unknown> {
   slug?: string
   name?: string
   teams?: TeamDict[]
+  order?: number
+}
+
+function byOrderThenName<T extends { order?: unknown; name?: unknown; slug?: unknown }>(a: T, b: T): number {
+  const ao = typeof a.order === 'number' ? a.order : Number.MAX_SAFE_INTEGER
+  const bo = typeof b.order === 'number' ? b.order : Number.MAX_SAFE_INTEGER
+  if (ao !== bo) return ao - bo
+  const an = String(a.name ?? a.slug ?? '')
+  const bn = String(b.name ?? b.slug ?? '')
+  return an < bn ? -1 : an > bn ? 1 : 0
 }
 
 function ensureRoot(): string {
@@ -64,10 +75,72 @@ export function listCompanies(): CompanyDict[] {
         if (t) teams.push(t)
       }
     }
+    teams.sort(byOrderThenName)
     meta.teams = teams
     out.push(meta)
   }
+  out.sort(byOrderThenName)
   return out
+}
+
+/**
+ * Reorder companies by slug. Missing slugs keep their current relative order
+ * appended after the requested ones. Writes `order: i` into each company.yaml.
+ */
+export function reorderCompanies(slugs: string[]): void {
+  const root = ensureRoot()
+  const existing = fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+  const seen = new Set<string>()
+  const ordered: string[] = []
+  for (const s of slugs) {
+    if (existing.includes(s) && !seen.has(s)) {
+      ordered.push(s)
+      seen.add(s)
+    }
+  }
+  for (const s of existing) if (!seen.has(s)) ordered.push(s)
+
+  ordered.forEach((slug, i) => {
+    const yamlPath = path.join(companyDir(slug), 'company.yaml')
+    const meta = (readYamlCached(yamlPath) as CompanyDict | null) ?? {
+      id: slug,
+      slug,
+      name: slug,
+    }
+    meta.order = i
+    writeYaml(yamlPath, meta)
+  })
+}
+
+/**
+ * Reorder teams within a company by slug. Writes `order: i` into each team YAML.
+ */
+export function reorderTeams(companySlug: string, teamSlugs: string[]): void {
+  const teamsDir = path.join(companyDir(companySlug), 'teams')
+  if (!fs.existsSync(teamsDir) || !fs.statSync(teamsDir).isDirectory()) return
+  const existing = fs
+    .readdirSync(teamsDir)
+    .filter((f) => f.endsWith('.yaml'))
+    .map((f) => f.replace(/\.yaml$/, ''))
+  const seen = new Set<string>()
+  const ordered: string[] = []
+  for (const s of teamSlugs) {
+    if (existing.includes(s) && !seen.has(s)) {
+      ordered.push(s)
+      seen.add(s)
+    }
+  }
+  for (const s of existing) if (!seen.has(s)) ordered.push(s)
+
+  ordered.forEach((slug, i) => {
+    const p = teamYamlPath(companySlug, slug)
+    const team = (readYamlCached(p) as TeamDict | null) ?? { id: slug, slug, name: slug }
+    team.order = i
+    writeYaml(p, team)
+  })
 }
 
 export function saveTeam(companySlug: string, team: TeamDict): void {
