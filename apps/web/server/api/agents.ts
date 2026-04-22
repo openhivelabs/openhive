@@ -4,6 +4,7 @@ import { listPersonas } from '@/lib/server/agents/loader'
 import { extractJson, loadSkillBody, rid, slugify } from '@/lib/server/ai-generators/common'
 import { companyDir, packagesRoot } from '@/lib/server/paths'
 import { chatCompletion } from '@/lib/server/providers/copilot'
+import { ScopeViolationError, scopedWriteAll } from '@/lib/server/scoped-fs'
 import { Hono } from 'hono'
 
 export const agents = new Hono()
@@ -108,6 +109,14 @@ export interface LibraryPersona {
   mcp_servers: string[]
 }
 
+/**
+ * Write an LLM-generated persona bundle. The LLM picks file names inside
+ * `persona_assets.files`, so every path must be clamped to the agent's own
+ * directory — we must never let a crafted `../` hop out into the parent
+ * company.yaml or another team. All writes go through `scopedWriteAll`,
+ * which resolves each relative path against the target base and rejects
+ * anything that resolves outside.
+ */
 function writePersonaBundle(
   companySlug: string,
   baseName: string,
@@ -123,14 +132,10 @@ function writePersonaBundle(
     target = path.join(agentsDir, `${slugBase}-${n}`)
   }
   fs.mkdirSync(target, { recursive: true })
-  for (const [rel, contents] of Object.entries(files)) {
-    if (typeof rel !== 'string' || typeof contents !== 'string') continue
-    const safe = rel.replace(/^\/+/, '')
-    if (safe.split('/').some((p) => p === '..' || p === '')) continue
-    const dst = path.join(target, safe)
-    fs.mkdirSync(path.dirname(dst), { recursive: true })
-    fs.writeFileSync(dst, contents, 'utf8')
-  }
+  scopedWriteAll({ base: target, allowPattern: /^[A-Za-z0-9._\-/]+$/ }, files, {
+    maxFiles: 60,
+    maxBytesPerFile: 64 * 1024,
+  })
   return target
 }
 
@@ -231,6 +236,9 @@ agents.post('/generate', async (c) => {
 
     return c.json(out)
   } catch (exc) {
+    if (exc instanceof ScopeViolationError) {
+      return c.json({ detail: `persona file path rejected: ${exc.message}` }, 400)
+    }
     return c.json({ detail: exc instanceof Error ? exc.message : String(exc) }, 500)
   }
 })
