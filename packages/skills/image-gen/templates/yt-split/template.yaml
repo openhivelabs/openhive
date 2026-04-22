@@ -1,0 +1,11 @@
+name: yt-split
+description: YouTube thumbnail — left column text, right column image slot. image_path can be an absolute local file:// URI or an http(s) URL.
+size: { width: 1280, height: 720 }
+inputs:
+  type: object
+  required: [title, image_path]
+  properties:
+    title: { type: string, maxLength: 100 }
+    subtitle: { type: string, maxLength: 120 }
+    image_path: { type: string, minLength: 1 }
+    accent: { type: string, pattern: "^#[0-9a-fA-F]{6}$", default: "#111827" }

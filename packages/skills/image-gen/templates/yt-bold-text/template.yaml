@@ -1,0 +1,11 @@
+name: yt-bold-text
+description: YouTube thumbnail — bold title with optional subtitle on gradient or solid background.
+size: { width: 1280, height: 720 }
+inputs:
+  type: object
+  required: [title]
+  properties:
+    title: { type: string, maxLength: 120 }
+    subtitle: { type: string, maxLength: 160 }
+    accent: { type: string, pattern: "^#[0-9a-fA-F]{6}$", default: "#ff4d4d" }
+    bg_style: { type: string, enum: [solid, gradient], default: gradient }
