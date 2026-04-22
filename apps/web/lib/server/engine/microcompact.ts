@@ -19,12 +19,16 @@
  *   - Idempotent: already-cleared results are skipped on subsequent passes.
  *   - In-memory only: no FS persistence. events.jsonl records the fact as
  *     `microcompact.applied` for observability.
+ *   - A3 placeholder: when the cleared envelope carried artifact refs
+ *     (files[]), the stub embeds a multi-line `Artifacts:` block with
+ *     `artifact://` URIs so the LLM can `read_artifact({path})` later.
  *
  * The v1 trigger is time-only. A4's token-based `shouldMicrocompact` will
  * be ANDed in at v2 (plan §4.1, S2 spec §ADDENDUM).
  */
 
 import type { ChatMessage } from '../providers/types'
+import { buildArtifactUri } from '../sessions/artifacts'
 
 export const STALE_AFTER_MS = (() => {
   const raw = process.env.OPENHIVE_MICROCOMPACT_STALE_MS
@@ -40,13 +44,15 @@ export const MICROCOMPACT_MIN_CHARS = (() => {
   return Number.isFinite(n) && n >= 0 ? n : 200
 })()
 
-/** Read-only built-in tools safe to clear. `read_artifact` will be added
- *  when A3 lands (ADDENDUM item 3). */
+/** Read-only built-in tools safe to clear. `read_artifact` is included
+ *  (A3) — its output is a snapshot of a session-local file; if the LLM
+ *  needs the content again it can just call the tool again. */
 export const COMPACTABLE_BUILTIN = new Set<string>([
   'web_fetch',
   'sql_query',
   'read_skill_file',
   'run_skill_script', // special-cased below — files[] preserved
+  'read_artifact',
 ])
 
 /** Trajectory-encoding / audit-critical tools. Never compact. */
@@ -129,32 +135,70 @@ function compactRunSkillScript(content: string): string | null {
   if (!Array.isArray(p.files)) return null
   return JSON.stringify({
     ok: p.ok,
-    files: p.files,
-    _cleared: `stdout/stderr cleared (${content.length} chars). Re-run if needed.`,
+    files: p.files, // A3: each entry carries `uri` — addressable via read_artifact
+    _cleared: `stdout/stderr cleared (${content.length} chars). Use read_artifact({path: "..."}) to re-read individual files; re-run the script if you need fresh output.`,
   })
 }
 
-/** Extract a short CSV of file names from any envelope that carries a
- *  `files: [{name: string}]` array, so the generic placeholder can still
- *  hint at what was produced. Best-effort; returns '' if shape doesn't
- *  match. */
-function extractFileNamesIfAny(content: string): string {
+/** A3: extract artifact references from a tool_result envelope for
+ *  embedding in the generic placeholder. Looks for `files: [...]` and
+ *  pulls out `{name, uri}` pairs. Best-effort — returns [] if the
+ *  content isn't a structured envelope. */
+interface ArtifactRef {
+  name: string
+  uri: string
+}
+
+function extractArtifactRefs(content: string, sessionId: string): ArtifactRef[] {
+  if (typeof content !== 'string') return []
+  const trimmed = content.trim()
+  if (!trimmed.startsWith('{')) return []
   let parsed: unknown
   try {
-    parsed = JSON.parse(content)
+    parsed = JSON.parse(trimmed)
   } catch {
-    return ''
+    return []
   }
-  if (!parsed || typeof parsed !== 'object') return ''
-  const files = (parsed as Record<string, unknown>).files
-  if (!Array.isArray(files)) return ''
-  const names: string[] = []
-  for (const f of files) {
-    if (f && typeof f === 'object' && typeof (f as { name?: unknown }).name === 'string') {
-      names.push((f as { name: string }).name)
-    }
+  if (!parsed || typeof parsed !== 'object') return []
+  const obj = parsed as Record<string, unknown>
+  if (!Array.isArray(obj.files)) return []
+  const refs: ArtifactRef[] = []
+  for (const c of obj.files) {
+    if (!c || typeof c !== 'object') continue
+    const entry = c as Record<string, unknown>
+    const name =
+      (typeof entry.filename === 'string' && entry.filename) ||
+      (typeof entry.name === 'string' && entry.name) ||
+      null
+    if (!name) continue
+    const uriField = typeof entry.uri === 'string' ? entry.uri : null
+    const absPath = typeof entry.path === 'string' ? entry.path : null
+    const uri = uriField
+      ? uriField
+      : absPath
+        ? buildArtifactUri(sessionId, absPath)
+        : `artifact://session/${sessionId}/artifacts/${name}`
+    refs.push({ name, uri })
   }
-  return names.join(', ')
+  return refs
+}
+
+/** A3: build the generic in-place placeholder for a cleared tool_result.
+ *  Prefers a multi-line `Artifacts:` block when the envelope carried
+ *  artifact refs so the LLM can hit `read_artifact({path: "..."})` on the
+ *  exact URI. Falls back to a terse single-line stub otherwise. */
+function buildGenericStub(toolName: string, original: string, sessionId: string): string {
+  const refs = extractArtifactRefs(original, sessionId)
+  if (refs.length === 0) {
+    return `${CLEARED_PREFIX}. Tool: ${toolName}. Re-call if needed.]`
+  }
+  const lines = refs.map((r) => `  - ${r.name} (${r.uri})`).join('\n')
+  return [
+    `${CLEARED_PREFIX}. Tool: ${toolName}.`,
+    'Artifacts:',
+    lines,
+    'Re-read via read_artifact({path: "..."}).]',
+  ].join('\n')
 }
 
 /**
@@ -162,8 +206,9 @@ function extractFileNamesIfAny(content: string): string {
  * caller to emit as `microcompact.applied` events.
  *
  * @param history    Lead's externalHistory. Mutated in place.
- * @param sessionId  Current session id. Reserved for A3 placeholder
- *                   formatting (artifact URIs); unused in v1.
+ * @param sessionId  Current session id. Used by A3 to build `artifact://`
+ *                   URIs inside placeholder stubs so the LLM can call
+ *                   `read_artifact` to rehydrate cleared envelopes.
  * @param now        Injected clock for tests. Defaults to Date.now().
  */
 export function maybeMicrocompact(
@@ -174,8 +219,6 @@ export function maybeMicrocompact(
   const empty: MicrocompactResult = { applied: 0, charsSaved: 0, entries: [] }
   if (MICROCOMPACT_DISABLED) return empty
   if (history.length === 0) return empty
-  // sessionId intentionally unused in v1 — reserved for A3 placeholder URIs.
-  void sessionId
 
   const lastTs = lastAssistantTs(history)
   const age = now - lastTs
@@ -203,20 +246,14 @@ export function maybeMicrocompact(
     let replacement: string
     if (toolName === 'run_skill_script') {
       const special = compactRunSkillScript(original)
-      if (special === null) {
-        // Not a structured envelope — fall back to generic clear.
-        const filesCsv = extractFileNamesIfAny(original)
-        replacement = `${CLEARED_PREFIX}. Tool: ${toolName}.${
-          filesCsv ? ` Files: ${filesCsv}.` : ''
-        } Re-call if needed.]`
-      } else {
+      if (special !== null) {
         replacement = special
+      } else {
+        // Not a structured envelope — fall back to generic clear.
+        replacement = buildGenericStub(toolName, original, sessionId)
       }
     } else {
-      const filesCsv = extractFileNamesIfAny(original)
-      replacement = `${CLEARED_PREFIX}. Tool: ${toolName}.${
-        filesCsv ? ` Files: ${filesCsv}.` : ''
-      } Re-call if needed.]`
+      replacement = buildGenericStub(toolName, original, sessionId)
     }
 
     if (replacement.length >= original.length) {
