@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { runExec, runQuery } from './team-data'
+import { installTemplate, runExec, runQuery } from './team-data'
 
 describe('team-data params', () => {
   let tmp: string
@@ -114,5 +114,23 @@ describe('query timeout', () => {
     const sql =
       'WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM c WHERE n < 99999999) SELECT count(*) FROM c'
     expect(() => runQuery('acme', 'sales', sql)).toThrow(/timeout/)
+  })
+})
+
+describe('installTemplate diff', () => {
+  it('returns tables_created list', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openhive-td-'))
+    process.env.OPENHIVE_DATA_DIR = tmp
+    const tmpl = fs.mkdtempSync(path.join(os.tmpdir(), 'openhive-tmpl-'))
+    fs.mkdirSync(path.join(tmpl, 'crm'))
+    fs.writeFileSync(
+      path.join(tmpl, 'crm', 'install.sql'),
+      'CREATE TABLE leads (id INTEGER PRIMARY KEY); CREATE TABLE deals (id INTEGER PRIMARY KEY);',
+    )
+    process.env.OPENHIVE_TEMPLATES_DIR = tmpl
+    const r = installTemplate('acme', 'sales', 'crm')
+    expect(r.ok).toBe(true)
+    expect(r.tables_created.sort()).toEqual(['deals', 'leads'])
+    delete process.env.OPENHIVE_TEMPLATES_DIR
   })
 })

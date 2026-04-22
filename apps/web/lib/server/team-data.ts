@@ -377,12 +377,13 @@ export function runExec(
 // -------- template install --------
 
 function templatesRoot(): string {
-  return path.join(packagesRoot(), 'templates')
+  return process.env.OPENHIVE_TEMPLATES_DIR ?? path.join(packagesRoot(), 'templates')
 }
 
 export interface InstallTemplateResult {
   ok: true
   template: string
+  tables_created: string[]
 }
 
 export function installTemplate(
@@ -398,6 +399,18 @@ export function installTemplate(
   }
   const script = fs.readFileSync(file, 'utf8')
   return withTeamDb(companySlug, teamSlug, (conn) => {
+    const listTables = (): Set<string> =>
+      new Set(
+        (
+          conn
+            .prepare(
+              `SELECT name FROM sqlite_master
+                WHERE type='table' AND name NOT LIKE 'sqlite_%'`,
+            )
+            .all() as { name: string }[]
+        ).map((r) => r.name),
+      )
+    const before = listTables()
     const tx = conn.transaction(() => {
       conn.exec(script)
       conn
@@ -408,6 +421,11 @@ export function installTemplate(
         .run(Date.now(), `template:${templateName}`, script, null)
     })
     tx()
-    return { ok: true, template: templateName }
+    const after = listTables()
+    const created: string[] = []
+    for (const t of after) {
+      if (!before.has(t) && t !== 'schema_migrations') created.push(t)
+    }
+    return { ok: true, template: templateName, tables_created: created.sort() }
   })
 }
