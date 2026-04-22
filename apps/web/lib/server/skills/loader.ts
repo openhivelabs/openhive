@@ -47,6 +47,18 @@ export interface SkillDef {
   runtime?: 'python' | 'node'
   entrypoint?: string
   parameters?: Record<string, unknown>
+  /** Tool-partition v2 concurrency class override (frontmatter
+   *  `concurrency_class`). Reserved: the classifier does not yet consume
+   *  this, it is only parsed and stored for a follow-up PR that wires
+   *  per-skill overrides into `classifyTool`. */
+  concurrencyClass?: 'serial_write' | 'safe_parallel'
+}
+
+function parseConcurrencyClass(
+  raw: unknown,
+): 'serial_write' | 'safe_parallel' | undefined {
+  if (raw !== 'serial_write' && raw !== 'safe_parallel') return undefined
+  return raw
 }
 
 function bundledRoot(): string {
@@ -128,6 +140,7 @@ function loadOne(
   const description = String(fm.description ?? '').trim()
   const skillDir = path.dirname(skillMd)
   const triggers = parseTriggers(fm.triggers)
+  const concurrencyClass = parseConcurrencyClass(fm.concurrency_class)
 
   // Typed skill discriminator: entrypoint present.
   const entrypointRel = fm.entrypoint
@@ -163,6 +176,7 @@ function loadOne(
       runtime: runtime as 'python' | 'node',
       entrypoint: entrypointAbs,
       parameters: parametersRaw as Record<string, unknown>,
+      concurrencyClass,
     }
   }
 
@@ -175,6 +189,7 @@ function loadOne(
     triggers,
     body: body.trim(),
     fileTree: walkSkillTree(skillDir),
+    concurrencyClass,
   }
 }
 

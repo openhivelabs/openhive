@@ -16,6 +16,7 @@
  */
 
 import crypto from 'node:crypto'
+import pLimit from 'p-limit'
 import {
   composePersonaBody,
   effectiveMcpServers,
@@ -42,6 +43,7 @@ import * as errors from './errors'
 import { stream, buildMessages } from './providers'
 import type { AgentSpec, TeamSpec } from './team'
 import { entryAgent, subordinates as teamSubordinates } from './team'
+import { TRAJECTORY_TOOLS, type ToolRun, partitionRuns } from './tool-partition'
 
 // Guard defaults + hard ceilings.
 export const MAX_TOOL_ROUNDS = 8
@@ -52,19 +54,20 @@ export const HARD_MAX_DEPTH = 8
 
 /** Tool names that mutate run-scoped state (delegation tree, ask_user
  *  counter, todos) — these must execute serially. Every other tool (MCP,
- *  skill helpers, custom handlers) is parallel-safe in a single turn. */
-export const SERIAL_TOOL_NAMES = new Set<string>([
-  'delegate_to',
-  'delegate_parallel',
-  'ask_user',
-  'set_todos',
-  'add_todo',
-  'complete_todo',
-])
+ *  skill helpers, custom handlers) is parallel-safe in a single turn.
+ *
+ *  Back-compat alias for the v2 taxonomy's `TRAJECTORY_TOOLS`. New code
+ *  should import from `./tool-partition`; this export stays for the
+ *  legacy `splitToolRuns` path and for tests. */
+export const SERIAL_TOOL_NAMES = TRAJECTORY_TOOLS
 
 /** Partition tool_calls into consecutive serial/parallel runs. Adjacent
  *  same-kind calls collapse into one run; the order inside each run is
- *  preserved so provider history remains deterministic. */
+ *  preserved so provider history remains deterministic.
+ *
+ *  Legacy v1 partitioner. Used as fallback when
+ *  `OPENHIVE_TOOL_PARTITION_V2=0`. The default path now goes through
+ *  `partitionRuns` from `./tool-partition` (3-class taxonomy + cap). */
 export function splitToolRuns<T extends { function: { name: string } }>(
   calls: T[],
 ): { serial: boolean; items: T[] }[] {
@@ -76,6 +79,18 @@ export function splitToolRuns<T extends { function: { name: string } }>(
     else runs.push({ serial, items: [tc] })
   }
   return runs
+}
+
+/** Env: v2 partition + concurrency cap is default ON. Set
+ *  `OPENHIVE_TOOL_PARTITION_V2=0` to fall back to legacy `splitToolRuns`. */
+function toolPartitionV2Enabled(): boolean {
+  return process.env.OPENHIVE_TOOL_PARTITION_V2 !== '0'
+}
+
+/** Env: per-parallel-bucket concurrency cap. Default 10. */
+function toolParallelMax(): number {
+  const raw = Number(process.env.OPENHIVE_TOOL_PARALLEL_MAX)
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 10
 }
 
 // session_id → counters kept on globalThis so HMR doesn't drop in-flight runs.
@@ -718,12 +733,37 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
     })
 
     // Split tool_calls into serial-vs-parallel runs. Tools that mutate
-    // run-scoped state (delegation, ask_user, todo) stay serial; everything
-    // else (MCP, skills, custom) runs concurrently. History is always pushed
-    // in original tool_call order so provider payloads stay deterministic.
+    // run-scoped state (delegation, ask_user, todo, activate_skill) stay
+    // serial; writes (sql_exec, run_skill_script) are serialized to avoid
+    // intra-turn races; reads (MCP, sql_query, web_fetch, …) fan out under
+    // a concurrency cap. History is always pushed in original tool_call
+    // order so provider payloads stay deterministic.
     type ExecResult = { content: string; isError: boolean }
     type TC = (typeof toolCallsForHistory)[number]
-    const runs = splitToolRuns<TC>(toolCallsForHistory)
+    const cap = toolParallelMax()
+    const v2 = toolPartitionV2Enabled()
+    let runs: ToolRun<TC>[]
+    if (v2) {
+      const partitioned = partitionRuns<TC>(toolCallsForHistory, cap)
+      runs = partitioned.runs
+      if (toolCallsForHistory.length > 0) {
+        yield makeEvent(
+          'tool_run.partitioned',
+          sessionId,
+          partitioned.stats as unknown as Record<string, unknown>,
+          { depth, node_id: node.id },
+        )
+      }
+    } else {
+      // Legacy v1 shape → adapter into the v2 ToolRun shape so the loop
+      // below stays single-path.
+      const legacy = splitToolRuns<TC>(toolCallsForHistory)
+      runs = legacy.map((r) => ({
+        kind: r.serial ? ('serial' as const) : ('parallel' as const),
+        cls: r.serial ? ('trajectory' as const) : ('safe_parallel' as const),
+        items: r.items,
+      }))
+    }
 
     const executeOne = async function* (tc: TC): AsyncGenerator<Event, ExecResult> {
       let parsedArgs: Record<string, unknown> = {}
@@ -874,7 +914,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
     }
 
     for (const run of runs) {
-      if (run.serial || run.items.length === 1) {
+      if (run.kind === 'serial' || run.items.length === 1) {
         for (const tc of run.items) {
           const gen = executeOne(tc)
           let step = await gen.next()
@@ -885,9 +925,12 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
           applyResult(tc, step.value)
         }
       } else {
-        // Parallel: kick off every tc concurrently; interleave their events
-        // via AsyncQueue so the caller sees them as they arrive. Results are
-        // collected into a slot array so history.push remains in index order.
+        // Parallel: kick off every tc under a pLimit(cap) semaphore;
+        // interleave their events via AsyncQueue so the caller sees them
+        // as they arrive. Results land in a slot array so history.push
+        // remains in index order — provider chat history requires
+        // tool_result ordering to match tool_call ordering.
+        const limit = pLimit(cap)
         const n = run.items.length
         type Item =
           | { kind: 'event'; event: Event }
@@ -898,7 +941,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
         for (let i = 0; i < n; i++) {
           const tc = run.items[i]!
           const idx = i
-          void (async () => {
+          void limit(async () => {
             try {
               const gen = executeOne(tc)
               let step = await gen.next()
@@ -917,7 +960,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
                 },
               })
             }
-          })()
+          })
         }
 
         let completed = 0

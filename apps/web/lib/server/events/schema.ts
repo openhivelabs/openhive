@@ -27,6 +27,7 @@ export type EventKind =
   | 'todos_changed'
   | 'skill.queued'
   | 'skill.started'
+  | 'tool_run.partitioned'
 
 export interface Event {
   kind: EventKind
