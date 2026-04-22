@@ -1,3 +1,4 @@
+import { DEFAULT_LEAD_SYSTEM_PROMPT } from './defaults/leadSystemPrompt'
 import type { Team } from './types'
 
 function slug(s: string) {
@@ -194,7 +195,36 @@ function buildCodeReviewTeam(): Team {
   }
 }
 
+function buildEmptyTeam(): Team {
+  const lead = makeId('a')
+  return {
+    id: makeId('t'),
+    slug: slug(`team-${Date.now()}`),
+    name: 'New Team',
+    agents: [
+      {
+        id: lead,
+        role: 'Lead',
+        label: 'Copilot',
+        providerId: 'copilot',
+        model: 'gpt-5-mini',
+        systemPrompt: DEFAULT_LEAD_SYSTEM_PROMPT,
+        skills: [],
+        position: { x: 400, y: 120 },
+      },
+    ],
+    edges: [],
+  }
+}
+
 export const PRESETS: PresetDef[] = [
+  {
+    id: 'empty-team',
+    name: 'Empty',
+    tagline: 'Just a Lead — build the rest yourself.',
+    icon: '◻︎',
+    build: buildEmptyTeam,
+  },
   {
     id: 'report-team',
     name: 'Report Team',

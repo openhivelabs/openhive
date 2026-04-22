@@ -66,6 +66,16 @@ import {
 import type { AgentSpec, TeamSpec } from './team'
 import { entryAgent, subordinates as teamSubordinates } from './team'
 import { TRAJECTORY_TOOLS, type ToolRun, partitionRuns } from './tool-partition'
+import {
+  appendArtifactBlock,
+  renderSessionArtifacts,
+  toManifestEntry,
+} from './artifacts-manifest'
+import {
+  askUserGuidance,
+  delegateToGuidance,
+  activateSkillGuidance,
+} from './delegation-guidance'
 
 // Guard defaults + hard ceilings.
 export const MAX_TOOL_ROUNDS = 8
@@ -736,7 +746,18 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     const todos = depth === 0 ? (state().todos.get(sessionId) ?? []) : []
     const todosBlock = renderTodosSection(todos)
     const showHints = turn === 1 && hintsBlock.length > 0
-    const prefix = (todosBlock ? todosBlock + '\n' : '') + (showHints ? hintsBlock + '\n' : '')
+    // Session-wide artifact manifest: Lead sees every file produced so far,
+    // so the final answer can cite them as artifact:// links without relying
+    // on whatever the last tool_result happened to contain.
+    const artifactRecords =
+      depth === 0 ? artifactsStore.listForSession(sessionId) : []
+    const manifestBlock = renderSessionArtifacts(
+      artifactRecords.map((r) => toManifestEntry(r, sessionId)),
+    )
+    const prefix =
+      (manifestBlock ? manifestBlock + '\n' : '') +
+      (todosBlock ? todosBlock + '\n' : '') +
+      (showHints ? hintsBlock + '\n' : '')
     const teamBlock = prefix ? prefix + staticTeamBlock : staticTeamBlock
     return composeSystemPrompt(personaBody, agentSkills, teamBlock)
   }
@@ -1143,7 +1164,9 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
               depth,
             })) {
               if (subEv.kind === 'delegation_closed') {
-                content = (subEv.data.result as string | undefined) ?? ''
+                const body = (subEv.data.result as string | undefined) ?? ''
+                const paths = subEv.data.artifact_paths as string[] | undefined
+                content = appendArtifactBlock(body, paths)
                 isError = !!subEv.data.error
               }
               yield subEv
@@ -1158,7 +1181,9 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
               depth,
             })) {
               if (subEv.kind === 'delegation_closed' && subEv.data.group_final) {
-                content = (subEv.data.result as string | undefined) ?? ''
+                const body = (subEv.data.result as string | undefined) ?? ''
+                const paths = subEv.data.artifact_paths as string[] | undefined
+                content = appendArtifactBlock(body, paths)
                 isError = !!subEv.data.error
               }
               yield subEv
@@ -1568,9 +1593,7 @@ function delegateTool(team: TeamSpec, node: AgentSpec): Tool {
   }
   return {
     name: 'delegate_to',
-    description:
-      'Assign a task to a direct subordinate. Use this whenever the work requires ' +
-      'specialist attention. The subordinate will respond with their output.',
+    description: delegateToGuidance(),
     parameters: {
       type: 'object',
       properties: {
@@ -2062,11 +2085,7 @@ async function* runParallelDelegation(opts: DelegationOpts): AsyncGenerator<Even
 function askUserTool(): Tool {
   return {
     name: 'ask_user',
-    description:
-      'Ask the human user clarifying questions before proceeding. Use this when ' +
-      'requirements are ambiguous and an answer would materially change the plan. ' +
-      "Each question must have 2-4 concrete options; the UI adds 'Other' and 'Skip' automatically. " +
-      "If recommending, put the recommendation first and suffix its label with ' (Recommended)'.",
+    description: askUserGuidance(),
     parameters: {
       type: 'object',
       properties: {
@@ -2257,50 +2276,63 @@ async function* runSkillInvocation(opts: SkillInvocationOpts): AsyncGenerator<Ev
 
 // -------- agent-skill plumbing (progressive disclosure) --------
 
-// Shared sentinel. Sub-agents who need user clarification prefix their entire
-// message with it; managers re-emit it verbatim upward; Lead is instructed to
-// detect it and fire `ask_user`. One token, easy to grep for, and the LLM
-// treats prefix sentinels consistently across vendors.
-const CLARIFY_SENTINEL = 'CLARIFICATION_REQUEST:'
+// 2026-04-23: CLARIFICATION_REQUEST cascade removed. Previously sub-agents
+// prefixed ambiguity with a sentinel that the Lead would mechanically convert
+// to ask_user — which caused ask_user overuse (any ambiguity bubbled all the
+// way up as a user-facing question). New pattern: sub-agents self-resolve by
+// picking the most plausible interpretation and stating their assumption;
+// Lead verifies assumptions, corrects silently, and only calls ask_user as a
+// genuine last resort (see askUserGuidance()).
 
 function buildRelaySection(depth: number, hasSubs: boolean): string {
   if (depth === 0) {
     return (
       '# User gateway (you only)\n' +
-      'Any ask for user input — yours or relayed ' +
-      `\`${CLARIFY_SENTINEL}\` from a delegate — MUST use the \`ask_user\` tool. ` +
-      'Never end a turn with plain text requesting something ("링크 주세요" etc.) — ' +
-      'that finalises the run. Never guess a default or re-delegate with an ' +
-      'assumption while a clarification is pending. Consolidate pending items ' +
-      'into ONE ask_user call.\n' +
+      'Only you can address the user. When the user genuinely needs to decide ' +
+      'something you cannot infer, call `ask_user` — but see that tool\'s ' +
+      'description for the high bar. Never end a turn with plain text requesting ' +
+      'input ("링크 주세요" etc.) — that finalises the run. Consolidate pending ' +
+      'items into ONE ask_user call; never chain questions across consecutive turns.\n' +
+      '\n# Handling ambiguity from subordinates\n' +
+      'Subordinates are instructed to self-resolve ambiguity by picking the most ' +
+      'plausible interpretation and stating their assumption at the top of their ' +
+      'result ("가정: …"). When you read a subordinate\'s result, check the stated ' +
+      'assumption. If it looks fine, accept and continue. If it looks wrong but ' +
+      'you can correct it yourself (tone, format, trivial facts), just correct it ' +
+      'in your final answer. Only call `ask_user` when the assumption is high-' +
+      'stakes AND you genuinely cannot pick a better default. Do NOT forward a ' +
+      'subordinate\'s uncertainty to the user as-is — that is your job to resolve.\n' +
       '\n# One-shot delegation (hard rule)\n' +
       `You may call \`delegate_to\` on each subordinate at most ${MAX_DELEGATIONS_PER_PAIR} times per run ` +
       '(the engine enforces this). When a delegate returns a usable result, ' +
       'do NOT re-delegate with "REVISED TASK" or "please polish X" — either ' +
       'accept the result and finish, or edit/annotate it yourself in your ' +
-      'final answer. Picking at the same deliverable with more rounds of the ' +
-      'same delegate burns tokens without improving quality.\n' +
+      'final answer.\n' +
       '\n# Final message = report, not a chat (hard rule)\n' +
-      'Your final turn ends the run. Write it as a terminal report: deliver ' +
-      'the result (artifact path, summary, process trace) and stop. **Never ' +
-      'offer revision options, menus, or "다음 단계" / "원하시면" / "어떻게 ' +
-      '할까요?" trailers.** No "(1) 문구 수정 … (2) 링크 제공 … (3) 재발행 …" ' +
-      'style prompts. No questions inviting follow-up. The user can start a ' +
-      'new task if they want revisions; your job is to finish cleanly.\n'
+      'Your final turn ends the run. Deliver: (a) a coherent synthesis of ' +
+      'results, (b) all relevant artifact:// links from the session manifest, ' +
+      '(c) any assumption you made, stated briefly. Never offer revision ' +
+      'menus or "다음 단계" / "원하시면" / "어떻게 할까요?" trailers. The user ' +
+      'can start a new task if they want revisions.\n'
     )
   }
   let section =
-    '# User contact\n' +
-    'Only the Lead can talk to the user. If you need input, end your turn with ' +
-    `a message whose first line is exactly:\n  ${CLARIFY_SENTINEL} <question>\n` +
-    'then 2–4 option lines: `- <label>: <description>`. No other content. ' +
-    'Parent relays upstream.\n'
+    '# User contact (you are NOT the user gateway)\n' +
+    'Only the Lead can talk to the user. You cannot call `ask_user` — it is not ' +
+    'in your tool catalog.\n' +
+    '\n# Handling ambiguity in your task (self-resolve)\n' +
+    'If the task brief leaves something ambiguous, do NOT ask back. Pick the ' +
+    'single most plausible interpretation, state it as an explicit assumption ' +
+    'at the top of your result ("가정: X 로 해석하여 진행함"), and deliver the ' +
+    'best work under that assumption. Your parent will verify. Picking-and-' +
+    'delivering with a stated assumption is always better than kicking the ' +
+    'decision upward.\n'
   if (hasSubs) {
     section +=
-      '\n# Relaying from delegates\n' +
-      `If a delegate tool_result starts with \`${CLARIFY_SENTINEL}\`, forward ` +
-      'verbatim as your own next output. Do NOT answer it, pick defaults, or ' +
-      're-delegate with an assumption. Only the Lead surfaces to the user.\n'
+      '\n# Relaying from your own delegates\n' +
+      'If one of your own delegates returns ambiguity or fails, resolve it ' +
+      'yourself or retry with a tighter brief. Do NOT forward their uncertainty ' +
+      'upward; you are the decision-maker at this level.\n'
   }
   return section
 }
@@ -2373,10 +2405,7 @@ function skillActivateTool(agentSkills: SkillDef[]): Tool {
   const names = [...byName.keys()].sort()
   return {
     name: 'activate_skill',
-    description:
-      "Load a skill's full guide (SKILL.md body + list of files in its " +
-      'directory) into this conversation. Call this once per skill you ' +
-      'intend to use, before reading its files or running its scripts.',
+    description: activateSkillGuidance(),
     parameters: {
       type: 'object',
       properties: {

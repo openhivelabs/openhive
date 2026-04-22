@@ -17,6 +17,7 @@ import {
 } from '@/lib/api/providers'
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
+import { DEFAULT_LEAD_SYSTEM_PROMPT } from '@/lib/defaults/leadSystemPrompt'
 import type { Agent, Company, ReportingEdge, Team } from '@/lib/types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -863,7 +864,7 @@ function buildCompanySpec(
       label: 'Lead',
       providerId,
       model: defaultModel,
-      systemPrompt: 'You are the team lead. Break down requests, delegate, and synthesise results.',
+      systemPrompt: DEFAULT_LEAD_SYSTEM_PROMPT,
       skills: [],
       position: { x: 400, y: 120 },
       maxParallel: 1,
