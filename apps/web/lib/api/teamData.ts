@@ -29,18 +29,30 @@ export interface QueryResult {
   rows: Record<string, unknown>[]
 }
 
+export interface PagedQueryResult extends QueryResult {
+  total: number
+  limit: number
+  offset: number
+}
+
 export async function fetchSchema(teamId: string): Promise<SchemaResponse> {
   const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}/schema`)
   if (!res.ok) throw new Error(`GET schema ${res.status}`)
   return (await res.json()) as SchemaResponse
 }
 
-export async function fetchTableRows(teamId: string, table: string, limit = 200): Promise<QueryResult> {
+export async function fetchTableRows(
+  teamId: string,
+  table: string,
+  opts: { limit?: number; offset?: number } = {},
+): Promise<PagedQueryResult> {
+  const limit = opts.limit ?? 100
+  const offset = opts.offset ?? 0
   const res = await fetch(
-    `/api/teams/${encodeURIComponent(teamId)}/table/${encodeURIComponent(table)}?limit=${limit}`,
+    `/api/teams/${encodeURIComponent(teamId)}/table/${encodeURIComponent(table)}?limit=${limit}&offset=${offset}`,
   )
   if (!res.ok) throw new Error(`GET rows ${res.status}`)
-  return (await res.json()) as QueryResult
+  return (await res.json()) as PagedQueryResult
 }
 
 export async function installTemplate(teamId: string, template: string): Promise<void> {

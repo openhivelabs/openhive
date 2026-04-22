@@ -5,21 +5,23 @@ import { clsx } from 'clsx'
 import { useState } from 'react'
 import { DatabaseView } from '@/components/database/DatabaseView'
 import { FileBrowser } from '@/components/database/FileBrowser'
+import { useT } from '@/lib/i18n'
 
 type StorageView = 'database' | 'files'
 
-const VIEWS: { id: StorageView; label: string; icon: typeof Database }[] = [
-  { id: 'files', label: 'Files', icon: FolderOpen },
-  { id: 'database', label: 'Database', icon: Database },
+const VIEWS: { id: StorageView; labelKey: string; icon: typeof Database }[] = [
+  { id: 'files', labelKey: 'records.view.files', icon: FolderOpen },
+  { id: 'database', labelKey: 'records.view.database', icon: Database },
 ]
 
 export default function StoragePage() {
+  const t = useT()
   const [view, setView] = useState<StorageView>('files')
   return (
     <div className="h-full flex flex-col bg-white dark:bg-neutral-950">
       <nav className="h-[48px] shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-6 flex items-center">
         <div className="inline-flex p-0.5 rounded-lg bg-neutral-100/80 dark:bg-neutral-900">
-          {VIEWS.map(({ id, label, icon: Icon }) => {
+          {VIEWS.map(({ id, labelKey, icon: Icon }) => {
             const active = view === id
             return (
               <button
@@ -34,7 +36,7 @@ export default function StoragePage() {
                 )}
               >
                 <Icon className="w-3.5 h-3.5" weight={active ? 'fill' : 'regular'} />
-                {label}
+                {t(labelKey)}
               </button>
             )
           })}

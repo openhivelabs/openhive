@@ -1,5 +1,5 @@
-@import 'tailwindcss';
-@import '@xyflow/react/dist/style.css';
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -30,18 +30,18 @@ body {
 }
 
 /* All non-disabled buttons are clickable → show a pointer */
-button:not(:disabled):not([aria-disabled='true']) {
+button:not(:disabled):not([aria-disabled="true"]) {
   cursor: pointer;
 }
 button:disabled,
-button[aria-disabled='true'] {
+button[aria-disabled="true"] {
   cursor: not-allowed;
 }
 
 body {
   background: var(--bg);
   color: #111;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     sans-serif;
   -webkit-font-smoothing: antialiased;
 }
@@ -61,14 +61,40 @@ body {
 
 /* Active-edge pulse marker */
 @keyframes edgeFlow {
-  0% { offset-distance: 0%; opacity: 0; }
-  10% { opacity: 1; }
-  90% { opacity: 1; }
-  100% { offset-distance: 100%; opacity: 0; }
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
 }
 
 .edge-pulse {
   animation: edgeFlow 1.8s linear infinite;
+}
+
+/* Text-caret blink for draft filter chip value phase */
+@keyframes caretBlink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.caret-blink {
+  animation: caretBlink 1s step-end infinite;
 }
 
 /* Overlay-style scrollbar — no visible track/gutter line, faint thumb that
