@@ -1,0 +1,10 @@
+name: yt-quote
+description: YouTube thumbnail — large quote with attribution. Good for interview recaps or report pull-quotes.
+size: { width: 1280, height: 720 }
+inputs:
+  type: object
+  required: [quote]
+  properties:
+    quote: { type: string, maxLength: 260 }
+    author: { type: string, maxLength: 80 }
+    accent: { type: string, pattern: "^#[0-9a-fA-F]{6}$", default: "#fbbf24" }
