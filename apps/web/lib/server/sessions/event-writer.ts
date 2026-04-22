@@ -141,6 +141,19 @@ async function doFlush(sessionId: string): Promise<void> {
   }
 }
 
+/** Drop sessions whose queues are empty and have no pending timer.
+ *  Used by session finalize paths to keep the queue map bounded. */
+export function dropIdleQueues(): void {
+  for (const [id, q] of queues) {
+    if (q.buf.length === 0 && !q.timer) queues.delete(id)
+  }
+}
+
+/** Test helper: presence check for a given session's queue. */
+export function hasQueueForTest(id: string): boolean {
+  return queues.has(id)
+}
+
 /** Drain any pending events for one session. Resolves once the last
  *  currently-queued batch has hit disk. */
 export async function flushSession(sessionId: string): Promise<void> {

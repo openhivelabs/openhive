@@ -8,12 +8,14 @@ import {
   FLUSH_THRESHOLD,
   __resetForTests,
   __setPathResolver,
+  dropIdleQueues,
   enqueueEvent,
   flushAll,
   flushIntervalMs,
   flushSession,
   flushThreshold,
   getEventWriterMetrics,
+  hasQueueForTest,
 } from './event-writer'
 
 let tmpRoot: string
@@ -146,6 +148,15 @@ describe('event-writer', () => {
     expect(m.lines).toBe(2)
     expect(m.bytes).toBeGreaterThan(0)
     expect(m.errors).toBe(0)
+  })
+
+  it('drops idle queues', async () => {
+    __resetForTests()
+    enqueueEvent('s-drop', JSON.stringify({}))
+    await flushSession('s-drop')
+    expect(hasQueueForTest('s-drop')).toBe(true)
+    dropIdleQueues()
+    expect(hasQueueForTest('s-drop')).toBe(false)
   })
 
   it('preserves FIFO order across mixed timer and threshold triggers', async () => {
