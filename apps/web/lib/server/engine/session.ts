@@ -37,7 +37,14 @@ import { readSkillFile, runSkill, runSkillScript } from '../skills/runner'
 import { type Tool, toolsToOpenAI } from '../tools/base'
 import { teamDataTools } from '../tools/team-data-tool'
 import { webFetchTool } from '../tools/webfetch'
-import { recordUsage } from '../usage'
+import { effectiveWindow as computeEffectiveWindow } from '../usage/contextWindow'
+import {
+  estimateMessagesTokens,
+  estimateTextTokens,
+  estimateToolsTokens,
+  shouldBlockTurn,
+} from '../usage/tokens'
+import { type ThresholdTrigger, recordUsage } from '../usage'
 import * as askuser from './askuser'
 import * as errors from './errors'
 import { stream, buildMessages } from './providers'
@@ -663,6 +670,45 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
     if (Array.isArray(m.tool_calls)) historyChars += JSON.stringify(m.tool_calls).length
   }
 
+  // A4: token estimates alongside char counts. char fields stay (drift
+  // baseline + existing usage views). `ew` carries all thresholds; we decide
+  // which one the current estimate crossed for this turn.
+  const systemTokens = estimateTextTokens(systemPrompt)
+  const toolsTokens = estimateToolsTokens(openaiTools)
+  const historyTokens = estimateMessagesTokens(history)
+  const estimatedInputTokens = systemTokens + toolsTokens + historyTokens
+  const ew = computeEffectiveWindow(node.provider_id, node.model)
+  let thresholdTriggered: ThresholdTrigger = 'none'
+  if (estimatedInputTokens > ew.blockingLimit) thresholdTriggered = 'blocking'
+  else if (estimatedInputTokens > ew.autoCompactThreshold) thresholdTriggered = 'autocompact'
+  else if (estimatedInputTokens > ew.warningThreshold) thresholdTriggered = 'warning'
+
+  // A4 Phase 3 — env-gated block. Default off (logging only). When enabled,
+  // refuse to start the turn so runDelegation / runTeam catch + either
+  // summarise back to parent or mark the session interrupted.
+  if (shouldBlockTurn(estimatedInputTokens, node.provider_id, node.model)) {
+    yield makeEvent(
+      'turn.blocked',
+      sessionId,
+      {
+        reason: 'context_overflow',
+        estimated_tokens: estimatedInputTokens,
+        blocking_limit: ew.blockingLimit,
+        provider_id: node.provider_id,
+        model: node.model,
+      },
+      { depth, node_id: node.id },
+    )
+    if (process.env.OPENHIVE_BLOCK_ON_OVERFLOW === '1') {
+      throw new errors.ContextOverflowError({
+        estimatedTokens: estimatedInputTokens,
+        blockingLimit: ew.blockingLimit,
+        providerId: node.provider_id,
+        model: node.model,
+      })
+    }
+  }
+
   const textBuf: string[] = []
   interface Pending {
     id: string | null
@@ -687,6 +733,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       if (delta.arguments_chunk) p.args += delta.arguments_chunk
     } else if (delta.kind === 'usage') {
       // Logging shouldn't kill the run — catch-all.
+      const actualInput = delta.input_tokens ?? 0
       try {
         const slugs = state().teamSlugs.get(sessionId) ?? null
         recordUsage({
@@ -697,16 +744,44 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
           agentRole: node.role,
           providerId: node.provider_id,
           model: node.model,
-          inputTokens: delta.input_tokens ?? 0,
+          inputTokens: actualInput,
           outputTokens: delta.output_tokens ?? 0,
           cacheReadTokens: delta.cache_read_tokens ?? 0,
           cacheWriteTokens: delta.cache_write_tokens ?? 0,
           systemChars,
           toolsChars,
           historyChars,
+          estimatedInputTokens,
+          actualInputTokens: actualInput,
+          effectiveWindow: ew.window,
+          autoCompactThreshold: ew.autoCompactThreshold,
+          warningThreshold: ew.warningThreshold,
+          blockingLimit: ew.blockingLimit,
+          thresholdTriggered,
         })
       } catch {
         /* swallow */
+      }
+      // A4 drift event — estimate vs authoritative. >25% diff → emit.
+      if (actualInput > 0 && estimatedInputTokens > 0) {
+        const driftRatio = Math.abs(actualInput - estimatedInputTokens) / actualInput
+        if (driftRatio > 0.25) {
+          const padRaw = process.env.OPENHIVE_TOKEN_PAD_FACTOR
+          const padFactor = padRaw && Number.isFinite(Number(padRaw)) ? Number(padRaw) : 4 / 3
+          yield makeEvent(
+            'token.estimate.drift',
+            sessionId,
+            {
+              provider_id: node.provider_id,
+              model: node.model,
+              estimated: estimatedInputTokens,
+              actual: actualInput,
+              drift_ratio: Number(driftRatio.toFixed(3)),
+              pad_factor: Number(padFactor.toFixed(4)),
+            },
+            { depth, node_id: node.id },
+          )
+        }
       }
     } else if (delta.kind === 'stop') {
       stopReason = delta.reason ?? 'stop'

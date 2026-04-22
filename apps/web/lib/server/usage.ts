@@ -43,6 +43,8 @@ export function estimateCostCents(
   return (rin * inputTokens + rout * outputTokens) / 10_000
 }
 
+export type ThresholdTrigger = 'none' | 'warning' | 'autocompact' | 'blocking'
+
 export interface RecordUsageInput {
   sessionId: string | null
   companyId: string | null
@@ -58,6 +60,18 @@ export interface RecordUsageInput {
   systemChars?: number
   toolsChars?: number
   historyChars?: number
+  /** A4: our pre-turn estimate of input tokens (system + tools + history). */
+  estimatedInputTokens?: number
+  /** A4: authoritative value reported by the provider. Same as inputTokens,
+   *  kept separate for drift analysis. */
+  actualInputTokens?: number
+  /** A4: effectiveWindow snapshot at call time. */
+  effectiveWindow?: number
+  autoCompactThreshold?: number
+  warningThreshold?: number
+  blockingLimit?: number
+  /** A4: which threshold, if any, the estimate crossed. */
+  thresholdTriggered?: ThresholdTrigger
 }
 
 interface UsageRow {
@@ -77,6 +91,14 @@ interface UsageRow {
   system_chars: number
   tools_chars: number
   history_chars: number
+  // A4 — all default 0 / 'none' so existing-row normalisation is trivial.
+  estimated_input_tokens: number
+  actual_input_tokens: number
+  effective_window: number
+  autocompact_threshold: number
+  warning_threshold: number
+  blocking_limit: number
+  threshold_triggered: ThresholdTrigger
 }
 
 function readRows(sessionId: string): UsageRow[] {
@@ -118,6 +140,13 @@ export function recordUsage(input: RecordUsageInput): void {
     system_chars: Math.trunc(input.systemChars ?? 0),
     tools_chars: Math.trunc(input.toolsChars ?? 0),
     history_chars: Math.trunc(input.historyChars ?? 0),
+    estimated_input_tokens: Math.trunc(input.estimatedInputTokens ?? 0),
+    actual_input_tokens: Math.trunc(input.actualInputTokens ?? 0),
+    effective_window: Math.trunc(input.effectiveWindow ?? 0),
+    autocompact_threshold: Math.trunc(input.autoCompactThreshold ?? 0),
+    warning_threshold: Math.trunc(input.warningThreshold ?? 0),
+    blocking_limit: Math.trunc(input.blockingLimit ?? 0),
+    threshold_triggered: input.thresholdTriggered ?? 'none',
   }
   const existing = readRows(input.sessionId)
   existing.push(row)

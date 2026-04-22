@@ -69,10 +69,7 @@ export function classify(exc: unknown): ClassifiedError {
   if (msg.includes('stream 429') || lower.includes('rate limit')) {
     return { kind: 'provider_rate_limit', statusCode: 429, detail: msg }
   }
-  if (
-    msg.includes('stream 404') ||
-    (lower.includes('model') && lower.includes('not found'))
-  ) {
+  if (msg.includes('stream 404') || (lower.includes('model') && lower.includes('not found'))) {
     return { kind: 'provider_model_not_found', statusCode: 404, detail: msg }
   }
   if (
@@ -184,8 +181,7 @@ export interface RenderOpts {
 
 export function renderError(err: ClassifiedError, opts: RenderOpts): string {
   const loc = currentLocale()
-  const template =
-    TEMPLATES[err.kind]?.[loc] ?? TEMPLATES.unknown[loc] ?? TEMPLATES.unknown.en
+  const template = TEMPLATES[err.kind]?.[loc] ?? TEMPLATES.unknown[loc] ?? TEMPLATES.unknown.en
   return template
     .replace(/\{role\}/g, opts.role)
     .replace(/\{agent\}/g, opts.agentId)
@@ -234,4 +230,32 @@ export function isAgentExcluded(sessionId: string, agentId: string): boolean {
 
 export function clearSessionFailures(sessionId: string): void {
   failures().bySession.delete(sessionId)
+}
+
+// ─── A4: context-overflow block ─────────────────────────────────────────
+
+/** Raised when the estimated input tokens exceed the provider/model blocking
+ *  limit and OPENHIVE_BLOCK_ON_OVERFLOW is enabled. Caught by runDelegation /
+ *  runTeam to either summarise back to the parent or mark the session
+ *  interrupted. */
+export class ContextOverflowError extends Error {
+  readonly estimatedTokens: number
+  readonly blockingLimit: number
+  readonly providerId: string
+  readonly model: string
+  constructor(params: {
+    estimatedTokens: number
+    blockingLimit: number
+    providerId: string
+    model: string
+  }) {
+    super(
+      `Context (${params.estimatedTokens}t) exceeds blocking limit (${params.blockingLimit}t) for ${params.providerId}/${params.model}.`,
+    )
+    this.name = 'ContextOverflowError'
+    this.estimatedTokens = params.estimatedTokens
+    this.blockingLimit = params.blockingLimit
+    this.providerId = params.providerId
+    this.model = params.model
+  }
 }

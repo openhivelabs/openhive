@@ -28,6 +28,10 @@ export type EventKind =
   | 'skill.queued'
   | 'skill.started'
   | 'tool_run.partitioned'
+  // A4 — token estimation + window math
+  | 'token.estimate.drift'
+  | 'turn.blocked'
+  | 'autocompact.disabled'
 
 export interface Event {
   kind: EventKind
