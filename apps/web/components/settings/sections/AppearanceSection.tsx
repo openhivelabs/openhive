@@ -1,5 +1,3 @@
-'use client'
-
 import { Monitor, Moon, Sun } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { SectionHeader, SettingRow } from '@/components/settings/SettingsShell'

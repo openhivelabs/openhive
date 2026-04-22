@@ -1,5 +1,3 @@
-'use client'
-
 import {
   CaretDown,
   CaretRight,
@@ -19,8 +17,8 @@ import {
   Warning,
 } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
-import { useParams, useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { type CreateTaskInput, NewTaskModal } from '@/components/modals/NewTaskModal'
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal'
 import { useT } from '@/lib/i18n'
@@ -207,7 +205,7 @@ function useCollapsedSections(): {
 export function TasksTab() {
   const t = useT()
   const team = useCurrentTeam()
-  const router = useRouter()
+  const navigate = useNavigate()
   const params = useParams<{ companySlug: string; teamSlug: string }>()
   const currentTeamId = useAppStore((s) => s.currentTeamId)
   const locale = useAppStore((s) => s.locale)
@@ -419,7 +417,7 @@ export function TasksTab() {
   /** 새 채팅 화면으로 이동. 거기서 첫 메시지 입력 → 세션 생성 → `/s/{id}` 로. */
   const goNewChat = () => {
     if (!params?.companySlug || !params?.teamSlug) return
-    router.push(`/${params.companySlug}/${params.teamSlug}/new`)
+    navigate(`/${params.companySlug}/${params.teamSlug}/new`)
   }
 
   const openSession = (u: UnifiedSession) => {
@@ -432,7 +430,7 @@ export function TasksTab() {
       markViewedLocal(u.id)
     }
     if (u.id && u.navigable && params?.companySlug && params?.teamSlug) {
-      router.push(`/${params.companySlug}/${params.teamSlug}/s/${u.id}`)
+      navigate(`/${params.companySlug}/${params.teamSlug}/s/${u.id}`)
       return
     }
     // 라이브 런이라 UUID 를 아직 모르는 경우 — 짧게 기다려도 대부분 바로 나와서

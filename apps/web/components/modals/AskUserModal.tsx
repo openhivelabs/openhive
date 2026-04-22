@@ -1,5 +1,3 @@
-'use client'
-
 import { CaretLeft, CaretRight, PencilSimple, X } from '@phosphor-icons/react'
 import { useMemo, useState } from 'react'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'

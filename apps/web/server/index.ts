@@ -4,9 +4,17 @@ import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { logger } from 'hono/logger'
+import { registerNode } from '../instrumentation-node'
 import { api } from './api'
 
 const startTime = Date.now()
+
+// Fire-and-forget boot tasks: legacy DB migration, orphan session cleanup,
+// transcript backfill, scheduler, signal handlers. Previously wired via
+// Next's `instrumentation.ts` hook — now invoked directly.
+void registerNode().catch((exc) => {
+  console.error('[hono] registerNode failed', exc)
+})
 
 const app = new Hono()
 app.use('*', logger())

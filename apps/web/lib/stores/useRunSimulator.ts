@@ -1,5 +1,3 @@
-'use client'
-
 import { useEffect, useRef } from 'react'
 import { useAppStore } from './useAppStore'
 import { useCanvasStore } from './useCanvasStore'

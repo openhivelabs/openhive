@@ -1,5 +1,3 @@
-'use client'
-
 import { useState } from 'react'
 import { usePanelData } from '@/lib/hooks/usePanelData'
 import type { CellAction, PanelSpec } from '@/lib/api/dashboards'

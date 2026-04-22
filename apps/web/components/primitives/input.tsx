@@ -1,5 +1,3 @@
-'use client'
-
 import { MagnifyingGlass, Play } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { type ReactNode, useState } from 'react'

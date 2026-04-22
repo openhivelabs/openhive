@@ -1,5 +1,3 @@
-'use client'
-
 import { CaretLeft, CaretRight, PencilSimple } from '@phosphor-icons/react'
 import { useMemo, useState } from 'react'
 import { useT } from '@/lib/i18n'

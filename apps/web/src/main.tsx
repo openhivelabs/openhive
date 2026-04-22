@@ -13,7 +13,7 @@ import { Settings } from './routes/Settings'
 import { Tasks } from './routes/Tasks'
 import { Team } from './routes/Team'
 import { TeamLayout } from './routes/TeamLayout'
-import '../app/globals.css'
+import './globals.css'
 
 const router = createBrowserRouter([
   {

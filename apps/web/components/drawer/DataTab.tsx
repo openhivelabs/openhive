@@ -1,5 +1,3 @@
-'use client'
-
 import { Package, Sparkle, Table } from '@phosphor-icons/react'
 import { useCallback, useEffect, useState } from 'react'
 import {

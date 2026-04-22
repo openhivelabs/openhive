@@ -1,5 +1,3 @@
-'use client'
-
 import { PaperPlaneRight, Warning } from '@phosphor-icons/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AskUserModal } from '@/components/modals/AskUserModal'

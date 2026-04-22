@@ -1,5 +1,3 @@
-'use client'
-
 import { CircleNotch, Package, Upload, X } from '@phosphor-icons/react'
 import { useEffect, useRef, useState } from 'react'
 import {

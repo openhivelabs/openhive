@@ -1,5 +1,3 @@
-'use client'
-
 import { ArrowSquareOut, CheckCircle, CircleNotch, Plugs, Trash, X } from '@phosphor-icons/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -11,6 +9,7 @@ import {
   listProviders,
   startConnect,
 } from '@/lib/api/providers'
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { LOCALE_LABELS, type Locale, locales, useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { Button } from '../ui/Button'

@@ -1,5 +1,3 @@
-'use client'
-
 import { Clock, FileText, FilePlus, Lightning, Play, X } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { useRef, useState } from 'react'

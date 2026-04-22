@@ -1,5 +1,3 @@
-'use client'
-
 import { clsx } from 'clsx'
 import { useEffect, useState } from 'react'
 import { SectionHeader } from '@/components/settings/SettingsShell'

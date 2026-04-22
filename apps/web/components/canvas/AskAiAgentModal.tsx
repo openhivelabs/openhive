@@ -1,5 +1,3 @@
-'use client'
-
 import { CircleNotch, X } from '@phosphor-icons/react'
 import { useState } from 'react'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'

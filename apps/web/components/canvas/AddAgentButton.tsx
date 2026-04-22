@@ -1,5 +1,3 @@
-'use client'
-
 import { Package, Plus, Sparkle, User } from '@phosphor-icons/react'
 import { useEffect, useState } from 'react'
 import { useT } from '@/lib/i18n'

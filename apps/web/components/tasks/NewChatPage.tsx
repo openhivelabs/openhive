@@ -1,8 +1,6 @@
-'use client'
-
 import { ArrowLeft, ArrowUp, FileText, Plus, X } from '@phosphor-icons/react'
-import { useParams, useRouter } from 'next/navigation'
 import { memo, useRef, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useT } from '@/lib/i18n'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
 import { useSessionsStore } from '@/lib/stores/useSessionsStore'
@@ -13,7 +11,7 @@ import { useSessionsStore } from '@/lib/stores/useSessionsStore'
  *  만들지 않는다 — 새 채팅은 템플릿이 아니라 일회성 실행이기 때문. */
 export function NewChatPage() {
   const t = useT()
-  const router = useRouter()
+  const navigate = useNavigate()
   const params = useParams<{ companySlug: string; teamSlug: string }>()
   const team = useCurrentTeam()
   const teamPanelCollapsed = useAppStore((s) => s.teamPanelCollapsed)
@@ -54,7 +52,7 @@ export function NewChatPage() {
         } catch {
           /* sessionStorage unavailable — non-fatal */
         }
-        router.replace(`/${params.companySlug}/${params.teamSlug}/s/${session.id}`)
+        navigate(`/${params.companySlug}/${params.teamSlug}/s/${session.id}`, { replace: true })
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'start failed')
@@ -70,7 +68,7 @@ export function NewChatPage() {
         <div className="flex items-center gap-3 min-w-0">
           <button
             type="button"
-            onClick={() => router.push(backHref)}
+            onClick={() => navigate(backHref)}
             aria-label={t('tasks.backToList')}
             title={t('tasks.backToList')}
             className="inline-flex items-center justify-center w-7 h-7 rounded text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800"

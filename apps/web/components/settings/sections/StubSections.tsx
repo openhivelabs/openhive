@@ -1,5 +1,3 @@
-'use client'
-
 import { SectionHeader, SettingRow } from '@/components/settings/SettingsShell'
 import { useT } from '@/lib/i18n'
 

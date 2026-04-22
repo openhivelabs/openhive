@@ -1,5 +1,3 @@
-'use client'
-
 import { Trash, X } from '@phosphor-icons/react'
 import { useEffect, useState } from 'react'
 import { deleteCompany, saveCompany } from '@/lib/api/companies'
