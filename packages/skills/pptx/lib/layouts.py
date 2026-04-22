@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pptx.util import Inches
-
 
 # slide dimensions in inches, (width, height)
 SIZES: dict[str, tuple[float, float]] = {
@@ -27,6 +25,7 @@ class Rect:
     h: float
 
     def emu(self):
+        from pptx.util import Inches
         return Inches(self.x), Inches(self.y), Inches(self.w), Inches(self.h)
 
     def inset(self, dx: float, dy: float | None = None) -> "Rect":
