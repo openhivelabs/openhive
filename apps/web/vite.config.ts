@@ -8,9 +8,9 @@ export default defineConfig({
     alias: { '@': path.resolve(__dirname, '.') },
   },
   server: {
-    port: 5173,
+    port: Number(process.env.VITE_PORT ?? 5173),
     strictPort: true,
-    proxy: { '/api': 'http://localhost:4484' },
+    proxy: { '/api': `http://localhost:${process.env.API_PORT ?? 4484}` },
   },
   build: {
     outDir: 'dist',

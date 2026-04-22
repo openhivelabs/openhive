@@ -7,7 +7,9 @@
     "build": "pnpm --filter @openhive/web build",
     "start": "pnpm --filter @openhive/web start",
     "lint": "biome check .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "fonts:fetch": "python3 packages/skills/_lib/fonts.py",
+    "fonts:fetch:all": "python3 packages/skills/_lib/fonts.py --all"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

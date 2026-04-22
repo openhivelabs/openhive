@@ -31,6 +31,13 @@ function rid(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+// Team yaml historically used mixed casing ("Lead" / "lead") for the top agent's
+// role. The Lead slot is a single well-known role regardless of how it was
+// typed, so normalize before comparing.
+function isLeadRole(role: string | undefined): boolean {
+  return (role ?? '').trim().toLowerCase() === 'lead'
+}
+
 // Hierarchical auto-layout. Org chart = tree rooted at Lead. We assign each
 // agent a level by BFS from roots, then spread each level horizontally.
 function autoLayout(
@@ -40,6 +47,9 @@ function autoLayout(
   const NODE_W = 240
   const H_GAP = 60
   const LEVEL_H = 140
+  // Extra breathing room between the main tree and the orphan parking lane so
+  // readers immediately see the two groups as separate.
+  const ORPHAN_GUTTER = 140
   const incoming: Record<string, string[]> = {}
   const outgoing: Record<string, string[]> = {}
   for (const a of agents) {
@@ -61,7 +71,7 @@ function autoLayout(
   const level: Record<string, number> = {}
   const queue: string[] = []
   for (const r of roots) {
-    level[r.id] = r.role === 'Lead' ? 0 : 1
+    level[r.id] = isLeadRole(r.role) ? 0 : 1
     queue.push(r.id)
   }
   // Hard iteration cap defends against accidental cycles. Each step is O(1)
@@ -80,14 +90,32 @@ function autoLayout(
       }
     }
   }
+  // Orphans = non-Lead agents with no edges at all (neither reports to anyone
+  // nor has subordinates). They don't participate in the hierarchy, so we park
+  // them in a vertical lane to the right of the main tree instead of squeezing
+  // them into level rows where they'd visually imply a peer relationship with
+  // wired members.
+  const orphanIds = agents
+    .filter(
+      (a) =>
+        !isLeadRole(a.role) &&
+        (incoming[a.id] ?? []).length === 0 &&
+        (outgoing[a.id] ?? []).length === 0,
+    )
+    .map((a) => a.id)
+  const orphanSet = new Set(orphanIds)
+
   const byLevel: Record<number, string[]> = {}
   for (const a of agents) {
+    if (orphanSet.has(a.id)) continue
     // Default unassigned agents to level 1 too (not 0) so unwired Members never
     // ride up to the Lead row even if BFS missed them.
-    const lv = level[a.id] ?? (a.role === 'Lead' ? 0 : 1)
+    const lv = level[a.id] ?? (isLeadRole(a.role) ? 0 : 1)
     ;(byLevel[lv] ??= []).push(a.id)
   }
   const out: Record<string, { x: number; y: number }> = {}
+  // Track the main tree's right edge so the orphan lane starts clearly past it.
+  let mainRightEdge = 0
   for (const lvStr of Object.keys(byLevel)) {
     const lv = Number(lvStr)
     const ids = byLevel[lv]!
@@ -96,7 +124,17 @@ function autoLayout(
     ids.forEach((id, i) => {
       out[id] = { x: startX + i * (NODE_W + H_GAP), y: lv * LEVEL_H }
     })
+    mainRightEdge = Math.max(mainRightEdge, startX + totalW)
   }
+  // If the main tree is empty (shouldn't happen — Lead always exists), fall
+  // back to centering orphans; otherwise park them in a single column offset
+  // from the tree by ORPHAN_GUTTER.
+  const orphanX = (mainRightEdge || -NODE_W / 2) + ORPHAN_GUTTER
+  orphanIds.forEach((id, i) => {
+    // Start the lane at level 1 (below Lead) so the top of the orphan column
+    // lines up with the first member row rather than the Lead row.
+    out[id] = { x: orphanX, y: (i + 1) * LEVEL_H }
+  })
   return out
 }
 
@@ -134,7 +172,7 @@ export function OrgCanvas() {
         // Only the role-Lead hides its top handle. Using "no incoming edges"
         // would also hide it for orphan Members, leaving them impossible to
         // wire into the chart (catch-22).
-        isLead: a.role === 'Lead',
+        isLead: isLeadRole(a.role),
       },
       draggable: false,
     }))
@@ -163,7 +201,7 @@ export function OrgCanvas() {
         if (change.type === 'remove' && mode === 'design') {
           // Lead is immutable — every team keeps exactly one Lead for its lifetime.
           const target = nodes.find((n) => n.id === change.id)
-          if (target?.data?.role === 'Lead') continue
+          if (isLeadRole(target?.data?.role)) continue
           removeAgent(change.id)
         }
       }

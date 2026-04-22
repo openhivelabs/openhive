@@ -1,0 +1,11 @@
+name: cover-minimal
+description: Report or presentation cover — clean title, subtitle, small metadata block.
+size: { width: 1600, height: 900 }
+inputs:
+  type: object
+  required: [title]
+  properties:
+    title: { type: string, maxLength: 140 }
+    subtitle: { type: string, maxLength: 200 }
+    meta: { type: string, maxLength: 120 }
+    accent: { type: string, pattern: "^#[0-9a-fA-F]{6}$", default: "#2563eb" }

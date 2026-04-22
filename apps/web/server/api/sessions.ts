@@ -14,7 +14,8 @@ import {
   start as startRegistryRun,
   stop,
 } from '@/lib/server/engine/session-registry'
-import { toTeamSpec } from '@/lib/server/engine/team'
+import { type TeamSpec, toTeamSpec } from '@/lib/server/engine/team'
+import { teamYamlPath } from '@/lib/server/paths'
 import {
   appendSessionEvent,
   buildTranscript,
@@ -27,6 +28,7 @@ import {
   updateMeta,
 } from '@/lib/server/sessions'
 import { usageForSession } from '@/lib/server/usage'
+import { readYamlCached } from '@/lib/server/yaml-io'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 
@@ -81,10 +83,42 @@ function pendingAskFromEvents(events: EventRow[]): {
 }
 
 interface StartBody {
-  team?: Record<string, unknown>
+  team_id?: string
   goal?: string
   locale?: string
   task_id?: string
+}
+
+/**
+ * Resolve a client-supplied team id to the TeamSpec stored on disk. The
+ * caller must NOT be trusted to supply the full team shape — we'd be
+ * running an LLM under whatever role/agent list the request body contained,
+ * which lets a compromised or buggy UI widen scope arbitrarily. Instead the
+ * client passes just `team_id` and we rehydrate from the authoritative
+ * companies/{c}/teams/{t}.yaml on disk.
+ *
+ * Returns either a resolved TeamSpec (with the owning team slug pair for
+ * engine sql scoping) or a human-readable error string.
+ */
+function loadTeamById(
+  teamId: string,
+): { team: TeamSpec; teamSlugs: [string, string] } | { error: string; status: 400 | 404 } {
+  if (typeof teamId !== 'string' || !teamId) {
+    return { error: 'team_id required', status: 400 }
+  }
+  const resolved = resolveTeamSlugs(teamId)
+  if (!resolved) {
+    return { error: `team not found: ${teamId}`, status: 404 }
+  }
+  const yamlPath = teamYamlPath(resolved.companySlug, resolved.teamSlug)
+  const raw = readYamlCached(yamlPath)
+  if (!raw) {
+    return { error: `team yaml missing: ${yamlPath}`, status: 404 }
+  }
+  return {
+    team: toTeamSpec(raw),
+    teamSlugs: [resolved.companySlug, resolved.teamSlug],
+  }
 }
 
 interface AnswerBody {
@@ -134,26 +168,22 @@ sessions.get('/', (c) => {
 // POST /api/sessions/start — spawn a new engine run, return session_id
 sessions.post('/start', async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as StartBody
-  if (!body.team || typeof body.team !== 'object') {
-    return c.json({ detail: 'team required' }, 400)
-  }
   if (typeof body.goal !== 'string' || !body.goal.trim()) {
     return c.json({ detail: 'goal required' }, 400)
   }
-  const team = toTeamSpec(body.team)
-  const issues = validateTeam(team)
+  const loaded = loadTeamById(body.team_id ?? '')
+  if ('error' in loaded) {
+    return c.json({ detail: loaded.error }, loaded.status)
+  }
+  const issues = validateTeam(loaded.team)
   if (issues.length > 0) {
     return c.json({ detail: { preflight: issues } }, 400)
   }
-  const resolved = resolveTeamSlugs(team.id)
-  const teamSlugs: [string, string] | null = resolved
-    ? [resolved.companySlug, resolved.teamSlug]
-    : null
   try {
     const sessionId = await startRegistryRun(
-      team,
+      loaded.team,
       body.goal,
-      teamSlugs,
+      loaded.teamSlugs,
       body.locale ?? 'en',
       typeof body.task_id === 'string' && body.task_id ? body.task_id : null,
     )
@@ -246,34 +276,35 @@ sessions.post('/answer', async (c) => {
 })
 
 interface StreamBody {
-  team?: Record<string, unknown>
+  team_id?: string
   goal?: string
   locale?: string
 }
 
-/** Backwards-compat: launch the run and stream it in one call. New clients
- *  should prefer POST /start + GET /:session_id/stream so refreshes can reattach. */
+/** Launch the run and stream it in one call. New clients should prefer
+ *  POST /start + GET /:session_id/stream so refreshes can reattach. */
 sessions.post('/stream', async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as StreamBody
-  if (!body.team || typeof body.team !== 'object') {
-    return c.json({ detail: 'team required' }, 400)
-  }
   if (typeof body.goal !== 'string' || !body.goal.trim()) {
     return c.json({ detail: 'goal required' }, 400)
   }
-  const team = toTeamSpec(body.team)
-  const issues = validateTeam(team)
+  const loaded = loadTeamById(body.team_id ?? '')
+  if ('error' in loaded) {
+    return c.json({ detail: loaded.error }, loaded.status)
+  }
+  const issues = validateTeam(loaded.team)
   if (issues.length > 0) {
     return c.json({ detail: { preflight: issues } }, 400)
   }
-  const resolved = resolveTeamSlugs(team.id)
-  const teamSlugs: [string, string] | null = resolved
-    ? [resolved.companySlug, resolved.teamSlug]
-    : null
 
   let sessionId: string
   try {
-    sessionId = await startRegistryRun(team, body.goal, teamSlugs, body.locale ?? 'en')
+    sessionId = await startRegistryRun(
+      loaded.team,
+      body.goal,
+      loaded.teamSlugs,
+      body.locale ?? 'en',
+    )
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ detail: message }, 500)

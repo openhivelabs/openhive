@@ -1,0 +1,12 @@
+name: stat-card
+description: Square stat card — big value, label, optional delta. tone tints the delta background/color.
+size: { width: 1080, height: 1080 }
+inputs:
+  type: object
+  required: [value, label]
+  properties:
+    value: { type: string, maxLength: 24 }
+    label: { type: string, maxLength: 80 }
+    delta: { type: string, maxLength: 24 }
+    tone:  { type: string, enum: [pos, neg, neutral], default: neutral }
+    accent: { type: string, pattern: "^#[0-9a-fA-F]{6}$", default: "#0ea5e9" }

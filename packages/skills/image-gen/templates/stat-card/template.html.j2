@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  html,body{margin:0;width:1080px;height:1080px;font-family:'Inter',system-ui,-apple-system,sans-serif;background:#0b1220;color:#fff;display:flex;flex-direction:column;justify-content:center;padding:96px;box-sizing:border-box}
+  .label{font-size:32px;letter-spacing:0.15em;text-transform:uppercase;color:{{ accent }};font-weight:600}
+  .value{font-size:260px;line-height:1;margin:32px 0;font-weight:900;letter-spacing:-0.04em}
+  .delta{font-size:46px;font-weight:700;padding:16px 28px;border-radius:16px;display:inline-block;
+    background:{% if tone == 'pos' %}#052e1c{% elif tone == 'neg' %}#3f0f14{% else %}#1f2937{% endif %};
+    color:{% if tone == 'pos' %}#22c55e{% elif tone == 'neg' %}#ef4444{% else %}#e5e7eb{% endif %};}
+</style></head><body>
+  <div class="label">{{ label }}</div>
+  <div class="value">{{ value }}</div>
+  {% if delta %}<div class="delta">{{ delta }}</div>{% endif %}
+</body></html>

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<style>
+  html, body { margin:0; padding:0; width:1280px; height:720px;
+    font-family: 'Inter', 'Pretendard', system-ui, -apple-system, sans-serif;
+    color:#fff;
+    background: {% if bg_style == 'solid' %}{{ accent }}{% else %}linear-gradient(135deg, {{ accent }} 0%, #0a0a0a 100%){% endif %};
+    display:flex; flex-direction:column; justify-content:center; padding:96px; box-sizing:border-box;
+    overflow:hidden; position:relative;
+  }
+  h1 { font-size: 112px; line-height:1.05; margin:0; font-weight:900; letter-spacing:-0.03em; }
+  p  { font-size: 40px; margin:32px 0 0 0; opacity:0.82; font-weight:500; max-width:1000px; }
+  .bar { position:absolute; left:0; bottom:0; height:14px; width:100%; background:{{ accent }}; }
+</style></head>
+<body>
+  <h1>{{ title }}</h1>
+  {% if subtitle %}<p>{{ subtitle }}</p>{% endif %}
+  {% if bg_style != 'solid' %}<div class="bar"></div>{% endif %}
+</body></html>

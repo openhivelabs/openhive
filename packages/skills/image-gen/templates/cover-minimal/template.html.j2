@@ -1,0 +1,11 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  html,body{margin:0;width:1600px;height:900px;font-family:'Inter',system-ui,-apple-system,sans-serif;background:#fafafa;color:#111;padding:120px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between}
+  .top{border-top:8px solid {{ accent }};padding-top:48px;width:120px}
+  h1{font-size:104px;line-height:1.05;margin:64px 0 0;font-weight:800;letter-spacing:-0.03em;max-width:1300px}
+  p{font-size:36px;margin:32px 0 0;color:#555;max-width:1200px;line-height:1.4}
+  .meta{font-size:22px;letter-spacing:0.15em;color:#888;text-transform:uppercase}
+</style></head><body>
+  <div><div class="top"></div><h1>{{ title }}</h1>{% if subtitle %}<p>{{ subtitle }}</p>{% endif %}</div>
+  {% if meta %}<div class="meta">{{ meta }}</div>{% endif %}
+</body></html>
