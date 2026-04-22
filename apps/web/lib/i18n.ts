@@ -423,6 +423,9 @@ const en: Dict = {
   'timeline.errored': 'Error',
   'timeline.select': 'Select a run to inspect events',
   'timeline.noEvents': 'No events for this run',
+  'timeline.delegation.truncated': 'Output capped ({original} chars → summary)',
+  'timeline.delegation.summaryStrategy': 'Summary: {strategy}',
+  'timeline.delegation.artifactCount': '{count} artifact(s) preserved',
   // onboarding
   'onboarding.step': 'Step {n} of {total}',
   'onboarding.next': 'Next',
@@ -949,6 +952,9 @@ const ko: Dict = {
   'timeline.errored': '에러',
   'timeline.select': '런을 골라서 이벤트 보기',
   'timeline.noEvents': '이 런의 이벤트 없음',
+  'timeline.delegation.truncated': '출력 잘림 ({original}자 → 요약)',
+  'timeline.delegation.summaryStrategy': '요약 방식: {strategy}',
+  'timeline.delegation.artifactCount': '아티팩트 {count}개 보존됨',
   // onboarding
   'onboarding.step': '{n} / {total} 단계',
   'onboarding.next': '다음',

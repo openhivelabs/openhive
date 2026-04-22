@@ -51,6 +51,11 @@ import { type ThresholdTrigger, recordUsage } from '../usage'
 import * as askuser from './askuser'
 import * as errors from './errors'
 import { stream, buildMessages } from './providers'
+import {
+  MAX_CHILD_RESULT_CHARS,
+  type SummaryStrategy,
+  capAndSummarise,
+} from './result-cap'
 import type { AgentSpec, TeamSpec } from './team'
 import { entryAgent, subordinates as teamSubordinates } from './team'
 import { TRAJECTORY_TOOLS, type ToolRun, partitionRuns } from './tool-partition'
@@ -1421,7 +1426,9 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
     return
   }
 
-  // S4: record completed sub-agent run to the work ledger.
+  // S4: record completed sub-agent run to the work ledger (raw subOutput
+  //   preserved on disk for cross-session recall — capping below only
+  //   affects the parent's in-memory history).
   {
     const slugs = state().teamSlugs.get(sessionId) ?? null
     if (slugs) {
@@ -1436,13 +1443,44 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
       })
     }
   }
+
+  // ★ S1: cap + summarise sub-agent output before injecting it into the
+  //   parent's tool_result history. Without this a 200KB report body
+  //   blows out the Lead's context window and burns provider quota.
+  const strategy: SummaryStrategy =
+    (target.result_cap?.strategy as SummaryStrategy | undefined) ??
+    (process.env.OPENHIVE_RESULT_SUMMARY_STRATEGY as SummaryStrategy | undefined) ??
+    'heuristic'
+  const envMax = Number(process.env.OPENHIVE_RESULT_MAX_CHARS)
+  const maxChars =
+    target.result_cap?.max_chars ??
+    (Number.isFinite(envMax) && envMax > 0 ? envMax : MAX_CHILD_RESULT_CHARS)
+
+  const capped = await capAndSummarise({
+    raw: subOutput,
+    node: target,
+    sessionId,
+    toolCallId,
+    strategy,
+    maxChars,
+  })
+
+
   yield makeEvent(
     'delegation_closed',
     sessionId,
     {
       assignee_id: target.id,
       assignee_role: target.role,
-      result: subOutput,
+      result: capped.result,
+      ...(capped.truncated && {
+        truncated: true,
+        original_chars: capped.originalChars,
+        summary_strategy: capped.summaryStrategy,
+      }),
+      ...(capped.artifactPaths.length > 0 && {
+        artifact_paths: capped.artifactPaths,
+      }),
     },
     { depth, node_id: fromNode.id, tool_call_id: toolCallId },
   )

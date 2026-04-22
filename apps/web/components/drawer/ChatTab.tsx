@@ -336,13 +336,31 @@ function handleEvent(ev: SessionEvent, ctx: HandleCtx) {
         }
         setActiveEdges(Array.from(activeEdges))
       }
+      let baseText = isError
+        ? `⚠ delegation to ${assigneeRole} failed`
+        : `↙ ${assigneeRole} reported back`
+      if (!isError && ev.data.truncated === true) {
+        const original = Number(ev.data.original_chars ?? 0).toLocaleString()
+        const strategy = String(ev.data.summary_strategy ?? '')
+        const artifacts = Array.isArray(ev.data.artifact_paths)
+          ? ev.data.artifact_paths.length
+          : 0
+        const parts = [
+          t('timeline.delegation.truncated', { original }),
+          t('timeline.delegation.summaryStrategy', { strategy }),
+        ]
+        if (artifacts > 0) {
+          parts.push(
+            t('timeline.delegation.artifactCount', { count: String(artifacts) }),
+          )
+        }
+        baseText = `${baseText}  [${parts.join(' · ')}]`
+      }
       addMessage({
         id: makeId(),
         teamId: currentTeamId,
         from: 'system',
-        text: isError
-          ? `⚠ delegation to ${assigneeRole} failed`
-          : `↙ ${assigneeRole} reported back`,
+        text: baseText,
         createdAt: new Date().toISOString(),
       })
       return

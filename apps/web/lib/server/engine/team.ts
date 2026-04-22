@@ -26,6 +26,16 @@ export interface AgentSpec {
   persona_path: string | null
   /** Named persona, resolved via the agent loader's lookup roots. */
   persona_name: string | null
+  /**
+   * Optional cap on how much of this agent's output is injected back into
+   * the parent's history when it is delegated to. `strategy: 'off'` still
+   * truncates at `max_chars` but skips summarisation. See
+   * lib/server/engine/result-cap.ts (S1).
+   */
+  result_cap?: {
+    strategy?: 'heuristic' | 'llm' | 'off'
+    max_chars?: number
+  }
 }
 
 export interface EdgeSpec {
@@ -90,6 +100,10 @@ export function toAgentSpec(raw: Record<string, unknown>): AgentSpec {
       typeof raw.persona_name === 'string' && raw.persona_name
         ? raw.persona_name
         : null,
+    result_cap:
+      raw.result_cap && typeof raw.result_cap === 'object' && !Array.isArray(raw.result_cap)
+        ? (raw.result_cap as AgentSpec['result_cap'])
+        : undefined,
   }
 }
 
