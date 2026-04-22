@@ -16,6 +16,8 @@ function teamToServer(team: Team): Record<string, unknown> {
       skills: a.skills,
       position: a.position,
       max_parallel: a.maxParallel ?? 1,
+      persona_name: a.personaName ?? null,
+      persona_path: a.personaPath ?? null,
     })),
     edges: team.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
     entry_agent_id: team.entryAgentId ?? null,
@@ -43,6 +45,8 @@ function teamFromServer(t: Record<string, unknown>): Team {
       position: (a.position as { x: number; y: number }) ?? { x: 0, y: 0 },
       isActive: Boolean(a.is_active ?? a.isActive ?? false),
       maxParallel: Number(a.max_parallel ?? a.maxParallel ?? 1) || 1,
+      personaName: typeof a.persona_name === 'string' && a.persona_name ? a.persona_name : undefined,
+      personaPath: typeof a.persona_path === 'string' && a.persona_path ? a.persona_path : undefined,
     })),
     edges: rawEdges.map((e) => ({
       id: String(e.id ?? ''),

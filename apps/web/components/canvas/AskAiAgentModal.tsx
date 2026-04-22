@@ -1,6 +1,6 @@
 'use client'
 
-import { CircleNotch, Sparkle, X } from '@phosphor-icons/react'
+import { CircleNotch, X } from '@phosphor-icons/react'
 import { useState } from 'react'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { useT } from '@/lib/i18n'
@@ -10,10 +10,11 @@ import { Button } from '../ui/Button'
 interface AskAiAgentModalProps {
   open: boolean
   onClose: () => void
-  onCreate: (agent: Agent) => void
+  onCreate: (agent: Agent, warnings?: string[]) => void
+  companySlug: string
 }
 
-export function AskAiAgentModal({ open, onClose, onCreate }: AskAiAgentModalProps) {
+export function AskAiAgentModal({ open, onClose, onCreate, companySlug }: AskAiAgentModalProps) {
   const t = useT()
   const [description, setDescription] = useState('')
   const [loading, setLoading] = useState(false)
@@ -38,13 +39,17 @@ export function AskAiAgentModal({ open, onClose, onCreate }: AskAiAgentModalProp
       const res = await fetch('/api/agents/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description }),
+        body: JSON.stringify({ description, company_slug: companySlug || undefined }),
       })
       if (!res.ok) {
         const body = await res.text()
         throw new Error(`generate failed (${res.status}): ${body}`)
       }
       const raw = (await res.json()) as Record<string, unknown>
+      const personaPath =
+        typeof raw.persona_path === 'string' && raw.persona_path ? raw.persona_path : undefined
+      const personaName =
+        typeof raw.persona_name === 'string' && raw.persona_name ? raw.persona_name : undefined
       const agent: Agent = {
         id: String(raw.id ?? ''),
         role: String(raw.role ?? 'Member'),
@@ -54,8 +59,11 @@ export function AskAiAgentModal({ open, onClose, onCreate }: AskAiAgentModalProp
         systemPrompt: String(raw.system_prompt ?? ''),
         skills: (raw.skills as string[]) ?? [],
         position: (raw.position as { x: number; y: number }) ?? { x: 0, y: 0 },
+        personaPath,
+        personaName,
       }
-      onCreate(agent)
+      const warnings = Array.isArray(raw.warnings) ? (raw.warnings as string[]) : undefined
+      onCreate(agent, warnings)
       reset()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -74,39 +82,36 @@ export function AskAiAgentModal({ open, onClose, onCreate }: AskAiAgentModalProp
       onKeyDown={(e) => e.key === 'Escape' && reset()}
     >
       <div
-        className="w-[560px] max-w-[94vw] rounded-md bg-white shadow-xl border border-neutral-200"
+        className="w-[480px] max-w-[92vw] rounded-md bg-white shadow-xl border border-neutral-200"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-neutral-200">
-          <h2 className="text-base font-semibold flex items-center gap-1.5">
-            <Sparkle weight="fill" className="w-4 h-4 text-amber-500" />
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-neutral-200">
+          <h2 className="text-[13px] font-semibold text-neutral-800">
             {t('canvas.askAiTitle')}
           </h2>
           <button
             type="button"
             onClick={reset}
             aria-label={t('canvas.close')}
-            className="p-1 rounded-sm hover:bg-neutral-100"
+            className="p-1 rounded-sm hover:bg-neutral-100 -mr-1"
           >
-            <X className="w-4 h-4 text-neutral-500" />
+            <X className="w-3.5 h-3.5 text-neutral-500" />
           </button>
         </div>
-        <div className="px-5 py-4 space-y-3">
-          <div className="flex items-start gap-2 text-[14px] text-neutral-600 bg-amber-50 border border-amber-200 rounded p-2.5">
-            <Sparkle className="w-3.5 h-3.5 mt-0.5 text-amber-600 shrink-0" />
-            <div>{t('canvas.askAiBanner')}</div>
-          </div>
+        <div className="px-4 py-3 space-y-3">
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={4}
             placeholder={t('canvas.askAiPlaceholder')}
-            className="w-full px-3 py-2 text-[15px] rounded border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-300"
+            className="w-full px-3 py-2 text-[13px] rounded border border-neutral-200 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-100 resize-none"
             disabled={loading}
+            // biome-ignore lint/a11y/noAutofocus: the modal is intent-driven — typing is the only thing to do
+            autoFocus
           />
           {error && (
-            <div className="text-[14px] text-red-700 bg-red-50 border border-red-200 rounded px-2.5 py-2 whitespace-pre-wrap">
+            <div className="text-[12px] text-red-700 bg-red-50 border border-red-200 rounded px-2.5 py-1.5 whitespace-pre-wrap">
               {error}
             </div>
           )}

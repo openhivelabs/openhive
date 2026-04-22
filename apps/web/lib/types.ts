@@ -20,6 +20,13 @@ export interface Agent {
   /** Max parallel instances of this agent. Default 1 (serial). Capped at 100.
    *  Forced to 1 for the team's Lead regardless of value. */
   maxParallel?: number
+  /** Name of a persona from the library (bundled / company / user roots).
+   *  Runtime resolves via `getPersona(name, companyDir)`. Mutually exclusive
+   *  in intent with `personaPath` — if both are set, runtime prefers path. */
+  personaName?: string
+  /** Explicit path to a persona .md file or directory. Preferred over name
+   *  when both present. Absolute or ~-prefixed. */
+  personaPath?: string
 }
 
 export interface ReportingEdge {

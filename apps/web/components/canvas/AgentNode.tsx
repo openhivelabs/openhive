@@ -27,7 +27,7 @@ export function AgentNode({ data }: NodeProps<AgentFlowNode>) {
   return (
     <div
       className={clsx(
-        'relative rounded-md bg-white border px-4 py-3 min-w-[200px] shadow-sm transition-shadow cursor-pointer',
+        'relative rounded-md bg-white border px-4 py-3 w-[240px] h-[72px] shadow-sm transition-shadow cursor-pointer',
         data.isActive
           ? 'border-emerald-500 ring-2 ring-emerald-500/30 shadow-md'
           : 'border-neutral-200 hover:shadow-md',
@@ -38,16 +38,18 @@ export function AgentNode({ data }: NodeProps<AgentFlowNode>) {
           Active
         </span>
       )}
-      <div className="flex items-start gap-2.5">
-        <div className="mt-0.5 w-8 h-8 rounded bg-neutral-100 flex items-center justify-center">
+      <div className="flex items-center gap-2.5 h-full">
+        <div className="w-8 h-8 shrink-0 rounded bg-neutral-100 flex items-center justify-center">
           <Icon className="w-4 h-4 text-neutral-600" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-neutral-900 leading-tight">{data.role}</div>
-          <div className="text-[15px] text-neutral-500 flex items-center gap-1.5 mt-0.5">
+          <div className="font-semibold text-neutral-900 text-[14px] leading-tight truncate">
+            {data.role}
+          </div>
+          <div className="text-[12px] text-neutral-500 flex items-center gap-1.5 mt-0.5">
             <span
-              className="inline-block w-1.5 h-1.5 rounded-full"
-              style={{ backgroundColor: data.providerColor ?? '#f59e0b' }}
+              className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+              style={{ backgroundColor: data.providerColor ?? '#a3a3a3' }}
             />
             <span className="truncate">{data.label}</span>
           </div>
