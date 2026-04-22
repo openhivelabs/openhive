@@ -135,6 +135,8 @@ function filesFromEnvelope(
  *  tens of ms off every spawn. Added unconditionally — Python ignores the
  *  flag on versions that don't support it. */
 export const PYTHON_COLD_START_FLAGS: readonly string[] = [
+  '-S', // skip site.py — shaves 30-50ms and a few MB
+  '-O', // strip asserts & docstrings — micro win
   '-X',
   'frozen_modules=on',
 ]
