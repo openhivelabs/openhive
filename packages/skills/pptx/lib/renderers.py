@@ -34,6 +34,30 @@ def _rgb(c: tuple[int, int, int]) -> RGBColor:
     return RGBColor(c[0], c[1], c[2])
 
 
+_A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+
+def _set_run_font(run, name: str) -> None:
+    """Set every typeface slot on a run so PowerPoint uses ``name`` for
+    Latin, East-Asian, and Complex-Script characters alike.
+
+    python-pptx's ``run.font.name = ...`` only writes ``<a:latin>``, which
+    leaves Korean/Japanese/Chinese glyphs to whatever fallback PowerPoint
+    picks from the system. We add ``<a:ea>`` (east-asian) and ``<a:cs>``
+    (complex script, covers Arabic/Hebrew/Thai/Devanagari) so CJK docs
+    render as the chosen Noto cut end-to-end.
+    """
+    run.font.name = name
+    rPr = run._r.get_or_add_rPr()
+    for tag in ("ea", "cs"):
+        # Remove any stale node first so repeated calls don't duplicate.
+        for existing in rPr.findall(f"{{{_A_NS}}}{tag}"):
+            rPr.remove(existing)
+        from lxml import etree as _etree
+        el = _etree.SubElement(rPr, f"{{{_A_NS}}}{tag}")
+        el.set("typeface", name)
+
+
 def fill_background(slide, theme: Theme) -> None:
     """Paint the full slide with theme.bg via a back rectangle."""
     left, top, width, height = Inches(0), Inches(0), Inches(20), Inches(12)
@@ -96,7 +120,7 @@ def add_textbox(
         p.line_spacing = line_spacing
         run = p.add_run()
         run.text = line
-        run.font.name = font
+        _set_run_font(run, font)
         run.font.size = Pt(size)
         run.font.bold = bold
         run.font.italic = italic
@@ -134,7 +158,7 @@ def add_bullet_paragraphs(
             run = p.add_run()
             prefix = {0: "•  ", 1: "–  ", 2: "·  "}.get(level, "·  ")
             run.text = prefix + text
-            run.font.name = font
+            _set_run_font(run, font)
             run.font.size = Pt(size_by_level.get(level, size_by_level[0]))
             run.font.color.rgb = _rgb(color)
             if children:
@@ -410,7 +434,7 @@ def _set_cell_text(cell, text: str, theme: Theme, *, color, size: int,
     p.alignment = PP_ALIGN.LEFT
     run = p.add_run()
     run.text = text
-    run.font.name = theme.body_font
+    _set_run_font(run, theme.body_font)
     run.font.size = Pt(size)
     run.font.bold = bold
     run.font.italic = italic
@@ -600,7 +624,7 @@ def render_steps(slide, s: dict, theme: Theme, grid: Grid) -> None:
         p.alignment = PP_ALIGN.CENTER
         run = p.add_run()
         run.text = str(i + 1)
-        run.font.name = theme.heading_font
+        _set_run_font(run, theme.heading_font)
         run.font.size = Pt(theme.size_body + 4)
         run.font.bold = True
         run.font.color.rgb = _rgb((255, 255, 255))

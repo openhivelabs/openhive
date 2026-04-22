@@ -56,10 +56,13 @@ def _run(args: argparse.Namespace) -> int:
 
         from reportlab.platypus import SimpleDocTemplate
 
-        from lib.fonts import ensure_cjk_font
         from lib.renderers import Ctx, RENDERERS, resolve_page_size
         from lib.spec import SpecError, validate
         from lib.themes import get_theme
+        # Unified Noto font resolver lives in packages/skills/_lib — covers KR,
+        # JP, SC/TC, Arabic, Devanagari, Thai, Hebrew. Built-in Helvetica
+        # stays for pure-Latin docs to avoid any network round-trip.
+        from _lib import fonts as _fonts
     except ImportError as e:
         raise EmitError(
             "missing_dependency",
@@ -78,9 +81,15 @@ def _run(args: argparse.Namespace) -> int:
 
     meta = spec.get("meta") or {}
     theme = get_theme(meta.get("theme"), meta.get("theme_overrides"))
-    cjk = ensure_cjk_font()
-    if cjk:
-        theme = _dc_replace(theme, heading_font=cjk, body_font=cjk)
+    # Scan every text field in the spec to decide which Noto variant we need.
+    # reportlab can't do per-glyph fallback, so we pick one font for the whole
+    # document — the Noto cut for the dominant non-Latin script also covers
+    # Latin, so mixed-script output still looks coherent.
+    script = _fonts.dominant_script(_gather_text(spec))
+    if script != _fonts.SCRIPT_LATIN:
+        font_name = _fonts.register_reportlab(script)
+        if font_name:
+            theme = _dc_replace(theme, heading_font=font_name, body_font=font_name)
     size_name = meta.get("size", "A4")
     orient = meta.get("orientation", "portrait")
     page_w, page_h = resolve_page_size(size_name, orient)
@@ -168,6 +177,30 @@ def _make_page_decorator(theme):
                                theme.margin_bottom / 2, text)
         canvas.restoreState()
     return _draw
+
+
+def _gather_text(obj) -> str:
+    """Flatten every string value in a spec tree into one blob.
+
+    Used by the font picker to detect non-Latin scripts. We recurse through
+    dicts/lists and collect strings with a space separator — exact structure
+    doesn't matter, only the set of Unicode code points present.
+    """
+    buf: list[str] = []
+
+    def _walk(v) -> None:
+        if isinstance(v, str):
+            buf.append(v)
+        elif isinstance(v, dict):
+            for item in v.values():
+                _walk(item)
+        elif isinstance(v, list):
+            for item in v:
+                _walk(item)
+        # int/float/bool/None contribute no glyphs — skip.
+
+    _walk(obj)
+    return " ".join(buf)
 
 
 def _load_spec(path: str | None) -> dict:

@@ -50,13 +50,21 @@ def _style_run(run, *, font: str, size: int, color,
     run.font.italic = italic
     if color is not None:
         run.font.color.rgb = _rgb(color)
-    # ensure East-Asian font works too
+    # Set every script slot in w:rFonts to the same family — Word picks the
+    # slot by the script of each character (Latin → w:ascii, CJK → w:eastAsia,
+    # Arabic/Hebrew/Thai/Devanagari → w:cs). Pointing all four at the chosen
+    # Noto family means Korean/Japanese/Chinese renders correctly in Word's
+    # east-asian pipeline *and* Arabic/Thai get the complex-script shaping,
+    # instead of silently falling back to whatever the default Latin font
+    # covers.
     rPr = run._element.get_or_add_rPr()
     rFonts = rPr.find(qn("w:rFonts"))
     if rFonts is None:
         rFonts = etree.SubElement(rPr, qn("w:rFonts"))
-    rFonts.set(qn("w:eastAsia"), font)
+    rFonts.set(qn("w:ascii"), font)
     rFonts.set(qn("w:hAnsi"), font)
+    rFonts.set(qn("w:eastAsia"), font)
+    rFonts.set(qn("w:cs"), font)
 
 
 def _add_paragraph(doc, text: str, theme: Theme, *, size: int | None = None,
@@ -117,11 +125,14 @@ def render_heading(doc, block: dict, theme: Theme) -> None:
     # use docx built-in Heading N style so TOC works
     try:
         p.style = doc.styles[f"Heading {level}"]
-        # re-apply our run styling since style reset may have overridden it
-        run.font.name = theme.heading_font
-        run.font.size = Pt(size)
-        run.font.bold = True
-        run.font.color.rgb = _rgb(theme.heading)
+        # re-apply our run styling since style reset may have overridden it.
+        # Route through _style_run so every rFonts slot (ascii/hAnsi/eastAsia/cs)
+        # gets re-populated — otherwise the built-in Heading style silently
+        # reverts east-asian text to its own default.
+        _style_run(
+            run, font=theme.heading_font, size=size,
+            color=theme.heading, bold=True,
+        )
     except KeyError:
         pass
 
