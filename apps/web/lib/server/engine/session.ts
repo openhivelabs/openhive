@@ -16,17 +16,6 @@
  */
 
 import crypto from 'node:crypto'
-import * as askuser from './askuser'
-import * as errors from './errors'
-import { getSettings } from '../config'
-import { buildMessages, stream } from './providers'
-import type { AgentSpec, TeamSpec } from './team'
-import { entryAgent, subordinates as teamSubordinates } from './team'
-import { makeEvent, type Event } from '../events/schema'
-import * as artifactsStore from '../artifacts'
-import * as sessionsStore from '../sessions'
-import * as teamDataStore from '../team-data'
-import { recordUsage } from '../usage'
 import {
   composePersonaBody,
   effectiveMcpServers,
@@ -34,19 +23,22 @@ import {
   makePersonaTools,
   resolvePersona,
 } from '../agents/runtime'
-import {
-  getSkill,
-  matchSkillHints,
-  type SkillDef,
-} from '../skills/loader'
-import {
-  readSkillFile,
-  runSkill,
-  runSkillScript,
-} from '../skills/runner'
-import { toolsToOpenAI, type Tool } from '../tools/base'
-import { webFetchTool } from '../tools/webfetch'
+import * as artifactsStore from '../artifacts'
+import { getSettings } from '../config'
+import { type Event, makeEvent } from '../events/schema'
 import type { ChatMessage } from '../providers/types'
+import * as sessionsStore from '../sessions'
+import { type SkillDef, getSkill, matchSkillHints } from '../skills/loader'
+import { readSkillFile, runSkill, runSkillScript } from '../skills/runner'
+import * as teamDataStore from '../team-data'
+import { type Tool, toolsToOpenAI } from '../tools/base'
+import { webFetchTool } from '../tools/webfetch'
+import { recordUsage } from '../usage'
+import * as askuser from './askuser'
+import * as errors from './errors'
+import { stream, buildMessages } from './providers'
+import type { AgentSpec, TeamSpec } from './team'
+import { entryAgent, subordinates as teamSubordinates } from './team'
 
 // Guard defaults + hard ceilings.
 export const MAX_TOOL_ROUNDS = 8
@@ -155,9 +147,7 @@ function newSessionId(): string {
 /** Walk the history, build a tool_call_id → (name, args) map from assistant
  *  messages. Used by the elision helpers below — the tool-role rows don't
  *  carry the tool name themselves. */
-function indexToolCalls(
-  history: ChatMessage[],
-): Map<string, { name: string; args: string }> {
+function indexToolCalls(history: ChatMessage[]): Map<string, { name: string; args: string }> {
   const out = new Map<string, { name: string; args: string }>()
   for (const m of history) {
     if (m.role !== 'assistant') continue
@@ -206,9 +196,7 @@ function summarizeLargeDelegationResult(content: string): string {
   const LIMIT = 2000
   if (content.length <= LIMIT) return content
   const head = content.slice(0, 600).trim()
-  return (
-    `${head}\n\n…[delegation result truncated — original ${content.length} chars, full text preserved in run_events]`
-  )
+  return `${head}\n\n…[delegation result truncated — original ${content.length} chars, full text preserved in run_events]`
 }
 
 // -------- Semaphore (replaces asyncio.Semaphore) --------
@@ -269,8 +257,8 @@ export function activeRunCapacity(): { inUse: number; total: number } {
 
 import * as mcpManagerImpl from '../mcp/manager'
 import type { getTools as getMcpTools } from '../mcp/manager'
-import { getTeamMcpTools } from './mcp-tools-cache'
 import { compactHistory } from './history-window'
+import { getTeamMcpTools } from './mcp-tools-cache'
 
 type ToolInfo = Awaited<ReturnType<typeof getMcpTools>>[number]
 
@@ -348,7 +336,12 @@ export async function* runTeam(
   const queued = sem.locked()
   if (queued) {
     const { inUse, total } = activeRunCapacity()
-    yield makeEvent('run_queued', sessionId, { team_id: team.id, goal, in_use: inUse, limit: total })
+    yield makeEvent('run_queued', sessionId, {
+      team_id: team.id,
+      goal,
+      in_use: inUse,
+      limit: total,
+    })
   }
   await sem.acquire()
 
@@ -473,12 +466,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   const { sessionId, team, node, task, depth, externalHistory } = opts
   const teamSlugs = state().teamSlugs.get(sessionId) ?? null
 
-  yield makeEvent(
-    'node_started',
-    sessionId,
-    { role: node.role, task },
-    { depth, node_id: node.id },
-  )
+  yield makeEvent('node_started', sessionId, { role: node.role, task }, { depth, node_id: node.id })
 
   const maxDepth = Math.min(team.limits.max_delegation_depth, HARD_MAX_DEPTH)
   const maxRounds = Math.min(team.limits.max_tool_rounds_per_turn, HARD_MAX_TOOL_ROUNDS)
@@ -532,13 +520,8 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   // server surfaces a tool_result error but doesn't kill the run. The
   // (teamId, sorted servers) cache means sibling/descendant nodes in the
   // same session reuse the already-resolved tool list instead of re-wrapping.
-  const effectiveMcp = effectiveMcpServers(
-    team.allowed_mcp_servers ?? [],
-    persona,
-  )
-  const teamMcp = await getTeamMcpTools(team.id, effectiveMcp, (s) =>
-    mcpManager().getTools(s),
-  )
+  const effectiveMcp = effectiveMcpServers(team.allowed_mcp_servers ?? [], persona)
+  const teamMcp = await getTeamMcpTools(team.id, effectiveMcp, (s) => mcpManager().getTools(s))
   for (const { serverName, tools: mcpTools, error } of teamMcp) {
     if (error) {
       yield makeEvent(
@@ -549,7 +532,8 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
       )
       continue
     }
-    for (const t of mcpTools) tools.push(mcpTool(serverName, t as unknown as Record<string, unknown>))
+    for (const t of mcpTools)
+      tools.push(mcpTool(serverName, t as unknown as Record<string, unknown>))
   }
 
   // Progressive disclosure: system prompt only holds skill NAMES + one-line
@@ -566,12 +550,10 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   const hintedSkills = matchSkillHints(task, agentSkills)
   const hintsBlock = renderSkillHints(hintedSkills)
   const buildSystemPrompt = (turn: number): string => {
-    const todos = depth === 0 ? state().todos.get(sessionId) ?? [] : []
+    const todos = depth === 0 ? (state().todos.get(sessionId) ?? []) : []
     const todosBlock = renderTodosSection(todos)
     const showHints = turn === 1 && hintsBlock.length > 0
-    const prefix =
-      (todosBlock ? todosBlock + '\n' : '') +
-      (showHints ? hintsBlock + '\n' : '')
+    const prefix = (todosBlock ? todosBlock + '\n' : '') + (showHints ? hintsBlock + '\n' : '')
     const teamBlock = prefix ? prefix + staticTeamBlock : staticTeamBlock
     return composeSystemPrompt(personaBody, agentSkills, teamBlock)
   }
@@ -610,10 +592,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
       tools,
       depth,
     })) {
-      if (
-        ev.kind === 'node_finished' &&
-        ev.data._turn_marker === true
-      ) {
+      if (ev.kind === 'node_finished' && ev.data._turn_marker === true) {
         const stopReason = ev.data.stop_reason as string | undefined
         if (stopReason === 'tool_calls') {
           turnDone = true
@@ -671,20 +650,10 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
   const pending = new Map<number, Pending>()
   let stopReason = 'stop'
 
-  for await (const delta of stream(
-    node.provider_id,
-    node.model,
-    messages,
-    openaiTools,
-  )) {
+  for await (const delta of stream(node.provider_id, node.model, messages, openaiTools)) {
     if (delta.kind === 'text') {
       textBuf.push(delta.text)
-      yield makeEvent(
-        'token',
-        sessionId,
-        { text: delta.text },
-        { depth, node_id: node.id },
-      )
+      yield makeEvent('token', sessionId, { text: delta.text }, { depth, node_id: node.id })
     } else if (delta.kind === 'tool_call') {
       let p = pending.get(delta.index)
       if (!p) {
@@ -798,10 +767,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
               toolCallId: tc.id,
               depth,
             })) {
-              if (
-                subEv.kind === 'delegation_closed' &&
-                subEv.data.group_final
-              ) {
+              if (subEv.kind === 'delegation_closed' && subEv.data.group_final) {
                 content = (subEv.data.result as string | undefined) ?? ''
                 isError = !!subEv.data.error
               }
@@ -818,6 +784,27 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
               if (subEv.kind === 'user_answered') {
                 content = (subEv.data.result as string | undefined) ?? ''
                 isError = !!subEv.data.error
+              }
+              yield subEv
+            }
+          } else if (tool.skill) {
+            // Skill tools go through the global Python concurrency limiter;
+            // emit queued/started events so the UI can show queue state.
+            for await (const subEv of runSkillInvocation({
+              sessionId,
+              tool,
+              args: parsedArgs,
+              toolCallId: tc.id,
+              toolName: tc.function.name,
+              nodeId: node.id,
+              depth,
+            })) {
+              if (subEv.kind === 'tool_result') {
+                content = (subEv.data.content as string | undefined) ?? ''
+                isError = !!subEv.data.is_error
+                // Don't yield tool_result here — the outer yield below
+                // emits the canonical tool_result.
+                continue
               }
               yield subEv
             }
@@ -855,8 +842,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       let historyContent = res.content
       if (
         !res.isError &&
-        (tc.function.name === 'delegate_to' ||
-          tc.function.name === 'delegate_parallel')
+        (tc.function.name === 'delegate_to' || tc.function.name === 'delegate_parallel')
       ) {
         historyContent = summarizeLargeDelegationResult(res.content)
       }
@@ -980,8 +966,7 @@ function delegateTool(team: TeamSpec, node: AgentSpec): Tool {
         assignee: {
           type: 'string',
           enum: canonical,
-          description:
-            'Who should do the task. Must be one of your direct reports.',
+          description: 'Who should do the task. Must be one of your direct reports.',
         },
         task: {
           type: 'string',
@@ -1095,11 +1080,7 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
       task,
       depth: depth + 1,
     })) {
-      if (
-        ev.kind === 'node_finished' &&
-        ev.depth === depth + 1 &&
-        ev.node_id === target.id
-      ) {
+      if (ev.kind === 'node_finished' && ev.depth === depth + 1 && ev.node_id === target.id) {
         subOutput = (ev.data.output as string | undefined) ?? ''
       }
       yield ev
@@ -1155,9 +1136,7 @@ function delegateParallelTool(team: TeamSpec, node: AgentSpec): Tool {
     canonicalById[s.id] = dup ? `${s.role}#${s.id}` : s.role
   }
   const enumValues = eligible.map((s) => canonicalById[s.id]!).filter(Boolean)
-  const capsHint = eligible
-    .map((s) => `${canonicalById[s.id]} ≤ ${s.max_parallel}`)
-    .join(', ')
+  const capsHint = eligible.map((s) => `${canonicalById[s.id]} ≤ ${s.max_parallel}`).join(', ')
   const maxOfAll = eligible.reduce((m, s) => Math.max(m, s.max_parallel), 1)
 
   return {
@@ -1193,9 +1172,7 @@ function delegateParallelTool(team: TeamSpec, node: AgentSpec): Tool {
   }
 }
 
-async function* runParallelDelegation(
-  opts: DelegationOpts,
-): AsyncGenerator<Event> {
+async function* runParallelDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
   const { sessionId, team, fromNode, args, toolCallId, depth } = opts
   const assigneeKey = String(args.assignee ?? '')
   const tasks = Array.isArray(args.tasks) ? (args.tasks as unknown[]) : []
@@ -1451,12 +1428,100 @@ async function* runAskUser(opts: AskUserOpts): AsyncGenerator<Event> {
   )
 }
 
+// -------- skill invocation sub-generator --------
+
+interface SkillInvocationOpts {
+  sessionId: string
+  tool: Tool
+  args: Record<string, unknown>
+  toolCallId: string
+  toolName: string
+  nodeId: string
+  depth: number
+}
+
+/** Runs a skill tool while emitting `skill.queued` + `skill.started` events
+ *  around the concurrency-limiter boundary. The concurrency limiter fires
+ *  `onQueued` synchronously (before the FIFO wait) and `onStarted` once the
+ *  slot is actually acquired. We translate those callbacks into events and
+ *  yield them at the right time using a deferred promise so the yield order
+ *  matches real execution order even under contention.
+ *
+ *  Yields one synthetic `tool_result` event at the end carrying the handler's
+ *  return value in `data.content`; the caller unwraps it and emits the
+ *  canonical `tool_result` in the outer loop. */
+async function* runSkillInvocation(opts: SkillInvocationOpts): AsyncGenerator<Event> {
+  const { sessionId, tool, args, toolCallId, toolName, nodeId, depth } = opts
+  if (!tool.skill) {
+    throw new Error(`runSkillInvocation called on non-skill tool ${toolName}`)
+  }
+
+  let queuedFired = false
+  let resolveStarted: () => void = () => {}
+  const startedPromise = new Promise<void>((resolve) => {
+    resolveStarted = resolve
+  })
+
+  // Fire the skill call immediately. onQueued runs synchronously inside
+  // runWithHooks before any await, so by the time this function returns
+  // (after the first await) queuedFired is already true.
+  let resultContent = ''
+  let resultError = false
+  const invocationPromise = (async () => {
+    try {
+      const raw = await tool.skill!.runWithHooks(args, {
+        onQueued: () => {
+          queuedFired = true
+        },
+        onStarted: () => {
+          resolveStarted()
+        },
+      })
+      resultContent = typeof raw === 'string' ? raw : JSON.stringify(raw)
+    } catch (exc) {
+      resultContent = `ERROR: ${exc instanceof Error ? exc.message : String(exc)}`
+      resultError = true
+      // Make sure we don't hang on startedPromise if the call threw before
+      // the slot was acquired.
+      resolveStarted()
+    }
+  })()
+
+  // Yield microtask so synchronous onQueued has already fired.
+  await Promise.resolve()
+  if (queuedFired) {
+    yield makeEvent(
+      'skill.queued',
+      sessionId,
+      { skill: tool.skill.name },
+      { depth, node_id: nodeId, tool_call_id: toolCallId, tool_name: toolName },
+    )
+  }
+
+  // Wait until the slot is acquired (or the call fails early).
+  await startedPromise
+  yield makeEvent(
+    'skill.started',
+    sessionId,
+    { skill: tool.skill.name },
+    { depth, node_id: nodeId, tool_call_id: toolCallId, tool_name: toolName },
+  )
+
+  await invocationPromise
+
+  // Relay the handler result back to the caller via a synthetic tool_result
+  // event. The caller strips this and emits the canonical tool_result.
+  yield makeEvent(
+    'tool_result',
+    sessionId,
+    { content: resultContent, is_error: resultError },
+    { depth, node_id: nodeId, tool_call_id: toolCallId, tool_name: toolName },
+  )
+}
+
 // -------- team-data tools --------
 
-function teamDataTools(
-  teamSlugs: [string, string],
-  allowWrite: boolean,
-): Tool[] {
+function teamDataTools(teamSlugs: [string, string], allowWrite: boolean): Tool[] {
   const [companySlug, teamSlug] = teamSlugs
   const tools: Tool[] = [
     {
@@ -1465,8 +1530,7 @@ function teamDataTools(
         "List tables, columns, row counts, and recent schema migrations in this team's " +
         'data store. Always call this before writing SQL so you know what exists.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
-      handler: async () =>
-        JSON.stringify(teamDataStore.describeSchema(companySlug, teamSlug)),
+      handler: async () => JSON.stringify(teamDataStore.describeSchema(companySlug, teamSlug)),
       hint: 'Reading schema…',
     },
     {
@@ -1482,9 +1546,7 @@ function teamDataTools(
         required: ['sql'],
       },
       handler: async (args) =>
-        JSON.stringify(
-          teamDataStore.runQuery(companySlug, teamSlug, String(args.sql ?? '')),
-        ),
+        JSON.stringify(teamDataStore.runQuery(companySlug, teamSlug, String(args.sql ?? ''))),
       hint: 'Querying data…',
     },
   ]
@@ -1492,8 +1554,8 @@ function teamDataTools(
     tools.push({
       name: 'sql_exec',
       description:
-        "Run a write query (INSERT/UPDATE/DELETE) or DDL (CREATE/ALTER) against this " +
-        'team\'s data store. DDL is recorded in schema_migrations. Prefer ALTER over ' +
+        'Run a write query (INSERT/UPDATE/DELETE) or DDL (CREATE/ALTER) against this ' +
+        "team's data store. DDL is recorded in schema_migrations. Prefer ALTER over " +
         'DROP; use the `data` JSON column for ad-hoc fields before adding new columns.',
       parameters: {
         type: 'object',
@@ -1603,11 +1665,7 @@ function describeTeamForAgent(team: TeamSpec, agentId: string): string {
   )
 }
 
-function composeSystemPrompt(
-  base: string,
-  agentSkills: SkillDef[],
-  teamSection: string,
-): string {
+function composeSystemPrompt(base: string, agentSkills: SkillDef[], teamSection: string): string {
   if (agentSkills.length === 0 && !teamSection) return base
   const parts: string[] = []
   if (base) parts.push(base.trimEnd())
@@ -1620,7 +1678,7 @@ function composeSystemPrompt(
   parts.push(
     'You have access to the skills listed below. For each, you only see the ' +
       'name and a one-line description right now. When a task looks like it ' +
-      'matches one, call `activate_skill(name)` to load that skill\'s full guide ' +
+      "matches one, call `activate_skill(name)` to load that skill's full guide " +
       '(SKILL.md) and file tree into the conversation. Then use ' +
       '`read_skill_file` to fetch supplementary docs and `run_skill_script` to ' +
       'execute scripts inside it.\n',
@@ -1697,8 +1755,7 @@ function skillReadTool(agentSkills: SkillDef[], sessionId: string): Tool {
         },
         path: {
           type: 'string',
-          description:
-            "Path relative to the skill directory, e.g. 'references/FORMS.md'.",
+          description: "Path relative to the skill directory, e.g. 'references/FORMS.md'.",
         },
       },
       required: ['skill', 'path'],
@@ -1780,8 +1837,7 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
         skill: { type: 'string', enum: names },
         script: {
           type: 'string',
-          description:
-            "Path to the script relative to the skill dir, e.g. 'scripts/fill_form.py'.",
+          description: "Path to the script relative to the skill dir, e.g. 'scripts/fill_form.py'.",
         },
         args: {
           type: 'array',
@@ -1795,48 +1851,63 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
       },
       required: ['skill', 'script'],
     },
-    handler: async (args) => {
-      const skillName = String(args.skill ?? '')
-      const script = String(args.script ?? '')
-      const rawScriptArgs = args.args ?? []
-      if (!Array.isArray(rawScriptArgs)) {
-        return JSON.stringify({ ok: false, error: "'args' must be a list of strings" })
-      }
-      const scriptArgs = rawScriptArgs.map((a) => String(a))
-      const stdinText = args.stdin
-      if (stdinText !== undefined && typeof stdinText !== 'string') {
-        return JSON.stringify({ ok: false, error: "'stdin' must be a string" })
-      }
-
-      const skill = byName.get(skillName)
-      if (!skill) {
-        return JSON.stringify({
-          ok: false,
-          error: `unknown or unauthorized skill: ${JSON.stringify(skillName)}`,
-        })
-      }
-
-      const result = await runSkillScript(skill, script, outputDir, {
-        args: scriptArgs,
-        stdinText: typeof stdinText === 'string' ? stdinText : null,
-      })
-      const registered = registerSkillArtifacts(result.files, {
-        sessionId: ctx.sessionId,
-        teamId: ctx.team.id,
-        companySlug,
-        teamSlug,
-        skillName: skill.name,
-      })
-      return JSON.stringify({
-        ok: result.ok,
-        exit_code: result.exitCode,
-        timed_out: result.timedOut,
-        stdout: result.stdout,
-        stderr: result.ok ? '' : result.stderr,
-        files: registered,
-      })
+    handler: async () => {
+      throw new Error('run_skill_script must be invoked via runWithHooks, not handler')
     },
     hint: 'Running skill script…',
+    skill: {
+      name: 'run_skill_script',
+      runWithHooks: async (args, hooks) => {
+        const skillName = String(args.skill ?? '')
+        const script = String(args.script ?? '')
+        const rawScriptArgs = args.args ?? []
+        if (!Array.isArray(rawScriptArgs)) {
+          // Validation failure — skill never actually ran, so fire hooks
+          // synchronously to keep the queued/started/result sequence intact.
+          hooks.onQueued()
+          hooks.onStarted()
+          return JSON.stringify({ ok: false, error: "'args' must be a list of strings" })
+        }
+        const scriptArgs = rawScriptArgs.map((a) => String(a))
+        const stdinText = args.stdin
+        if (stdinText !== undefined && typeof stdinText !== 'string') {
+          hooks.onQueued()
+          hooks.onStarted()
+          return JSON.stringify({ ok: false, error: "'stdin' must be a string" })
+        }
+
+        const skill = byName.get(skillName)
+        if (!skill) {
+          hooks.onQueued()
+          hooks.onStarted()
+          return JSON.stringify({
+            ok: false,
+            error: `unknown or unauthorized skill: ${JSON.stringify(skillName)}`,
+          })
+        }
+
+        const result = await runSkillScript(skill, script, outputDir, {
+          args: scriptArgs,
+          stdinText: typeof stdinText === 'string' ? stdinText : null,
+          hooks,
+        })
+        const registered = registerSkillArtifacts(result.files, {
+          sessionId: ctx.sessionId,
+          teamId: ctx.team.id,
+          companySlug,
+          teamSlug,
+          skillName: skill.name,
+        })
+        return JSON.stringify({
+          ok: result.ok,
+          exit_code: result.exitCode,
+          timed_out: result.timedOut,
+          stdout: result.stdout,
+          stderr: result.ok ? '' : result.stderr,
+          files: registered,
+        })
+      },
+    },
   }
 }
 
@@ -1896,15 +1967,14 @@ function todoTools(sessionId: string): Tool[] {
           items: {
             type: 'array',
             items: { type: 'string' },
-            description:
-              'Ordered list of short todo descriptions (imperative voice).',
+            description: 'Ordered list of short todo descriptions (imperative voice).',
           },
         },
         required: ['items'],
       },
       handler: async (args) => {
         const raw = Array.isArray((args as { items?: unknown }).items)
-          ? ((args as { items: unknown[] }).items)
+          ? (args as { items: unknown[] }).items
           : []
         const items: TodoItem[] = raw
           .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
@@ -1927,9 +1997,10 @@ function todoTools(sessionId: string): Tool[] {
         required: ['text'],
       },
       handler: async (args) => {
-        const text = typeof (args as { text?: unknown }).text === 'string'
-          ? ((args as { text: string }).text).trim()
-          : ''
+        const text =
+          typeof (args as { text?: unknown }).text === 'string'
+            ? (args as { text: string }).text.trim()
+            : ''
         if (!text) return JSON.stringify({ ok: false, error: 'empty text' })
         const item: TodoItem = { id: newId('todo'), text, done: false }
         saveTodos([...getTodos(), item])
@@ -1950,9 +2021,8 @@ function todoTools(sessionId: string): Tool[] {
         required: ['id'],
       },
       handler: async (args) => {
-        const id = typeof (args as { id?: unknown }).id === 'string'
-          ? (args as { id: string }).id
-          : ''
+        const id =
+          typeof (args as { id?: unknown }).id === 'string' ? (args as { id: string }).id : ''
         const list = getTodos()
         const idx = list.findIndex((t) => t.id === id)
         if (idx < 0) {
@@ -1980,25 +2050,31 @@ function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
     name: skill.name,
     description: skill.description || `Run the ${skill.name} skill.`,
     parameters: skill.parameters ?? { type: 'object', properties: {} },
-    handler: async (args) => {
-      const result = await runSkill(skill, args, outputDir)
-      const registered = registerSkillArtifacts(result.files, {
-        sessionId: ctx.sessionId,
-        teamId: ctx.team.id,
-        companySlug,
-        teamSlug,
-        skillName: skill.name,
-      })
-      return JSON.stringify({
-        ok: result.ok,
-        exit_code: result.exitCode,
-        timed_out: result.timedOut,
-        stdout: result.stdout,
-        stderr: result.ok ? '' : result.stderr,
-        files: registered,
-      })
+    handler: async () => {
+      throw new Error(`skill tool ${skill.name} must be invoked via runWithHooks, not handler`)
     },
     hint: `Running ${skill.name}…`,
+    skill: {
+      name: skill.name,
+      runWithHooks: async (args, hooks) => {
+        const result = await runSkill(skill, args, outputDir, { hooks })
+        const registered = registerSkillArtifacts(result.files, {
+          sessionId: ctx.sessionId,
+          teamId: ctx.team.id,
+          companySlug,
+          teamSlug,
+          skillName: skill.name,
+        })
+        return JSON.stringify({
+          ok: result.ok,
+          exit_code: result.exitCode,
+          timed_out: result.timedOut,
+          stdout: result.stdout,
+          stderr: result.ok ? '' : result.stderr,
+          files: registered,
+        })
+      },
+    },
   }
 }
 
@@ -2007,17 +2083,14 @@ function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
 function mcpTool(serverName: string, toolMeta: Record<string, unknown>): Tool {
   const toolName = typeof toolMeta.name === 'string' ? toolMeta.name : 'tool'
   const namespaced = `${serverName}__${toolName}`
-  const description =
-    typeof toolMeta.description === 'string' ? toolMeta.description.trim() : ''
+  const description = typeof toolMeta.description === 'string' ? toolMeta.description.trim() : ''
   const parameters =
     toolMeta.inputSchema && typeof toolMeta.inputSchema === 'object'
       ? (toolMeta.inputSchema as Record<string, unknown>)
       : { type: 'object', properties: {} }
   return {
     name: namespaced,
-    description: description
-      ? `[${serverName}] ${description}`
-      : `[${serverName}]`,
+    description: description ? `[${serverName}] ${description}` : `[${serverName}]`,
     parameters,
     handler: async (args) => mcpManager().callTool(serverName, toolName, args),
     hint: `Calling ${serverName}…`,

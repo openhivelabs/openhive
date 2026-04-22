@@ -16,7 +16,7 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { acquireSkillSlot } from './concurrency'
+import { type SkillSlotHooks, acquireSkillSlot } from './concurrency'
 import { MAX_READABLE_FILE_BYTES, type SkillDef, resolveWithinSkill } from './loader'
 import which from './which'
 
@@ -288,7 +288,7 @@ export async function runSkill(
   skill: SkillDef,
   args: Record<string, unknown>,
   outputDir: string,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; hooks?: SkillSlotHooks } = {},
 ): Promise<SkillResult> {
   if (skill.kind !== 'typed' || !skill.entrypoint || !skill.runtime) {
     throw new Error(`runSkill requires a typed skill with an entrypoint, got ${skill.kind}`)
@@ -318,8 +318,14 @@ export async function runSkill(
   // spawn freely (they're cheap and uncontended).
   const result =
     skill.runtime === 'python'
-      ? await acquireSkillSlot(() => runSubprocess(spawnOpts))
-      : await runSubprocess(spawnOpts)
+      ? await acquireSkillSlot(() => runSubprocess(spawnOpts), opts.hooks)
+      : await (async () => {
+          // Node skills spawn freely but still participate in the lifecycle
+          // hooks so the engine can emit skill.queued/started events.
+          opts.hooks?.onQueued?.()
+          opts.hooks?.onStarted?.()
+          return runSubprocess(spawnOpts)
+        })()
   const structured = parseFinalJsonLine(result.stdout)
   const snapshotFiles = collectNewFiles(outputDir, before)
   const envelopeFiles = structured ? filesFromEnvelope(structured, outputDir) : undefined
@@ -361,6 +367,7 @@ export async function runSkillScript(
     args?: string[]
     stdinText?: string | null
     timeoutMs?: number
+    hooks?: SkillSlotHooks
   } = {},
 ): Promise<SkillResult> {
   const resolved = resolveWithinSkill(skill, scriptRelPath)
@@ -396,8 +403,12 @@ export async function runSkillScript(
   }
   const result =
     runtime === 'python'
-      ? await acquireSkillSlot(() => runSubprocess(spawnOpts))
-      : await runSubprocess(spawnOpts)
+      ? await acquireSkillSlot(() => runSubprocess(spawnOpts), opts.hooks)
+      : await (async () => {
+          opts.hooks?.onQueued?.()
+          opts.hooks?.onStarted?.()
+          return runSubprocess(spawnOpts)
+        })()
   const structured = parseFinalJsonLine(result.stdout)
   const snapshotFiles = collectNewFiles(outputDir, before)
   const envelopeFiles = structured ? filesFromEnvelope(structured, outputDir) : undefined

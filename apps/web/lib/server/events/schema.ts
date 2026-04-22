@@ -25,6 +25,8 @@ export type EventKind =
   | 'user_message'
   | 'turn_finished'
   | 'todos_changed'
+  | 'skill.queued'
+  | 'skill.started'
 
 export interface Event {
   kind: EventKind

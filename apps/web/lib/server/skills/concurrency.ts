@@ -30,8 +30,24 @@ export function skillLimiter(): LimitFunction {
   return g[GLOBAL_KEY] as LimitFunction
 }
 
-export function acquireSkillSlot<T>(fn: () => Promise<T>): Promise<T> {
-  return skillLimiter()(fn)
+/** Hooks for observing slot lifecycle. `onQueued` fires synchronously before
+ *  the limiter is awaited (always, even if the slot is free). `onStarted`
+ *  fires inside the limiter callback right before `fn` runs — i.e. once the
+ *  slot has been acquired. With no contention both fire back-to-back; under
+ *  contention there's a gap while the caller waits in the FIFO queue. The
+ *  engine uses these to emit `skill.queued` + `skill.started` events so the
+ *  UI can show queue state. */
+export interface SkillSlotHooks {
+  onQueued?: () => void
+  onStarted?: () => void
+}
+
+export function acquireSkillSlot<T>(fn: () => Promise<T>, hooks?: SkillSlotHooks): Promise<T> {
+  hooks?.onQueued?.()
+  return skillLimiter()(async () => {
+    hooks?.onStarted?.()
+    return fn()
+  })
 }
 
 export function __resetForTests(): void {
