@@ -1,4 +1,5 @@
 import { ArrowSquareOut, CheckCircle, CircleNotch, Plugs, Trash } from '@phosphor-icons/react'
+import { clsx } from 'clsx'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SectionHeader } from '@/components/settings/SettingsShell'
 import { Button } from '@/components/ui/Button'
@@ -7,6 +8,7 @@ import {
   type FlowStatus,
   type ProviderStatus,
   type StartResponse,
+  connectWithApiKey,
   disconnectProvider,
   getConnectStatus,
   listProviders,
@@ -152,22 +154,202 @@ export function ProvidersSection() {
         </div>
       )}
 
-      <div className="space-y-3">
-        {providers?.map((p) => (
-          <ProviderCard
-            key={p.id}
+      {providers && (
+        <div className="space-y-8">
+          <ProviderGroup
+            title={t('settings.providers.groupOauth')}
+            desc={t('settings.providers.groupOauthDesc')}
+            emptyLabel={t('settings.providers.groupEmpty')}
+            items={providers.filter((p) => p.kind === 'auth_code' || p.kind === 'device_code')}
             t={t}
-            provider={p}
-            isActiveFlow={activeFlow?.providerId === p.id}
-            flowStatus={activeFlow?.providerId === p.id ? flowStatus : null}
-            activeFlow={activeFlow?.providerId === p.id ? activeFlow : null}
-            onConnect={() => onConnect(p)}
-            onDisconnect={() => onDisconnect(p.id)}
+            activeFlow={activeFlow}
+            flowStatus={flowStatus}
+            onConnect={onConnect}
+            onDisconnect={onDisconnect}
             onCancel={cancelFlow}
+            onRefresh={refresh}
           />
-        ))}
-      </div>
+          <ProviderGroup
+            title={t('settings.providers.groupApiKey')}
+            desc={t('settings.providers.groupApiKeyDesc')}
+            emptyLabel={t('settings.providers.groupEmpty')}
+            items={providers.filter((p) => p.kind === 'api_key')}
+            t={t}
+            activeFlow={activeFlow}
+            flowStatus={flowStatus}
+            onConnect={onConnect}
+            onDisconnect={onDisconnect}
+            onCancel={cancelFlow}
+            onRefresh={refresh}
+          />
+        </div>
+      )}
     </>
+  )
+}
+
+function ProviderGroup({
+  title,
+  desc,
+  emptyLabel,
+  items,
+  t,
+  activeFlow,
+  flowStatus,
+  onConnect,
+  onDisconnect,
+  onCancel,
+  onRefresh,
+}: {
+  title: string
+  desc: string
+  emptyLabel: string
+  items: ProviderStatus[]
+  t: (k: string, vars?: Record<string, string | number>) => string
+  activeFlow: ActiveFlow | null
+  flowStatus: FlowStatus | null
+  onConnect: (p: ProviderStatus) => void
+  onDisconnect: (id: string) => void
+  onCancel: () => void
+  onRefresh: () => Promise<void>
+}) {
+  return (
+    <section>
+      <header className="mb-3">
+        <h2 className="text-[14px] font-semibold text-neutral-700 dark:text-neutral-200 uppercase tracking-wide">
+          {title}
+        </h2>
+        <p className="text-[13px] text-neutral-500 mt-0.5">{desc}</p>
+      </header>
+      {items.length === 0 ? (
+        <div className="text-[13px] text-neutral-400 italic px-3 py-4 rounded-md border border-dashed border-neutral-200 dark:border-neutral-800">
+          {emptyLabel}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {items.map((p) => (
+            <ProviderCard
+              key={p.id}
+              t={t}
+              provider={p}
+              isActiveFlow={activeFlow?.providerId === p.id}
+              flowStatus={activeFlow?.providerId === p.id ? flowStatus : null}
+              activeFlow={activeFlow?.providerId === p.id ? activeFlow : null}
+              onConnect={() => onConnect(p)}
+              onDisconnect={() => onDisconnect(p.id)}
+              onCancel={onCancel}
+              onRefresh={onRefresh}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ApiKeyForm({
+  t,
+  provider,
+  onCancel,
+  onSaved,
+}: {
+  t: (k: string, vars?: Record<string, string | number>) => string
+  provider: ProviderStatus
+  onCancel: () => void
+  onSaved: () => Promise<void> | void
+}) {
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const isJson = provider.id === 'vertex-ai'
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!key.trim()) return
+    setBusy(true)
+    setError(null)
+    try {
+      await connectWithApiKey(provider.id, key.trim())
+      await onSaved()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form
+      onSubmit={submit}
+      className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-800 space-y-2"
+    >
+      {isJson ? (
+        <textarea
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder={t('settings.providers.apiKeyJsonPlaceholder')}
+          rows={5}
+          className="w-full px-3 py-2 rounded-sm border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-[13px] font-mono text-neutral-800 dark:text-neutral-100"
+          autoFocus
+        />
+      ) : (
+        <input
+          type="password"
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder={t('settings.providers.apiKeyPlaceholder')}
+          className="w-full h-9 px-3 rounded-sm border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-[13px] font-mono text-neutral-800 dark:text-neutral-100"
+          autoFocus
+        />
+      )}
+      {error && (
+        <div className="rounded-sm bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 text-red-700 dark:text-red-300 text-[13px] px-2 py-1.5">
+          {error}
+        </div>
+      )}
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="ghost" size="sm" type="button" onClick={onCancel} disabled={busy}>
+          {t('settings.providers.cancel')}
+        </Button>
+        <Button variant="primary" size="sm" type="submit" disabled={busy || !key.trim()}>
+          {busy ? <CircleNotch className="w-3.5 h-3.5 animate-spin" /> : <Plugs className="w-3.5 h-3.5" />}
+          {t('settings.providers.save')}
+        </Button>
+      </div>
+    </form>
+  )
+}
+
+const ICON_EXTS = ['svg', 'webp', 'png'] as const
+
+const ICON_SCALE: Record<string, string> = {
+  // Source logos that ship with extra inner whitespace — boost to match others.
+  codex: 'scale-[1.4]',
+  copilot: 'scale-[1.4]',
+}
+
+function ProviderIcon({ id, label }: { id: string; label: string }) {
+  const [extIdx, setExtIdx] = useState(0)
+  const [failed, setFailed] = useState(false)
+  return (
+    <div className="w-6 h-6 shrink-0 flex items-center justify-center overflow-hidden">
+      {failed ? (
+        <span className="text-[14px] font-semibold text-neutral-500">{label.slice(0, 1)}</span>
+      ) : (
+        <img
+          src={`/brands/${id}.${ICON_EXTS[extIdx]}`}
+          alt=""
+          onError={() => {
+            if (extIdx + 1 < ICON_EXTS.length) setExtIdx(extIdx + 1)
+            else setFailed(true)
+          }}
+          className={clsx(
+            'max-w-full max-h-full object-contain',
+            ICON_SCALE[id],
+          )}
+        />
+      )}
+    </div>
   )
 }
 
@@ -180,6 +362,7 @@ function ProviderCard({
   onConnect,
   onDisconnect,
   onCancel,
+  onRefresh,
 }: {
   t: (k: string, vars?: Record<string, string | number>) => string
   provider: ProviderStatus
@@ -189,11 +372,15 @@ function ProviderCard({
   onConnect: () => void
   onDisconnect: () => void
   onCancel: () => void
+  onRefresh: () => Promise<void>
 }) {
+  const [keyOpen, setKeyOpen] = useState(false)
   return (
     <div className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4">
       <div className="flex items-start justify-between gap-4">
-        <div className="flex-1">
+        <div className="flex-1 flex items-start gap-3">
+          <ProviderIcon id={provider.id} label={provider.label} />
+          <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-neutral-900 dark:text-neutral-100">
               {provider.label}
@@ -205,10 +392,7 @@ function ProviderCard({
               </span>
             )}
           </div>
-          <p className="text-[15px] text-neutral-500 mt-1 leading-relaxed">{provider.description}</p>
-          {provider.account_label && (
-            <p className="text-[14px] text-neutral-400 mt-1 font-mono">{provider.account_label}</p>
-          )}
+          </div>
         </div>
         <div className="shrink-0">
           {provider.connected ? (
@@ -216,6 +400,13 @@ function ProviderCard({
               <Trash className="w-3.5 h-3.5" />
               {t('settings.providers.disconnect')}
             </Button>
+          ) : provider.kind === 'api_key' ? (
+            !keyOpen && (
+              <Button variant="primary" size="sm" onClick={() => setKeyOpen(true)}>
+                <Plugs className="w-3.5 h-3.5" />
+                {t('settings.providers.connect')}
+              </Button>
+            )
           ) : (
             !isActiveFlow && (
               <Button variant="primary" size="sm" onClick={onConnect}>
@@ -226,6 +417,18 @@ function ProviderCard({
           )}
         </div>
       </div>
+
+      {provider.kind === 'api_key' && keyOpen && !provider.connected && (
+        <ApiKeyForm
+          t={t}
+          provider={provider}
+          onCancel={() => setKeyOpen(false)}
+          onSaved={async () => {
+            setKeyOpen(false)
+            await onRefresh()
+          }}
+        />
+      )}
 
       {isActiveFlow && activeFlow && (
         <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-800">

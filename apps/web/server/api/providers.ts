@@ -2,7 +2,7 @@ import { getFlow } from '@/lib/server/auth/flows'
 import { callbackHtml, handleCallback, startConnect } from '@/lib/server/auth/orchestrator'
 import { PROVIDERS, getProvider } from '@/lib/server/auth/providers'
 import { listModelsFor } from '@/lib/server/providers/models'
-import { deleteToken, getAccountLabel, listConnected } from '@/lib/server/tokens'
+import { deleteToken, getAccountLabel, listConnected, saveToken } from '@/lib/server/tokens'
 import { Hono } from 'hono'
 
 export const providers = new Hono()
@@ -61,6 +61,27 @@ providers.get('/:providerId/models', async (c) => {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ detail: message }, 500)
   }
+})
+
+// POST /api/providers/:providerId/connect/key — API-key providers
+providers.post('/:providerId/connect/key', async (c) => {
+  const providerId = c.req.param('providerId')
+  const def = getProvider(providerId)
+  if (!def) return c.json({ detail: 'unknown provider' }, 404)
+  if (def.kind !== 'api_key') return c.json({ detail: 'not an api_key provider' }, 400)
+  const body = (await c.req.json().catch(() => null)) as { api_key?: string; label?: string } | null
+  const key = body?.api_key?.trim()
+  if (!key) return c.json({ detail: 'api_key required' }, 400)
+  saveToken({
+    provider_id: providerId,
+    access_token: key,
+    refresh_token: null,
+    expires_at: null,
+    scope: null,
+    account_label: body?.label?.trim() || def.label,
+    account_id: null,
+  })
+  return c.json({ ok: true, account_label: body?.label?.trim() || def.label })
 })
 
 // POST /api/providers/:providerId/connect/start

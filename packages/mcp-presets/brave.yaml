@@ -2,6 +2,7 @@ id: brave
 name: Brave Search
 icon: "🦁"
 brand: brave
+icon_url: /brands/brave-search.webp
 description: Independent web index with no user tracking. Good for general web queries and privacy-conscious research.
 command: npx
 args: ["-y", "@modelcontextprotocol/server-brave-search"]

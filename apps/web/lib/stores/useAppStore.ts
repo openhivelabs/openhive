@@ -7,10 +7,30 @@ import type { CanvasMode, Company, Team } from '../types'
 
 const LOCALE_KEY = 'openhive.locale'
 const THEME_KEY = 'openhive.theme'
+const ACCENT_KEY = 'openhive.accent'
 const DEFAULT_MODEL_KEY = 'openhive.defaultModel'
 const TEAM_PANEL_COLLAPSED_KEY = 'openhive.sidebar.teamPanelCollapsed'
 
 export type Theme = 'light' | 'dark' | 'system'
+export type Accent =
+  | 'amber'
+  | 'red'
+  | 'pink'
+  | 'violet'
+  | 'blue'
+  | 'lime'
+  | 'brown'
+  | 'graphite'
+const ACCENTS: Accent[] = [
+  'amber',
+  'red',
+  'pink',
+  'violet',
+  'blue',
+  'lime',
+  'brown',
+  'graphite',
+]
 
 export interface DefaultModel {
   providerId: string
@@ -39,6 +59,27 @@ function applyThemeClass(t: Theme) {
   if (typeof document === 'undefined') return
   const resolved = resolveTheme(t)
   document.documentElement.classList.toggle('dark', resolved === 'dark')
+}
+
+function readAccent(): Accent {
+  if (typeof window === 'undefined') return 'amber'
+  const v = window.localStorage.getItem(ACCENT_KEY) as Accent | null
+  return v && ACCENTS.includes(v) ? v : 'amber'
+}
+
+function writeAccent(a: Accent) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(ACCENT_KEY, a)
+  } catch {
+    /* ignore */
+  }
+}
+
+function applyAccentAttr(a: Accent) {
+  if (typeof document === 'undefined') return
+  if (a === 'amber') document.documentElement.removeAttribute('data-accent')
+  else document.documentElement.setAttribute('data-accent', a)
 }
 
 function readTeamPanelCollapsed(): boolean {
@@ -96,6 +137,11 @@ export function hydrateLocaleFromStorage() {
     useAppStore.setState({ theme })
   }
   applyThemeClass(theme)
+  const accent = readAccent()
+  if (useAppStore.getState().accent !== accent) {
+    useAppStore.setState({ accent })
+  }
+  applyAccentAttr(accent)
   const dm = readDefaultModel()
   if (dm !== useAppStore.getState().defaultModel) {
     useAppStore.setState({ defaultModel: dm })
@@ -134,6 +180,7 @@ interface AppState {
   hydrated: boolean
   locale: Locale
   theme: Theme
+  accent: Accent
   defaultModel: DefaultModel | null
   /** 팀 목록 패널 접힘 상태 — localStorage persist. 브라우저별로 유지. */
   teamPanelCollapsed: boolean
@@ -146,6 +193,7 @@ interface AppState {
   toggleTeamPanel: () => void
   setLocale: (l: Locale) => void
   setTheme: (t: Theme) => void
+  setAccent: (a: Accent) => void
   setDefaultModel: (m: DefaultModel | null) => void
 
   addCompany: (company: Company) => void
@@ -178,6 +226,7 @@ export const useAppStore = create<AppState>((set, get) => {
     // swap in the persisted locale without a hydration mismatch.
     locale: 'en',
     theme: 'system',
+    accent: 'amber',
     defaultModel: null,
     teamPanelCollapsed: false,
 
@@ -208,6 +257,11 @@ export const useAppStore = create<AppState>((set, get) => {
       writeTheme(t)
       applyThemeClass(t)
       set({ theme: t })
+    },
+    setAccent: (a) => {
+      writeAccent(a)
+      applyAccentAttr(a)
+      set({ accent: a })
     },
     setDefaultModel: (m) => {
       writeDefaultModel(m)

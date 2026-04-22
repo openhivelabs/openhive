@@ -11,6 +11,104 @@
   --muted: #737373;
 }
 
+/* ---- Accent palettes ------------------------------------------------
+ * Runtime accent override. Tailwind v4 compiles `bg-amber-400` to
+ * `background-color: var(--color-amber-400)`, so redefining those vars
+ * under a [data-accent] scope retargets every amber-* utility globally.
+ * amber is the default; other accents remap the same shade scale.
+ * ------------------------------------------------------------------- */
+[data-accent="red"] {
+  --color-amber-50: #fef2f2;
+  --color-amber-100: #fee2e2;
+  --color-amber-200: #fecaca;
+  --color-amber-300: #fca5a5;
+  --color-amber-400: #f87171;
+  --color-amber-500: #ef4444;
+  --color-amber-600: #dc2626;
+  --color-amber-700: #b91c1c;
+  --color-amber-800: #991b1b;
+  --color-amber-900: #7f1d1d;
+  --color-amber-950: #450a0a;
+}
+[data-accent="pink"] {
+  --color-amber-50: #fdf2f8;
+  --color-amber-100: #fce7f3;
+  --color-amber-200: #fbcfe8;
+  --color-amber-300: #f9a8d4;
+  --color-amber-400: #f472b6;
+  --color-amber-500: #ec4899;
+  --color-amber-600: #db2777;
+  --color-amber-700: #be185d;
+  --color-amber-800: #9d174d;
+  --color-amber-900: #831843;
+  --color-amber-950: #500724;
+}
+[data-accent="violet"] {
+  --color-amber-50: #f5f3ff;
+  --color-amber-100: #ede9fe;
+  --color-amber-200: #ddd6fe;
+  --color-amber-300: #c4b5fd;
+  --color-amber-400: #a78bfa;
+  --color-amber-500: #8b5cf6;
+  --color-amber-600: #7c3aed;
+  --color-amber-700: #6d28d9;
+  --color-amber-800: #5b21b6;
+  --color-amber-900: #4c1d95;
+  --color-amber-950: #2e1065;
+}
+[data-accent="blue"] {
+  --color-amber-50: #eff6ff;
+  --color-amber-100: #dbeafe;
+  --color-amber-200: #bfdbfe;
+  --color-amber-300: #93c5fd;
+  --color-amber-400: #60a5fa;
+  --color-amber-500: #3b82f6;
+  --color-amber-600: #2563eb;
+  --color-amber-700: #1d4ed8;
+  --color-amber-800: #1e40af;
+  --color-amber-900: #1e3a8a;
+  --color-amber-950: #172554;
+}
+[data-accent="lime"] {
+  --color-amber-50: #f7fee7;
+  --color-amber-100: #ecfccb;
+  --color-amber-200: #d9f99d;
+  --color-amber-300: #bef264;
+  --color-amber-400: #a3e635;
+  --color-amber-500: #84cc16;
+  --color-amber-600: #65a30d;
+  --color-amber-700: #4d7c0f;
+  --color-amber-800: #3f6212;
+  --color-amber-900: #365314;
+  --color-amber-950: #1a2e05;
+}
+[data-accent="brown"] {
+  --color-amber-50: #faf6f1;
+  --color-amber-100: #f0e5d3;
+  --color-amber-200: #ddc3a1;
+  --color-amber-300: #c39a6c;
+  --color-amber-400: #a87744;
+  --color-amber-500: #8b5a2b;
+  --color-amber-600: #6f4620;
+  --color-amber-700: #553418;
+  --color-amber-800: #3e2611;
+  --color-amber-900: #2a1a0c;
+  --color-amber-950: #170d06;
+}
+[data-accent="graphite"] {
+  --color-amber-50: #f5f5f5;
+  --color-amber-100: #e5e5e5;
+  --color-amber-200: #d4d4d4;
+  --color-amber-300: #a3a3a3;
+  --color-amber-400: #525252;
+  --color-amber-500: #374151;
+  --color-amber-600: #1f2937;
+  --color-amber-700: #111827;
+  --color-amber-800: #030712;
+  --color-amber-900: #000000;
+  --color-amber-950: #000000;
+}
+
 .dark {
   --bg: #0a0a0a;
   --surface: #171717;

@@ -2,24 +2,12 @@ import { clsx } from 'clsx'
 import { useEffect, useState } from 'react'
 import { SectionHeader } from '@/components/settings/SettingsShell'
 import { fetchUsage, type UsagePeriod, type UsageRow, type UsageSummary } from '@/lib/api/usage'
+import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
 
-const PERIODS: { id: UsagePeriod; label: string }[] = [
-  { id: '24h', label: '24h' },
-  { id: '7d', label: '7일' },
-  { id: '30d', label: '30일' },
-  { id: 'all', label: '전체' },
-]
-
+const PERIOD_IDS: UsagePeriod[] = ['24h', '7d', '30d', 'all']
 type GroupKey = 'company' | 'team' | 'agent' | 'model' | 'provider'
-
-const GROUPS: { id: GroupKey; label: string }[] = [
-  { id: 'company', label: '회사' },
-  { id: 'team', label: '팀' },
-  { id: 'agent', label: '에이전트' },
-  { id: 'model', label: '모델' },
-  { id: 'provider', label: '프로바이더' },
-]
+const GROUP_IDS: GroupKey[] = ['company', 'team', 'agent', 'model', 'provider']
 
 function fmtTokens(n: number): string {
   if (n < 1000) return String(n)
@@ -35,8 +23,11 @@ function fmtCost(cents: number): string {
 }
 
 export function UsageSection() {
+  const t = useT()
   const companies = useAppStore((s) => s.companies)
   const [period, setPeriod] = useState<UsagePeriod>('all')
+  const periods = PERIOD_IDS.map((id) => ({ id, label: t(`settings.usage.period.${id}`) }))
+  const groups = GROUP_IDS.map((id) => ({ id, label: t(`settings.usage.group.${id}`) }))
   const [group, setGroup] = useState<GroupKey>('team')
   const [data, setData] = useState<UsageSummary | null>(null)
   const [loading, setLoading] = useState(false)
@@ -87,20 +78,25 @@ export function UsageSection() {
 
   const totals = data?.totals
 
+  const activeGroupLabel = groups.find((g) => g.id === group)?.label ?? ''
+
   return (
     <>
-      <SectionHeader title="사용량" desc="에이전트가 소비한 토큰과 비용 추정치." />
+      <SectionHeader
+        title={t('settings.usage.header')}
+        desc={t('settings.usage.headerDesc')}
+      />
 
-      <div className="flex flex-wrap items-center gap-2 mb-4">
+      <div className="flex flex-wrap items-center gap-2 mb-5">
         <Segmented
           value={period}
-          options={PERIODS}
+          options={periods}
           onChange={(v) => setPeriod(v as UsagePeriod)}
         />
         <div className="w-px h-5 bg-neutral-200 dark:bg-neutral-700 mx-1" />
         <Segmented
           value={group}
-          options={GROUPS}
+          options={groups}
           onChange={(v) => setGroup(v as GroupKey)}
         />
       </div>
@@ -112,17 +108,26 @@ export function UsageSection() {
       )}
 
       <div className="grid grid-cols-4 gap-2 mb-6">
-        <Kpi label="입력 토큰" value={fmtTokens(totals?.input_tokens ?? 0)} />
-        <Kpi label="출력 토큰" value={fmtTokens(totals?.output_tokens ?? 0)} />
-        <Kpi label="요청 수" value={String(totals?.n ?? 0)} />
-        <Kpi label="예상 비용" value={fmtCost(totals?.cost_cents ?? 0)} />
+        <Kpi label={t('settings.usage.kpi.inputTokens')} value={fmtTokens(totals?.input_tokens ?? 0)} />
+        <Kpi label={t('settings.usage.kpi.outputTokens')} value={fmtTokens(totals?.output_tokens ?? 0)} />
+        <Kpi label={t('settings.usage.kpi.requests')} value={String(totals?.n ?? 0)} />
+        <Kpi
+          label={t('settings.usage.kpi.cost')}
+          value={fmtCost(totals?.cost_cents ?? 0)}
+          emphasise
+        />
       </div>
 
       <Breakdown
-        title={`${GROUPS.find((g) => g.id === group)?.label}별 내역`}
+        title={t('settings.usage.breakdownTitle', { group: activeGroupLabel })}
         rows={groupRows[group]}
         label={groupLabel[group]}
         loading={loading && !data}
+        emptyLabel={t('settings.usage.empty')}
+        loadingLabel={t('settings.usage.loading')}
+        inAbbr={t('settings.usage.inAbbr')}
+        outAbbr={t('settings.usage.outAbbr')}
+        callsSuffix={t('settings.usage.callsSuffix')}
       />
     </>
   )
@@ -161,11 +166,36 @@ function Segmented<T extends string>({
   )
 }
 
-function Kpi({ label, value }: { label: string; value: string }) {
+function Kpi({
+  label,
+  value,
+  emphasise,
+}: { label: string; value: string; emphasise?: boolean }) {
   return (
-    <div className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-3">
-      <div className="text-[14px] text-neutral-400">{label}</div>
-      <div className="text-[20px] font-semibold text-neutral-900 dark:text-neutral-100 tracking-tight mt-0.5">
+    <div
+      className={clsx(
+        'rounded-md border p-3',
+        emphasise
+          ? 'border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30'
+          : 'border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900',
+      )}
+    >
+      <div
+        className={clsx(
+          'text-[12px] uppercase tracking-wide font-medium',
+          emphasise ? 'text-amber-700 dark:text-amber-300' : 'text-neutral-400',
+        )}
+      >
+        {label}
+      </div>
+      <div
+        className={clsx(
+          'text-[22px] font-semibold tracking-tight mt-1 tabular-nums',
+          emphasise
+            ? 'text-amber-900 dark:text-amber-100'
+            : 'text-neutral-900 dark:text-neutral-100',
+        )}
+      >
         {value}
       </div>
     </div>
@@ -177,11 +207,21 @@ function Breakdown({
   rows,
   label,
   loading,
+  emptyLabel,
+  loadingLabel,
+  inAbbr,
+  outAbbr,
+  callsSuffix,
 }: {
   title: string
   rows: UsageRow[]
   label: (key: string) => string
   loading?: boolean
+  emptyLabel: string
+  loadingLabel: string
+  inAbbr: string
+  outAbbr: string
+  callsSuffix: string
 }) {
   const maxTokens = rows.length > 0 ? Math.max(...rows.map((r) => r.input_tokens + r.output_tokens)) || 1 : 1
   return (
@@ -191,30 +231,30 @@ function Breakdown({
       </div>
       <div className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 divide-y divide-neutral-100 dark:divide-neutral-800">
         {loading ? (
-          <div className="px-3 py-4 text-[14px] text-neutral-400 text-center">loading…</div>
+          <div className="px-3 py-6 text-[14px] text-neutral-400 text-center">{loadingLabel}</div>
         ) : rows.length === 0 ? (
-          <div className="px-3 py-6 text-[14px] text-neutral-400 text-center">
-            아직 기록된 사용량이 없습니다. 에이전트가 실제 턴을 실행하면 여기 쌓입니다.
+          <div className="px-3 py-8 text-[14px] text-neutral-400 text-center leading-relaxed">
+            {emptyLabel}
           </div>
         ) : (
           rows.map((r) => {
             const total = r.input_tokens + r.output_tokens
             const pct = (total / maxTokens) * 100
             return (
-              <div key={r.key} className="px-3 py-2">
+              <div key={r.key} className="px-3 py-2.5">
                 <div className="flex items-center justify-between gap-2 text-[14px]">
-                  <span className="truncate text-neutral-800 dark:text-neutral-100">
+                  <span className="truncate text-neutral-800 dark:text-neutral-100 font-medium">
                     {label(r.key)}
                   </span>
-                  <span className="text-neutral-500 font-mono text-[14px]">
+                  <span className="text-neutral-600 dark:text-neutral-400 font-mono text-[13px] tabular-nums">
                     {fmtTokens(total)} · {fmtCost(r.cost_cents)}
                   </span>
                 </div>
-                <div className="h-1 bg-neutral-100 dark:bg-neutral-800 rounded-sm overflow-hidden mt-1">
+                <div className="h-1 bg-neutral-100 dark:bg-neutral-800 rounded-sm overflow-hidden mt-1.5">
                   <div className="h-full bg-amber-400" style={{ width: `${pct}%` }} />
                 </div>
-                <div className="text-[14px] text-neutral-400 font-mono mt-0.5">
-                  in {fmtTokens(r.input_tokens)} · out {fmtTokens(r.output_tokens)} · {r.n} calls
+                <div className="text-[12px] text-neutral-400 font-mono mt-1 tabular-nums">
+                  {inAbbr} {fmtTokens(r.input_tokens)} · {outAbbr} {fmtTokens(r.output_tokens)} · {r.n} {callsSuffix}
                 </div>
               </div>
             )
