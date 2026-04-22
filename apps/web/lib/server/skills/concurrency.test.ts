@@ -21,14 +21,14 @@ describe('skill concurrency', () => {
   })
 
   it('preserves return value', async () => {
-    delete process.env.OPENHIVE_PYTHON_CONCURRENCY
+    process.env.OPENHIVE_PYTHON_CONCURRENCY = undefined
     __resetForTests()
     const v = await acquireSkillSlot(async () => 42)
     expect(v).toBe(42)
   })
 
   it('default falls back when env unset', () => {
-    delete process.env.OPENHIVE_PYTHON_CONCURRENCY
+    process.env.OPENHIVE_PYTHON_CONCURRENCY = undefined
     __resetForTests()
     expect(() => acquireSkillSlot(async () => 1)).not.toThrow()
   })
