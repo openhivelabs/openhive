@@ -335,6 +335,16 @@ const en: Dict = {
   'onboarding.template.frame.cancel': 'Cancel',
   'onboarding.creating': 'Setting things up…',
   'onboarding.failed': 'Setup failed: {reason}',
+  // dashboard
+  'dashboard.edit': 'Edit',
+  'dashboard.addPanel': 'Add panel',
+  'dashboard.aiCustomize': 'AI customize',
+  'dashboard.done': 'Done',
+  'dashboard.empty.title': 'Your dashboard is empty',
+  'dashboard.empty.desc': 'Click the Edit button in the top left to add panels and customize the layout.',
+  'dashboard.emptyEdit.title': 'Start by adding a panel',
+  'dashboard.emptyEdit.desc': 'Pick a ready-made panel, or let AI lay it out from a short description.',
+  'dashboard.emptyEdit.askAi': 'Or ask AI to design it',
 }
 
 const ko: Dict = {
@@ -655,6 +665,16 @@ const ko: Dict = {
   'onboarding.template.frame.cancel': '취소',
   'onboarding.creating': '세팅 중…',
   'onboarding.failed': '세팅 실패: {reason}',
+  // dashboard
+  'dashboard.edit': '편집',
+  'dashboard.addPanel': '패널 추가',
+  'dashboard.aiCustomize': 'AI 커스터마이즈',
+  'dashboard.done': '완료',
+  'dashboard.empty.title': '대시보드가 비어있어요',
+  'dashboard.empty.desc': '왼쪽 위 편집 버튼을 눌러 패널을 추가하고 레이아웃을 꾸며보세요.',
+  'dashboard.emptyEdit.title': '패널을 추가해서 시작하세요',
+  'dashboard.emptyEdit.desc': '준비된 패널을 고르거나, 원하는 걸 짧게 설명하면 AI가 레이아웃을 짜줍니다.',
+  'dashboard.emptyEdit.askAi': 'AI에게 맡기기',
 }
 
 const dicts: Record<Locale, Dict> = { en, ko }
