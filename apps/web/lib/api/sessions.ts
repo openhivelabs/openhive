@@ -65,29 +65,6 @@ export interface SessionEvent {
   data: Record<string, unknown>
 }
 
-/** Convert the UI's Team (with camelCase fields) into the server's TeamSpec shape. */
-function toServerTeam(team: Team) {
-  return {
-    id: team.id,
-    name: team.name,
-    agents: team.agents.map((a) => ({
-      id: a.id,
-      role: a.role,
-      label: a.label,
-      provider_id: a.providerId,
-      model: a.model,
-      system_prompt: a.systemPrompt,
-      skills: a.skills,
-      max_parallel: a.maxParallel ?? 1,
-    })),
-    edges: team.edges.map((e) => ({ source: e.source, target: e.target })),
-    entry_agent_id: team.entryAgentId ?? null,
-    allowed_skills: team.allowedSkills ?? [],
-    allowed_mcp_servers: team.allowedMcpServers ?? [],
-    limits: team.limits ?? { max_tool_rounds_per_turn: 8, max_delegation_depth: 4 },
-  }
-}
-
 export async function startSession(
   team: Team,
   goal: string,
@@ -97,7 +74,7 @@ export async function startSession(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      team: toServerTeam(team),
+      team_id: team.id,
       goal,
       locale: options?.locale ?? 'en',
       task_id: options?.taskId,
@@ -164,7 +141,7 @@ export async function* streamSession(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      team: toServerTeam(team),
+      team_id: team.id,
       goal,
       locale: options?.locale ?? 'en',
     }),
