@@ -275,4 +275,103 @@ describe('maybeMicrocompact', () => {
     expect(res.applied).toBe(0)
     expect(res.entries).toHaveLength(0)
   })
+
+  // -------- Case L: A3 artifact block in generic placeholder --------
+  it('L: web_fetch result with files envelope embeds Artifacts block', () => {
+    const now = 10_000_000
+    const envelope = JSON.stringify({
+      ok: true,
+      body: 'x'.repeat(3_000),
+      files: [
+        { name: 'note.txt', path: `/tmp/${SESSION}/artifacts/note.txt` },
+        {
+          filename: 'report.csv',
+          uri: `artifact://session/${SESSION}/artifacts/report.csv`,
+        },
+      ],
+    })
+    const history = mkPair({
+      toolName: 'web_fetch',
+      toolCallId: 'c1',
+      result: envelope,
+      assistantTs: now - (STALE_AFTER_MS + 60_000),
+    })
+    const res = maybeMicrocompact(history, SESSION, now)
+    expect(res.applied).toBe(1)
+    const content = history[1].content as string
+    expect(content).toContain('[Old tool result cleared')
+    expect(content).toContain('Artifacts:')
+    expect(content).toContain(`report.csv (artifact://session/${SESSION}/artifacts/report.csv)`)
+    expect(content).toContain(`note.txt (artifact://session/${SESSION}/`)
+    expect(content).toContain('read_artifact')
+  })
+
+  // -------- Case M: no artifacts → short stub, no Artifacts block --------
+  it('M: web_fetch with no files envelope keeps short stub', () => {
+    const now = 10_000_000
+    const history = mkPair({
+      toolName: 'web_fetch',
+      toolCallId: 'c1',
+      result: LONG_BODY, // plain string — not a JSON envelope
+      assistantTs: now - (STALE_AFTER_MS + 60_000),
+    })
+    const res = maybeMicrocompact(history, SESSION, now)
+    expect(res.applied).toBe(1)
+    const content = history[1].content as string
+    expect(content).toContain('[Old tool result cleared. Tool: web_fetch.')
+    expect(content).not.toContain('Artifacts:')
+  })
+
+  // -------- Case N: run_skill_script envelope preserves uri on files --------
+  it('N: run_skill_script envelope keeps files[].uri after compact', () => {
+    const now = 10_000_000
+    const envelope = JSON.stringify({
+      ok: true,
+      stdout: 'a'.repeat(3000),
+      stderr: 'b'.repeat(3000),
+      files: [
+        {
+          id: 'art_1',
+          filename: 'out.csv',
+          mime: 'text/csv',
+          size: 42,
+          uri: `artifact://session/${SESSION}/artifacts/out.csv`,
+        },
+      ],
+    })
+    const history = mkPair({
+      toolName: 'run_skill_script',
+      toolCallId: 'c1',
+      result: envelope,
+      assistantTs: now - (STALE_AFTER_MS + 60_000),
+    })
+    const res = maybeMicrocompact(history, SESSION, now)
+    expect(res.applied).toBe(1)
+    const parsed = JSON.parse(history[1].content as string)
+    expect(parsed.files).toHaveLength(1)
+    expect(parsed.files[0].uri).toBe(`artifact://session/${SESSION}/artifacts/out.csv`)
+    expect(parsed._cleared).toContain('read_artifact')
+  })
+
+  // -------- Case O: idempotency on multi-line placeholder --------
+  it('O: multi-line Artifacts placeholder is skipped on second pass', () => {
+    const now = 10_000_000
+    const envelope = JSON.stringify({
+      ok: true,
+      body: 'x'.repeat(3_000),
+      files: [{ name: 'a.txt', path: `/tmp/${SESSION}/artifacts/a.txt` }],
+    })
+    const history = mkPair({
+      toolName: 'web_fetch',
+      toolCallId: 'c1',
+      result: envelope,
+      assistantTs: now - (STALE_AFTER_MS + 60_000),
+    })
+    const first = maybeMicrocompact(history, SESSION, now)
+    expect(first.applied).toBe(1)
+    // Must start with the CLEARED_PREFIX so the idempotent guard trips.
+    expect((history[1].content as string).startsWith('[Old tool result cleared')).toBe(true)
+    const second = maybeMicrocompact(history, SESSION, now)
+    expect(second.applied).toBe(0)
+  })
 })

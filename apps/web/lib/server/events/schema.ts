@@ -39,6 +39,9 @@ export type EventKind =
   | 'fork.skipped'
   // S2 — microcompact
   | 'microcompact.applied'
+  // A3 — artifact rehydration
+  | 'artifact.read'
+  | 'artifact.read.denied'
 
 export interface Event {
   kind: EventKind

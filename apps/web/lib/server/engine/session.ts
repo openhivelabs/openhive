@@ -34,6 +34,7 @@ import { ledgerTools } from '../ledger/tools'
 import { maybeWriteLedger } from '../ledger/write'
 import { dataDir } from '../paths'
 import type { ChatMessage, ToolSpec } from '../providers/types'
+import { readArtifactTool, buildArtifactUri } from '../sessions/artifacts'
 import * as sessionsStore from '../sessions'
 import { type SkillDef, getSkill, matchSkillHints } from '../skills/loader'
 import { readSkillFile, runSkill, runSkillScript } from '../skills/runner'
@@ -667,6 +668,10 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     tools.push(...teamDataTools(teamSlugs, persona.tools))
   }
   tools.push(webFetchTool())
+  // A3: artifact rehydration — Lead + sub-agent both need to re-read files
+  // produced earlier in the session (microcompact may have cleared the
+  // envelope bodies that first carried them).
+  tools.push(readArtifactTool(sessionId))
 
   // Skills: typed get a structured tool; agent-format go through activate/read/run.
   // team.allowed_skills is an OPTIONAL whitelist. If it's undefined or empty,
@@ -2801,6 +2806,10 @@ function registerSkillArtifacts(
         filename: f.name,
         mime: f.mime,
         size: f.size,
+        // A3: carry the canonical URI on the envelope so the LLM picks it
+        // up immediately. Later microcompact passes + read_artifact calls
+        // can then address the file without re-deriving the path.
+        uri: buildArtifactUri(ctx.sessionId, f.path),
       })
     } catch (exc) {
       out.push({
