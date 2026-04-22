@@ -42,7 +42,7 @@ export interface CapInput {
   deadlineMs?: number
 }
 
-export type AppliedStrategy = SummaryStrategy | 'passthrough'
+export type AppliedStrategy = SummaryStrategy | 'passthrough' | 'envelope'
 
 export interface CapResult {
   result: string
