@@ -18,18 +18,30 @@ import type {
 
 export type { StreamDelta, ChatMessage, ToolSpec } from '../providers/types'
 
+/** Extra knobs understood by the claude-code branch only (fork pattern, S3).
+ *  Other providers ignore these fields. */
+export interface StreamOpts {
+  /** Tell caching strategy not to reorder tools — fork children require
+   *  byte-identical prefix for Anthropic prompt-cache hit. */
+  useExactTools?: boolean
+  /** Replace `system` with this exact string (skip `splitSystem` synthesis) —
+   *  fork children inherit the parent's verbatim system prompt. */
+  overrideSystem?: string
+}
+
 export async function* stream(
   providerId: string,
   model: string,
   messages: ChatMessage[],
   tools: ToolSpec[] | undefined,
+  opts?: StreamOpts,
 ): AsyncIterable<StreamDelta> {
   if (providerId === 'copilot') {
     yield* streamCopilot(model, messages, tools)
     return
   }
   if (providerId === 'claude-code') {
-    yield* streamClaude(model, messages, tools)
+    yield* streamClaude(model, messages, tools, opts)
     return
   }
   if (providerId === 'codex') {
@@ -106,6 +118,7 @@ async function* streamClaude(
   model: string,
   messages: ChatMessage[],
   tools: ToolSpec[] | undefined,
+  opts?: StreamOpts,
 ): AsyncIterable<StreamDelta> {
   // Content-block index → tool_use ordinal (engine keeps dense keys).
   const toolOrdinal = new Map<number, number>()
@@ -115,7 +128,13 @@ async function* streamClaude(
   let usageCacheRead = 0
   let usageCacheWrite = 0
 
-  for await (const ev of claude.streamMessages({ model, messages, tools })) {
+  for await (const ev of claude.streamMessages({
+    model,
+    messages,
+    tools,
+    useExactTools: opts?.useExactTools,
+    overrideSystem: opts?.overrideSystem,
+  })) {
     const t = (ev as { type?: string }).type
     if (t === 'message_start') {
       const u = ((ev as { message?: { usage?: Record<string, unknown> } }).message?.usage ?? {}) as Record<string, unknown>

@@ -33,7 +33,7 @@ import { isLedgerDisabled } from '../ledger/db'
 import { ledgerTools } from '../ledger/tools'
 import { maybeWriteLedger } from '../ledger/write'
 import { dataDir } from '../paths'
-import type { ChatMessage } from '../providers/types'
+import type { ChatMessage, ToolSpec } from '../providers/types'
 import * as sessionsStore from '../sessions'
 import { type SkillDef, getSkill, matchSkillHints } from '../skills/loader'
 import { readSkillFile, runSkill, runSkillScript } from '../skills/runner'
@@ -50,6 +50,11 @@ import {
 import { type ThresholdTrigger, recordUsage } from '../usage'
 import * as askuser from './askuser'
 import * as errors from './errors'
+import {
+  buildForkedMessages,
+  decideForkOrFresh,
+  type TurnSnapshot,
+} from './fork'
 import { stream, buildMessages } from './providers'
 import {
   MAX_CHILD_RESULT_CHARS,
@@ -126,6 +131,14 @@ interface RunState {
   readSkillFileSeen: Map<string, Set<string>>
   // sessionId → ordered todo list maintained by the Lead via native tools.
   todos: Map<string, TodoItem[]>
+  // S3 fork: sessionId → last-turn snapshot captured at streamTurn entry.
+  // Parallel delegation reads this so sibling children's first turn is
+  // byte-identical with the parent's prefix (prompt-cache hit).
+  lastTurnSnapshot: Map<string, TurnSnapshot>
+  // S3 fork: reserved for a future LRU of serialized system prompts keyed
+  // by `${sessionId}:${nodeId}:${depth}:${todoVersion}`. Not consumed yet —
+  // fork children currently inherit the parent's snapshot.systemPrompt.
+  forkSystemCache: Map<string, string>
 }
 
 // Phase C1: Cap per-(parent→child) delegations within a run. A parent re-
@@ -152,6 +165,8 @@ function state(): RunState {
       readSkillFileTotal: new Map(),
       readSkillFileSeen: new Map(),
       todos: new Map(),
+      lastTurnSnapshot: new Map(),
+      forkSystemCache: new Map(),
     }
   }
   // HMR-safe: if an older incarnation initialised the global without a newer
@@ -161,6 +176,8 @@ function state(): RunState {
   if (!s.readSkillFileTotal) s.readSkillFileTotal = new Map()
   if (!s.readSkillFileSeen) s.readSkillFileSeen = new Map()
   if (!s.todos) s.todos = new Map()
+  if (!s.lastTurnSnapshot) s.lastTurnSnapshot = new Map()
+  if (!s.forkSystemCache) s.forkSystemCache = new Map()
   return s
 }
 
@@ -399,6 +416,12 @@ export async function* runTeam(
     state().readSkillFileTotal.delete(sessionId)
     state().readSkillFileSeen.delete(sessionId)
     state().todos.delete(sessionId)
+    // S3 fork: release snapshot history ref so parent history GC can proceed.
+    state().lastTurnSnapshot.delete(sessionId)
+    const forkPrefix = `${sessionId}:`
+    for (const k of state().forkSystemCache.keys()) {
+      if (k.startsWith(forkPrefix)) state().forkSystemCache.delete(k)
+    }
     errors.clearSessionFailures(sessionId)
     sem.release()
   }
@@ -784,12 +807,41 @@ interface StreamTurnOpts {
   history: ChatMessage[]
   tools: Tool[]
   depth: number
+  /** S3 fork: when provided, bypass `toolsToOpenAI(tools)` and use these
+   *  already-serialized specs verbatim. Required for sibling byte-identity. */
+  toolsOverride?: ToolSpec[]
+  /** S3 fork: when provided, forwarded to the claude provider as
+   *  `overrideSystem` so `splitSystem` is bypassed and the parent's
+   *  verbatim system string is used. */
+  systemPromptOverride?: string
+  /** S3 fork: sentinel telling the caching strategy not to reorder tools. */
+  useExactTools?: boolean
+  /** S3 fork: when true, the assistant+tool_calls arising from this stream
+   *  must NOT be pushed into `history` — the parent's history is shared by
+   *  reference with sibling children, and mutations would break prefix
+   *  identity. Fork children signal their output via `node_finished` only. */
+  noHistoryPush?: boolean
 }
 
 async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
   const { sessionId, team, node, systemPrompt, history, tools, depth } = opts
   const messages = buildMessages(systemPrompt, history)
-  const openaiTools = tools.length > 0 ? toolsToOpenAI(tools) : undefined
+  const openaiTools = opts.toolsOverride ?? (tools.length > 0 ? toolsToOpenAI(tools) : undefined)
+
+  // S3 fork snapshot: parallel children about to be dispatched within this
+  // turn will read this to assemble byte-identical prefix messages. The
+  // `history` ref is stashed as-is (no copy) — parent mutations happen after
+  // this turn's assistant message lands, and children slice up to that index.
+  state().lastTurnSnapshot.set(sessionId, {
+    systemPrompt,
+    history,
+    tools: openaiTools ?? [],
+    providerId: node.provider_id,
+    model: node.model,
+    nodeId: node.id,
+    depth,
+    builtAt: Date.now(),
+  })
 
   // Phase G1: attribute payload size to system vs tools vs history so we can
   // later rank which region is driving spend. Char counts, not tokens — a
@@ -851,7 +903,14 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
   const pending = new Map<number, Pending>()
   let stopReason = 'stop'
 
-  for await (const delta of stream(node.provider_id, node.model, messages, openaiTools)) {
+  const streamOpts =
+    opts.systemPromptOverride !== undefined || opts.useExactTools
+      ? {
+          useExactTools: opts.useExactTools,
+          overrideSystem: opts.systemPromptOverride,
+        }
+      : undefined
+  for await (const delta of stream(node.provider_id, node.model, messages, openaiTools, streamOpts)) {
     if (delta.kind === 'text') {
       textBuf.push(delta.text)
       yield makeEvent('token', sessionId, { text: delta.text }, { depth, node_id: node.id })
@@ -1245,6 +1304,223 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
   )
 }
 
+// -------- S3 fork: child first-turn streaming --------
+
+interface StreamTurnForkOpts {
+  sessionId: string
+  team: TeamSpec
+  node: AgentSpec
+  history: ChatMessage[]
+  systemPromptOverride: string
+  toolsOverride: ToolSpec[]
+  providerId: string
+  model: string
+  depth: number
+}
+
+/**
+ * Streaming-only variant of `streamTurn` used for fork children's first turn.
+ *
+ * Key differences vs `streamTurn`:
+ *   - Does NOT push assistant/tool_result into history (the history array
+ *     shares entries with the parent's snapshot — mutations would break
+ *     sibling prefix byte-identity).
+ *   - Does NOT auto-execute tool calls. If the child emits `tool_calls`, we
+ *     emit `_turn_marker` with `stop_reason: 'tool_calls'` and let the caller
+ *     transition to the fresh `runNode` path.
+ *   - Passes `useExactTools` + `overrideSystem` down to the provider.
+ *
+ * The `history` here is the one built by `buildForkedMessages` — it already
+ * contains the synthetic `tool_result + user` tail, so `buildMessages` just
+ * prepends the (same-bytes) system prompt. `overrideSystem` then ensures the
+ * claude provider skips `splitSystem` synthesis.
+ */
+async function* streamTurnFork(opts: StreamTurnForkOpts): AsyncGenerator<Event> {
+  const { sessionId, team, node, history, depth } = opts
+  const messages = buildMessages(opts.systemPromptOverride, history)
+
+  const systemChars = opts.systemPromptOverride.length
+  const toolsChars = opts.toolsOverride.length > 0 ? JSON.stringify(opts.toolsOverride).length : 0
+  let historyChars = 0
+  for (const m of history) {
+    if (typeof m.content === 'string') historyChars += m.content.length
+    else if (Array.isArray(m.content)) historyChars += JSON.stringify(m.content).length
+    if (Array.isArray(m.tool_calls)) historyChars += JSON.stringify(m.tool_calls).length
+  }
+
+  const textBuf: string[] = []
+  let sawToolCall = false
+  let stopReason = 'stop'
+
+  for await (const delta of stream(
+    opts.providerId,
+    opts.model,
+    messages,
+    opts.toolsOverride.length > 0 ? opts.toolsOverride : undefined,
+    { useExactTools: true, overrideSystem: opts.systemPromptOverride },
+  )) {
+    if (delta.kind === 'text') {
+      textBuf.push(delta.text)
+      yield makeEvent('token', sessionId, { text: delta.text }, { depth, node_id: node.id })
+    } else if (delta.kind === 'tool_call') {
+      sawToolCall = true
+    } else if (delta.kind === 'usage') {
+      try {
+        const slugs = state().teamSlugs.get(sessionId) ?? null
+        recordUsage({
+          sessionId,
+          companyId: slugs ? slugs[0] : null,
+          teamId: team.id,
+          agentId: node.id,
+          agentRole: node.role,
+          providerId: opts.providerId,
+          model: opts.model,
+          inputTokens: delta.input_tokens ?? 0,
+          outputTokens: delta.output_tokens ?? 0,
+          cacheReadTokens: delta.cache_read_tokens ?? 0,
+          cacheWriteTokens: delta.cache_write_tokens ?? 0,
+          systemChars,
+          toolsChars,
+          historyChars,
+        })
+      } catch {
+        /* swallow */
+      }
+    } else if (delta.kind === 'stop') {
+      stopReason = delta.reason ?? 'stop'
+      break
+    }
+  }
+
+  const assembledText = textBuf.join('').trim()
+  const effectiveStop = sawToolCall ? 'tool_calls' : stopReason
+  yield makeEvent(
+    'node_finished',
+    sessionId,
+    { _turn_marker: true, output: assembledText, stop_reason: effectiveStop },
+    { depth, node_id: node.id },
+  )
+}
+
+interface RunNodeForkedOpts {
+  sessionId: string
+  team: TeamSpec
+  parentNode: AgentSpec
+  parentToolCallId: string
+  siblingIndex: number
+  siblingCount: number
+  node: AgentSpec
+  task: string
+  depth: number
+  snapshot: TurnSnapshot
+}
+
+/**
+ * S3 fork: first-turn run a child with the parent's byte-identical prefix,
+ * then (if the child needs more turns) transition into the normal `runNode`
+ * loop with a prior-draft carry-over.
+ *
+ * Fork children emit the same `node_started` / `token` / `node_finished`
+ * triad as `runNode` — plus a `fork.spawned` observability event.
+ */
+async function* runNodeForked(opts: RunNodeForkedOpts): AsyncGenerator<Event> {
+  const {
+    sessionId,
+    team,
+    parentNode,
+    parentToolCallId,
+    siblingIndex,
+    siblingCount,
+    node,
+    task,
+    depth,
+    snapshot,
+  } = opts
+
+  yield makeEvent(
+    'node_started',
+    sessionId,
+    { role: node.role, task, fork: true },
+    { depth, node_id: node.id },
+  )
+
+  const childHistory = buildForkedMessages({
+    snapshot,
+    parentToolCallId,
+    siblingIndex,
+    siblingCount,
+    parentRole: parentNode.role,
+    parentId: parentNode.id,
+    childRole: node.role,
+    task,
+  })
+
+  // Observability: total prefix chars (system + serialized history).
+  let prefixChars = snapshot.systemPrompt.length
+  for (const m of snapshot.history) {
+    if (typeof m.content === 'string') prefixChars += m.content.length
+    else if (Array.isArray(m.content)) prefixChars += JSON.stringify(m.content).length
+    if (Array.isArray(m.tool_calls)) prefixChars += JSON.stringify(m.tool_calls).length
+  }
+  yield makeEvent(
+    'fork.spawned',
+    sessionId,
+    {
+      parent_node_id: parentNode.id,
+      child_node_id: node.id,
+      sibling_index: siblingIndex,
+      sibling_count: siblingCount,
+      system_prompt_chars: snapshot.systemPrompt.length,
+      prefix_chars: prefixChars,
+      tool_count: snapshot.tools.length,
+    },
+    { depth, node_id: node.id },
+  )
+
+  let firstTurnOutput = ''
+  let stopReason: string | undefined
+  for await (const ev of streamTurnFork({
+    sessionId,
+    team,
+    node,
+    history: childHistory,
+    systemPromptOverride: snapshot.systemPrompt,
+    toolsOverride: snapshot.tools,
+    providerId: snapshot.providerId,
+    model: snapshot.model,
+    depth,
+  })) {
+    if (ev.kind === 'node_finished' && ev.data._turn_marker === true) {
+      stopReason = ev.data.stop_reason as string | undefined
+      firstTurnOutput = (ev.data.output as string | undefined) ?? ''
+      break
+    }
+    yield ev
+  }
+
+  if (stopReason !== 'tool_calls') {
+    yield makeEvent(
+      'node_finished',
+      sessionId,
+      { output: firstTurnOutput },
+      { depth, node_id: node.id },
+    )
+    return
+  }
+
+  // Child wants more rounds — fall through to the fresh `runNode` loop with
+  // the first-turn draft preserved in the task payload. This loses the cache
+  // benefit for round 2+, but keeps provider/tools consistency for a child
+  // that's escalating into its own delegation / skill calls.
+  yield* runNode({
+    sessionId,
+    team,
+    node,
+    task: `${task}\n\n[PRIOR DRAFT]\n${firstTurnOutput}`,
+    depth,
+  })
+}
+
 // -------- delegation --------
 
 function delegateTool(team: TeamSpec, node: AgentSpec): Tool {
@@ -1605,15 +1881,58 @@ async function* runParallelDelegation(opts: DelegationOpts): AsyncGenerator<Even
   const errs: (string | null)[] = tasks.map(() => null)
   const capturedTarget = target
 
+  // S3 fork: read the parent's turn snapshot once (same for every sibling)
+  // and decide per-child whether to fork. Mixed-provider fan-outs decide
+  // independently — claude children fork, codex children fall back to fresh.
+  const parentSnapshot = state().lastTurnSnapshot.get(sessionId)
+
   const runOne = async (i: number, taskText: string): Promise<void> => {
     try {
-      for await (const ev of runNode({
-        sessionId,
-        team,
-        node: capturedTarget,
-        task: taskText,
-        depth: depth + 1,
-      })) {
+      const decision = decideForkOrFresh({
+        snapshot: parentSnapshot,
+        parent: fromNode,
+        child: capturedTarget,
+        depth,
+      })
+
+      if (!decision.fork) {
+        queue.push({
+          index: i,
+          event: makeEvent(
+            'fork.skipped',
+            sessionId,
+            {
+              parent_node_id: fromNode.id,
+              child_node_id: capturedTarget.id,
+              reason: decision.reason ?? 'no_snapshot',
+            },
+            { depth, node_id: fromNode.id },
+          ),
+        })
+      }
+
+      const childIter = decision.fork
+        ? runNodeForked({
+            sessionId,
+            team,
+            parentNode: fromNode,
+            parentToolCallId: toolCallId,
+            siblingIndex: i,
+            siblingCount: tasks.length,
+            node: capturedTarget,
+            task: taskText,
+            depth: depth + 1,
+            snapshot: decision.snapshot!,
+          })
+        : runNode({
+            sessionId,
+            team,
+            node: capturedTarget,
+            task: taskText,
+            depth: depth + 1,
+          })
+
+      for await (const ev of childIter) {
         if (ev.data.sibling_group_id === undefined) {
           ev.data.sibling_group_id = siblingGroupId
         }

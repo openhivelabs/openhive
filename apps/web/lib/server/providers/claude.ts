@@ -182,7 +182,33 @@ function splitSystem(
     }
     out.push({ role: m.role ?? 'user', content: typeof m.content === 'string' ? m.content : '' })
   }
-  return { system, out }
+  return { system, out: mergeAdjacentUsers(out) }
+}
+
+/**
+ * Merge consecutive `role: 'user'` messages into a single block-array message.
+ * Fork children produce adjacent `user` messages (synthetic tool_result +
+ * directive) — Anthropic requires alternating roles, and even if accepted, the
+ * combine step ensures byte-identical prefix across siblings. For the non-fork
+ * path this is a no-op (no adjacent user messages are produced).
+ */
+export function mergeAdjacentUsers(out: AnthropicMessage[]): AnthropicMessage[] {
+  const merged: AnthropicMessage[] = []
+  for (const m of out) {
+    const prev = merged[merged.length - 1]
+    if (prev && prev.role === 'user' && m.role === 'user') {
+      const prevBlocks: AnthropicBlock[] = Array.isArray(prev.content)
+        ? prev.content
+        : [{ type: 'text', text: String(prev.content ?? '') }]
+      const curBlocks: AnthropicBlock[] = Array.isArray(m.content)
+        ? m.content
+        : [{ type: 'text', text: String(m.content ?? '') }]
+      prev.content = [...prevBlocks, ...curBlocks]
+    } else {
+      merged.push(m)
+    }
+  }
+  return merged
 }
 
 // -------- streaming --------
@@ -220,6 +246,14 @@ export interface StreamOpts {
   tools?: ToolSpec[]
   providerId?: string
   maxTokens?: number
+  /** S3 fork: skip any tool-order optimization so sibling payloads stay
+   *  byte-identical for Anthropic prompt-cache hit. Currently a sentinel —
+   *  `AnthropicCachingStrategy` already preserves input order. */
+  useExactTools?: boolean
+  /** S3 fork: replace `splitSystem`-derived system with this exact string.
+   *  Any `role: 'system'` messages are stripped before splitting so they
+   *  cannot double-inject. */
+  overrideSystem?: string
 }
 
 export async function* streamMessages(
@@ -227,17 +261,22 @@ export async function* streamMessages(
 ): AsyncIterable<Record<string, unknown>> {
   const providerId = opts.providerId ?? 'claude-code'
   const access = await getAccessToken(providerId)
-  const { system, out } = splitSystem(opts.messages)
+  const messagesForSplit = opts.overrideSystem
+    ? opts.messages.filter((m) => m.role !== 'system')
+    : opts.messages
+  const { system, out } = splitSystem(messagesForSplit)
+  const finalSystem = opts.overrideSystem ?? system
 
   // Caching strategy owns the payload shape — cache_control markers on
   // (system, tools[last], messages[last]) land here without touching
   // the stream loop below.
   const payload = cachingStrategy.applyToRequest({
-    system,
+    system: finalSystem,
     messages: out,
     tools: opts.tools && opts.tools.length > 0 ? opts.tools : null,
     model: opts.model,
     maxTokens: opts.maxTokens ?? 4096,
+    useExactTools: opts.useExactTools,
   })
 
   const resp = await fetch(MESSAGES_URL, {

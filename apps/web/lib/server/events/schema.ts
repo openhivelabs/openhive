@@ -34,6 +34,9 @@ export type EventKind =
   | 'autocompact.disabled'
   // A2 — lifecycle hooks
   | 'hook.invoked'
+  // S3 — parallel fork
+  | 'fork.spawned'
+  | 'fork.skipped'
 
 export interface Event {
   kind: EventKind

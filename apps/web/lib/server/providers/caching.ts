@@ -41,6 +41,9 @@ export interface AnthropicRequest {
   tools: ToolSpec[] | null
   model: string
   maxTokens: number
+  /** S3 fork sentinel — reserved for future reorder guards. Currently
+   *  inert: the strategy already preserves input order. */
+  useExactTools?: boolean
 }
 
 export interface AnthropicPayload {
