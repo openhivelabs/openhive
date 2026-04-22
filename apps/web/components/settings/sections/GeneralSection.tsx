@@ -1,5 +1,3 @@
-'use client'
-
 import { useEffect, useState } from 'react'
 import { SectionHeader, SettingRow } from '@/components/settings/SettingsShell'
 import { useT, type Locale } from '@/lib/i18n'

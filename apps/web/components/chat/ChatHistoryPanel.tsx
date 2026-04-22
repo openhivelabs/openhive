@@ -1,5 +1,3 @@
-'use client'
-
 import { ChatCircleText, Plus } from '@phosphor-icons/react'
 import { useT } from '@/lib/i18n'
 

@@ -1,5 +1,3 @@
-'use client'
-
 import {
   Copy,
   DownloadSimple,
@@ -21,8 +19,8 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
-import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   downloadUrl,
   fetchArtifactsDetailed,
@@ -704,7 +702,7 @@ function Preview({
           <dd className="text-neutral-700 dark:text-neutral-300 min-w-0">
             {sessionHref ? (
               <Link
-                href={sessionHref}
+                to={sessionHref}
                 className="text-blue-600 dark:text-blue-400 hover:underline break-words"
               >
                 {sessionTitle ?? artifact.sessionId}

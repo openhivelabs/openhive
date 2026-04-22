@@ -1,5 +1,3 @@
-'use client'
-
 import { DownloadSimple, Trash, X } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { useEffect, useState } from 'react'

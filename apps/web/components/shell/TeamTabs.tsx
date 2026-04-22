@@ -1,9 +1,6 @@
-'use client'
-
 import { Archive, ChartBar, ListBullets, Network } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
-import Link from 'next/link'
-import { useSelectedLayoutSegment } from 'next/navigation'
+import { Link, useLocation } from 'react-router-dom'
 import { useT } from '@/lib/i18n'
 
 const TABS = [
@@ -31,7 +28,12 @@ const SEGMENT_TO_TAB: Record<string, (typeof TABS)[number]['id']> = {
 
 export function TeamTabs({ companySlug, teamSlug }: TeamTabsProps) {
   const t = useT()
-  const raw = useSelectedLayoutSegment() ?? 'dashboard'
+  const { pathname } = useLocation()
+  // Extract the first path segment AFTER `/${companySlug}/${teamSlug}/`.
+  // Previously `useSelectedLayoutSegment()` from Next gave us this value.
+  const prefix = `/${companySlug}/${teamSlug}/`
+  const rest = pathname.startsWith(prefix) ? pathname.slice(prefix.length) : ''
+  const raw = rest.split('/')[0] || 'dashboard'
   const segment = SEGMENT_TO_TAB[raw] ?? raw
   return (
     <nav className="h-[42px] shrink-0 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3 flex items-center justify-center gap-1">
@@ -41,7 +43,7 @@ export function TeamTabs({ companySlug, teamSlug }: TeamTabsProps) {
         return (
           <Link
             key={id}
-            href={`/${companySlug}/${teamSlug}/${id}`}
+            to={`/${companySlug}/${teamSlug}/${id}`}
             title={label}
             aria-label={label}
             className={clsx(

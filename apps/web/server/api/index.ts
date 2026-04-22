@@ -1,0 +1,33 @@
+import { Hono } from 'hono'
+import { agentFrames } from './agent-frames'
+import { agents } from './agents'
+import { ai } from './ai'
+import { artifacts } from './artifacts'
+import { companies } from './companies'
+import { frames } from './frames'
+import { health } from './health'
+import { mcp } from './mcp'
+import { panelTemplates } from './panel-templates'
+import { panels } from './panels'
+import { providers } from './providers'
+import { sessions } from './sessions'
+import { tasks } from './tasks'
+import { teams } from './teams'
+import { usage } from './usage'
+
+export const api = new Hono()
+api.route('/health', health)
+api.route('/companies', companies)
+api.route('/agents', agents)
+api.route('/agent-frames', agentFrames)
+api.route('/ai', ai)
+api.route('/artifacts', artifacts)
+api.route('/frames', frames)
+api.route('/mcp', mcp)
+api.route('/panel-templates', panelTemplates)
+api.route('/panels', panels)
+api.route('/providers', providers)
+api.route('/sessions', sessions)
+api.route('/tasks', tasks)
+api.route('/teams', teams)
+api.route('/usage', usage)

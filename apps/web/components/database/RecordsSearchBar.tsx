@@ -1,5 +1,3 @@
-'use client'
-
 import { useT } from '@/lib/i18n'
 import { MagnifyingGlass, Sparkle, X } from '@phosphor-icons/react'
 import { clsx } from 'clsx'

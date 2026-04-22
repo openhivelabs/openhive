@@ -1,5 +1,3 @@
-'use client'
-
 import { Handle, type Node, type NodeProps, Position } from '@xyflow/react'
 import { clsx } from 'clsx'
 import { Crown, User } from '@phosphor-icons/react'

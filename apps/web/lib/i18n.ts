@@ -1,5 +1,3 @@
-'use client'
-
 import { useAppStore } from './stores/useAppStore'
 
 export const locales = ['en', 'ko'] as const

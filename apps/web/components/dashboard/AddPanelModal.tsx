@@ -1,5 +1,3 @@
-'use client'
-
 import { CircleNotch, Sparkle, Warning, X } from '@phosphor-icons/react'
 import { useEffect, useMemo, useState } from 'react'
 import { PanelShape } from '@/components/dashboard/BoundPanel'

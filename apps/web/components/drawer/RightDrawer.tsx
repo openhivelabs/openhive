@@ -1,5 +1,3 @@
-'use client'
-
 import { CalendarBlank, ChatCircleText, Files, Table } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import type { DrawerTab } from '@/lib/types'

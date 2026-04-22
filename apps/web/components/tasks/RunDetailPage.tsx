@@ -1,5 +1,3 @@
-'use client'
-
 import {
   ArrowLeft,
   ArrowUp,
@@ -14,8 +12,8 @@ import {
   Wrench,
   X,
 } from '@phosphor-icons/react'
-import { useParams, useRouter } from 'next/navigation'
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { flushSync } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -215,7 +213,7 @@ export function RunDetailPage() {
     teamSlug: string
     sessionId: string
   }>()
-  const router = useRouter()
+  const navigate = useNavigate()
   const t = useT()
   const team = useCurrentTeam()
   // Left sidebar (TeamPanel) is 220px expanded / 52px collapsed; right
@@ -550,7 +548,7 @@ export function RunDetailPage() {
         <div>해당 실행 기록을 찾을 수 없습니다.</div>
         <button
           type="button"
-          onClick={() => router.push(backHref)}
+          onClick={() => navigate(backHref)}
           className="text-neutral-900 underline"
         >
           태스크 목록으로
@@ -573,7 +571,7 @@ export function RunDetailPage() {
         <div className="flex items-center gap-3 min-w-0">
           <button
             type="button"
-            onClick={() => router.push(backHref)}
+            onClick={() => navigate(backHref)}
             aria-label={t('tasks.backToList')}
             title={t('tasks.backToList')}
             className="inline-flex items-center justify-center w-7 h-7 rounded text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800"

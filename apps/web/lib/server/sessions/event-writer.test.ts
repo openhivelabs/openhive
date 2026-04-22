@@ -8,9 +8,14 @@ import {
   FLUSH_THRESHOLD,
   __resetForTests,
   __setPathResolver,
+  dropIdleQueues,
   enqueueEvent,
   flushAll,
+  flushIntervalMs,
   flushSession,
+  flushThreshold,
+  getEventWriterMetrics,
+  hasQueueForTest,
 } from './event-writer'
 
 let tmpRoot: string
@@ -22,7 +27,10 @@ function fileFor(sessionId: string): string {
 function readLines(sessionId: string): string[] {
   const p = fileFor(sessionId)
   if (!fs.existsSync(p)) return []
-  return fs.readFileSync(p, 'utf8').split('\n').filter((l) => l.length > 0)
+  return fs
+    .readFileSync(p, 'utf8')
+    .split('\n')
+    .filter((l) => l.length > 0)
 }
 
 beforeEach(() => {
@@ -32,7 +40,43 @@ beforeEach(() => {
 
 afterEach(() => {
   __resetForTests()
-  try { fs.rmSync(tmpRoot, { recursive: true, force: true }) } catch { /* ignore */ }
+  try {
+    fs.rmSync(tmpRoot, { recursive: true, force: true })
+  } catch {
+    /* ignore */
+  }
+})
+
+describe('event-writer env config', () => {
+  it('reads flush interval from env', () => {
+    process.env.OPENHIVE_EVENT_FLUSH_INTERVAL_MS = '250'
+    try {
+      expect(flushIntervalMs()).toBe(250)
+    } finally {
+      process.env.OPENHIVE_EVENT_FLUSH_INTERVAL_MS = undefined
+    }
+  })
+
+  it('reads flush threshold from env', () => {
+    process.env.OPENHIVE_EVENT_FLUSH_THRESHOLD = '20'
+    try {
+      expect(flushThreshold()).toBe(20)
+    } finally {
+      process.env.OPENHIVE_EVENT_FLUSH_THRESHOLD = undefined
+    }
+  })
+
+  it('invalid env falls back to default', () => {
+    process.env.OPENHIVE_EVENT_FLUSH_INTERVAL_MS = 'abc'
+    process.env.OPENHIVE_EVENT_FLUSH_THRESHOLD = '0'
+    try {
+      expect(flushIntervalMs()).toBe(100)
+      expect(flushThreshold()).toBe(10)
+    } finally {
+      process.env.OPENHIVE_EVENT_FLUSH_INTERVAL_MS = undefined
+      process.env.OPENHIVE_EVENT_FLUSH_THRESHOLD = undefined
+    }
+  })
 })
 
 describe('event-writer', () => {
@@ -92,6 +136,27 @@ describe('event-writer', () => {
 
     expect(readLines('a')).toHaveLength(1)
     expect(readLines('b')).toHaveLength(2)
+  })
+
+  it('tracks flush metrics', async () => {
+    __resetForTests()
+    enqueueEvent('s-metrics', JSON.stringify({ a: 1 }))
+    enqueueEvent('s-metrics', JSON.stringify({ a: 2 }))
+    await flushSession('s-metrics')
+    const m = getEventWriterMetrics()
+    expect(m.flushes).toBe(1)
+    expect(m.lines).toBe(2)
+    expect(m.bytes).toBeGreaterThan(0)
+    expect(m.errors).toBe(0)
+  })
+
+  it('drops idle queues', async () => {
+    __resetForTests()
+    enqueueEvent('s-drop', JSON.stringify({}))
+    await flushSession('s-drop')
+    expect(hasQueueForTest('s-drop')).toBe(true)
+    dropIdleQueues()
+    expect(hasQueueForTest('s-drop')).toBe(false)
   })
 
   it('preserves FIFO order across mixed timer and threshold triggers', async () => {

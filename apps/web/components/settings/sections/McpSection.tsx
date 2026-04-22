@@ -1,5 +1,3 @@
-'use client'
-
 import { CheckCircle, CircleNotch, Plug, Plus, Trash, Warning, X } from '@phosphor-icons/react'
 import { useEffect, useMemo, useState } from 'react'
 import { BRAND_COLORS, BrandIcon, hasBrand } from '@/components/mcp/BrandIcon'

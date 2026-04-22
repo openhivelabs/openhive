@@ -8,6 +8,7 @@ out/
 
 # Build outputs
 dist/
+dist-server/
 build/
 *.tsbuildinfo
 

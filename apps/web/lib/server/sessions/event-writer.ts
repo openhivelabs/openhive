@@ -19,8 +19,34 @@ import path from 'node:path'
 
 import { sessionsRoot } from '../paths'
 
+/** @deprecated use flushIntervalMs() */
 export const FLUSH_INTERVAL_MS = 100
+/** @deprecated use flushThreshold() */
 export const FLUSH_THRESHOLD = 10
+
+/** Read flush interval (ms) from env each call. Invalid/≤0 → 100. */
+export function flushIntervalMs(): number {
+  const v = Number.parseInt(process.env.OPENHIVE_EVENT_FLUSH_INTERVAL_MS ?? '', 10)
+  return Number.isFinite(v) && v > 0 ? v : 100
+}
+
+/** Read flush threshold from env each call. Invalid/≤0 → 10. */
+export function flushThreshold(): number {
+  const v = Number.parseInt(process.env.OPENHIVE_EVENT_FLUSH_THRESHOLD ?? '', 10)
+  return Number.isFinite(v) && v > 0 ? v : 10
+}
+
+const metrics = { flushes: 0, lines: 0, bytes: 0, errors: 0 }
+
+/** Snapshot of flush metrics (flushes, total lines, total bytes, error count). */
+export function getEventWriterMetrics(): {
+  flushes: number
+  lines: number
+  bytes: number
+  errors: number
+} {
+  return { ...metrics }
+}
 
 interface Queue {
   buf: string[]
@@ -57,7 +83,7 @@ export function enqueueEvent(sessionId: string, rowJsonl: string): void {
   const q = ensureQueue(sessionId)
   q.buf.push(rowJsonl)
 
-  if (q.buf.length >= FLUSH_THRESHOLD) {
+  if (q.buf.length >= flushThreshold()) {
     if (q.timer) {
       clearTimeout(q.timer)
       q.timer = null
@@ -71,7 +97,7 @@ export function enqueueEvent(sessionId: string, rowJsonl: string): void {
       const cur = queues.get(sessionId)
       if (cur) cur.timer = null
       void triggerFlush(sessionId)
-    }, FLUSH_INTERVAL_MS)
+    }, flushIntervalMs())
     // Don't block process shutdown on the timer; flushAll() drains on SIGTERM.
     q.timer.unref?.()
   }
@@ -97,15 +123,35 @@ async function doFlush(sessionId: string): Promise<void> {
   try {
     await fsp.mkdir(path.dirname(filePath), { recursive: true })
     await fsp.appendFile(filePath, payload, 'utf8')
+    metrics.flushes += 1
+    metrics.lines += lines.length
+    metrics.bytes += Buffer.byteLength(payload, 'utf8')
   } catch (exc) {
     // Fallback: try to write synchronously so we don't silently lose data.
     try {
       fs.mkdirSync(path.dirname(filePath), { recursive: true })
       fs.appendFileSync(filePath, payload, 'utf8')
+      metrics.flushes += 1
+      metrics.lines += lines.length
+      metrics.bytes += Buffer.byteLength(payload, 'utf8')
     } catch (exc2) {
+      metrics.errors += 1
       console.error('event-writer: flush failed', sessionId, exc, exc2)
     }
   }
+}
+
+/** Drop sessions whose queues are empty and have no pending timer.
+ *  Used by session finalize paths to keep the queue map bounded. */
+export function dropIdleQueues(): void {
+  for (const [id, q] of queues) {
+    if (q.buf.length === 0 && !q.timer) queues.delete(id)
+  }
+}
+
+/** Test helper: presence check for a given session's queue. */
+export function hasQueueForTest(id: string): boolean {
+  return queues.has(id)
 }
 
 /** Drain any pending events for one session. Resolves once the last
@@ -134,4 +180,8 @@ export function __resetForTests(): void {
     if (q.timer) clearTimeout(q.timer)
   }
   queues.clear()
+  metrics.flushes = 0
+  metrics.lines = 0
+  metrics.bytes = 0
+  metrics.errors = 0
 }

@@ -38,15 +38,66 @@ interface ManagerState {
   procs: Map<string, Proc>
 }
 
+const MCP_MANAGER_KEY = Symbol.for('openhive.mcp.manager')
+
 const globalForManager = globalThis as unknown as {
-  __openhive_mcp_manager_state?: ManagerState
+  [MCP_MANAGER_KEY]?: ManagerState
 }
 
 function state(): ManagerState {
-  if (!globalForManager.__openhive_mcp_manager_state) {
-    globalForManager.__openhive_mcp_manager_state = { procs: new Map() }
+  if (!globalForManager[MCP_MANAGER_KEY]) {
+    globalForManager[MCP_MANAGER_KEY] = { procs: new Map() }
   }
-  return globalForManager.__openhive_mcp_manager_state
+  return globalForManager[MCP_MANAGER_KEY] as ManagerState
+}
+
+/**
+ * Lazy singleton façade. The underlying module functions already use a
+ * globalThis-backed, lazily-initialised `state()` — calling `getMcpManager()`
+ * materialises that state (empty `procs` Map) and returns an object binding
+ * the public surface. No subprocesses are spawned until `getTools()` /
+ * `callTool()` is invoked on a configured server.
+ */
+export interface McpManager {
+  getTools: typeof getTools
+  callTool: typeof callTool
+  restart: typeof restart
+  shutdownAll: typeof shutdownAll
+  statusSnapshot: typeof statusSnapshot
+  testConnection: typeof testConnection
+}
+
+const MCP_FACADE_KEY = Symbol.for('openhive.mcp.manager.facade')
+
+const globalForFacade = globalThis as unknown as {
+  [MCP_FACADE_KEY]?: McpManager
+}
+
+export function getMcpManager(): McpManager {
+  let mgr = globalForFacade[MCP_FACADE_KEY]
+  if (!mgr) {
+    // Materialise the underlying state lazily as well.
+    state()
+    mgr = {
+      getTools,
+      callTool,
+      restart,
+      shutdownAll,
+      statusSnapshot,
+      testConnection,
+    }
+    globalForFacade[MCP_FACADE_KEY] = mgr
+  }
+  return mgr
+}
+
+export function hasMcpManagerForTest(): boolean {
+  return globalForFacade[MCP_FACADE_KEY] !== undefined
+}
+
+export function __resetMcpManagerForTests(): void {
+  globalForFacade[MCP_FACADE_KEY] = undefined
+  globalForManager[MCP_MANAGER_KEY] = undefined
 }
 
 function ensureProc(name: string): Proc {
@@ -91,10 +142,7 @@ async function startClient(server: mcpConfig.ServerConfig): Promise<{
   transport: StdioClientTransport
 }> {
   const transport = buildTransport(server)
-  const client = new Client(
-    { name: 'openhive', version: '0.1.0' },
-    { capabilities: {} },
-  )
+  const client = new Client({ name: 'openhive', version: '0.1.0' }, { capabilities: {} })
   await withTimeout(client.connect(transport), SPAWN_TIMEOUT_MS, 'mcp connect')
   return { client, transport }
 }
@@ -134,11 +182,10 @@ async function listCachedTools(proc: Proc): Promise<ToolInfo[]> {
   proc.toolsCache = (res.tools ?? []).map((t) => ({
     name: t.name,
     description: t.description ?? '',
-    inputSchema:
-      (t.inputSchema as Record<string, unknown> | undefined) ?? {
-        type: 'object',
-        properties: {},
-      },
+    inputSchema: (t.inputSchema as Record<string, unknown> | undefined) ?? {
+      type: 'object',
+      properties: {},
+    },
   }))
   return proc.toolsCache
 }
@@ -243,17 +290,10 @@ export async function testConnection(
   server: mcpConfig.ServerConfig,
 ): Promise<{ ok: boolean; tools?: { name: string; description: string }[]; error?: string }> {
   const transport = buildTransport(server)
-  const client = new Client(
-    { name: 'openhive-test', version: '0.1.0' },
-    { capabilities: {} },
-  )
+  const client = new Client({ name: 'openhive-test', version: '0.1.0' }, { capabilities: {} })
   try {
     await withTimeout(client.connect(transport), SPAWN_TIMEOUT_MS, 'mcp connect')
-    const res = await withTimeout(
-      client.listTools(),
-      SPAWN_TIMEOUT_MS,
-      'mcp list_tools',
-    )
+    const res = await withTimeout(client.listTools(), SPAWN_TIMEOUT_MS, 'mcp list_tools')
     const tools = (res.tools ?? []).map((t) => ({
       name: t.name,
       description: t.description ?? '',
@@ -274,4 +314,3 @@ export async function testConnection(
     }
   }
 }
-

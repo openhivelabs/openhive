@@ -1,10 +1,7 @@
-'use client'
-
 import { Buildings, GearSix, Plus, SidebarSimple } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
-import Link from 'next/link'
-import { useSelectedLayoutSegment } from 'next/navigation'
 import { useState } from 'react'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import { CompanySettingsModal } from '@/components/modals/CompanySettingsModal'
 import { NewTeamModal } from '@/components/modals/NewTeamModal'
 import { TeamSettingsModal } from '@/components/modals/TeamSettingsModal'
@@ -19,7 +16,17 @@ import { useAppStore } from '@/lib/stores/useAppStore'
  */
 export function DualSidebar() {
   const t = useT()
-  const segment = useSelectedLayoutSegment()
+  const { pathname } = useLocation()
+  const routeParams = useParams<{ companySlug?: string; teamSlug?: string }>()
+  // Derive the first segment after `/${companySlug}/${teamSlug}/` — equivalent
+  // to Next's useSelectedLayoutSegment() inside the team layout.
+  let segment: string | null = null
+  if (routeParams.companySlug && routeParams.teamSlug) {
+    const prefix = `/${routeParams.companySlug}/${routeParams.teamSlug}/`
+    if (pathname.startsWith(prefix)) {
+      segment = pathname.slice(prefix.length).split('/')[0] || null
+    }
+  }
   const companies = useAppStore((s) => s.companies)
   const currentCompanyId = useAppStore((s) => s.currentCompanyId)
   const currentTeamId = useAppStore((s) => s.currentTeamId)
@@ -69,7 +76,7 @@ export function DualSidebar() {
                 return (
                   <Link
                     key={team.id}
-                    href={`/${selectedCompany.slug}/${team.slug}/${tab}`}
+                    to={`/${selectedCompany.slug}/${team.slug}/${tab}`}
                     title={team.name}
                     className={clsx(
                       'w-9 h-9 rounded-md flex items-center justify-center shrink-0 cursor-pointer',
@@ -137,7 +144,7 @@ export function DualSidebar() {
                       )}
                     >
                       <Link
-                        href={`/${selectedCompany.slug}/${team.slug}/${tab}`}
+                        to={`/${selectedCompany.slug}/${team.slug}/${tab}`}
                         className={clsx(
                           'flex-1 flex items-center gap-2 px-2 py-1.5 text-[15px] min-w-0 cursor-pointer',
                           isActive

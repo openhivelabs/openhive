@@ -1,5 +1,3 @@
-'use client'
-
 import { REGISTRY } from '@/lib/primitives/registry'
 import type { PrimitiveSpec } from '@/lib/primitives/types'
 

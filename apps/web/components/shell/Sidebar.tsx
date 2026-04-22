@@ -1,5 +1,3 @@
-'use client'
-
 import { Buildings, CaretRight, GearSix, Plus } from '@phosphor-icons/react'
 import { TeamIcon } from '@/components/shell/TeamIcon'
 import { clsx } from 'clsx'

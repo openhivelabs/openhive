@@ -1,5 +1,3 @@
-'use client'
-
 import { FileText, Info, Warning } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import type { ReactNode } from 'react'

@@ -1,5 +1,3 @@
-'use client'
-
 import { ArrowSquareOut, CheckCircle, CircleNotch, Plugs, Trash } from '@phosphor-icons/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SectionHeader } from '@/components/settings/SettingsShell'

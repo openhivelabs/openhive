@@ -1,5 +1,3 @@
-'use client'
-
 import { useEffect } from 'react'
 
 /** Attach a document-level ESC listener that fires onClose while `active` is truthy. */

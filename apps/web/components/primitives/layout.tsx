@@ -1,5 +1,3 @@
-'use client'
-
 import { clsx } from 'clsx'
 import { type ReactNode, useState } from 'react'
 import type { PrimitiveCatalogEntry, PrimitiveSpec } from '@/lib/primitives/types'

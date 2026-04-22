@@ -1,5 +1,3 @@
-'use client'
-
 import type { ComponentType } from 'react'
 import type { IconBaseProps } from 'react-icons'
 import { SiGmail, SiHubspot, SiNotion, SiSlack, SiSupabase } from 'react-icons/si'

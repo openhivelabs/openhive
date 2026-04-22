@@ -1,9 +1,6 @@
-'use client'
-
 import { GearSix, Plus } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
-import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { Link, useNavigate } from 'react-router-dom'
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
 
@@ -13,7 +10,7 @@ import { useAppStore } from '@/lib/stores/useAppStore'
  */
 export function CompanyRail() {
   const t = useT()
-  const router = useRouter()
+  const navigate = useNavigate()
   const companies = useAppStore((s) => s.companies)
   const currentCompanyId = useAppStore((s) => s.currentCompanyId)
   const setCompany = useAppStore((s) => s.setCompany)
@@ -32,7 +29,7 @@ export function CompanyRail() {
               onClick={() => {
                 setCompany(company.id)
                 const firstTeam = company.teams[0]
-                if (firstTeam) router.push(`/${company.slug}/${firstTeam.slug}/dashboard`)
+                if (firstTeam) navigate(`/${company.slug}/${firstTeam.slug}/dashboard`)
               }}
               className={clsx(
                 'w-9 h-9 rounded-md flex items-center justify-center text-[14px] font-semibold cursor-pointer shrink-0',
@@ -48,14 +45,14 @@ export function CompanyRail() {
         <button
           type="button"
           aria-label={t('sidebar.addCompany')}
-          onClick={() => router.push('/onboarding')}
+          onClick={() => navigate('/onboarding')}
           className="w-9 h-9 rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 text-neutral-400 hover:text-neutral-700 hover:border-neutral-500 flex items-center justify-center cursor-pointer"
         >
           <Plus className="w-4 h-4" />
         </button>
       </div>
       <Link
-        href="/settings"
+        to="/settings"
         aria-label={t('sidebar.settings')}
         title={t('sidebar.settings')}
         className="mx-auto mb-2 w-9 h-9 rounded-md flex items-center justify-center text-neutral-500 hover:text-neutral-900 hover:bg-neutral-200/60 dark:hover:bg-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100"
