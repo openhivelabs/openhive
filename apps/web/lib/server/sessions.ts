@@ -59,6 +59,10 @@ export interface SessionMeta {
   /** User-pinned sessions sort to the top of the inbox. Persisted so it
    *  survives reload / device switch. */
   pinned?: boolean
+  /** Epoch ms of when the user first opened this session's result. Persisted
+   *  so "new result" badges don't flash back on every page reload or server
+   *  restart. null / missing = never viewed. Set by PATCH {viewed:true}. */
+  viewed_at?: number | null
   /** TeamSpec at session-start time. Needed on resume to reconstruct the
    *  engine state for a follow-up message after the original process died.
    *  Optional on the type so legacy sessions (pre-resume-refactor) still

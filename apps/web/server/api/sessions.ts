@@ -408,16 +408,24 @@ sessions.get('/:sessionId', (c) => {
   })
 })
 
-// PATCH /api/sessions/:sessionId — mutate allowlisted meta (title, pinned)
+// PATCH /api/sessions/:sessionId — mutate allowlisted meta (title, pinned, viewed)
 sessions.patch('/:sessionId', async (c) => {
   const sessionId = c.req.param('sessionId')
-  let body: { title?: string | null; pinned?: boolean }
+  let body: { title?: string | null; pinned?: boolean; viewed?: boolean }
   try {
-    body = (await c.req.json()) as { title?: string | null; pinned?: boolean }
+    body = (await c.req.json()) as {
+      title?: string | null
+      pinned?: boolean
+      viewed?: boolean
+    }
   } catch {
     return c.json({ detail: 'invalid json' }, 400)
   }
-  const patch: Partial<{ title: string | null; pinned: boolean }> = {}
+  const patch: Partial<{
+    title: string | null
+    pinned: boolean
+    viewed_at: number | null
+  }> = {}
   if ('title' in body) {
     if (body.title === null) patch.title = null
     else if (typeof body.title === 'string') {
@@ -427,6 +435,9 @@ sessions.patch('/:sessionId', async (c) => {
   }
   if ('pinned' in body && typeof body.pinned === 'boolean') {
     patch.pinned = body.pinned
+  }
+  if ('viewed' in body && typeof body.viewed === 'boolean') {
+    patch.viewed_at = body.viewed ? Date.now() : null
   }
   if (Object.keys(patch).length === 0) {
     return c.json({ detail: 'no fields to update' }, 400)

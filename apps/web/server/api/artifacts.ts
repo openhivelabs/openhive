@@ -7,6 +7,15 @@ import { Hono } from 'hono'
 
 export const artifacts = new Hono()
 
+// RFC 5987-encoded Content-Disposition. Includes an ASCII-safe `filename=`
+// fallback (non-Latin-1 chars stripped) plus `filename*=UTF-8''...` so
+// browsers recover the original name. Raw UTF-8 in `filename=` crashes
+// undici's ByteString validation on Node 18+.
+function contentDisposition(disposition: 'attachment' | 'inline', name: string) {
+  const asciiFallback = name.replace(/[^\x20-\x7e]+/g, '_').replace(/["\\]/g, '_')
+  return `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(name)}`
+}
+
 const MIME_BY_EXT: Record<string, string> = {
   pdf: 'application/pdf',
   png: 'image/png',
@@ -69,7 +78,7 @@ artifacts.get('/by-uri', (c) => {
   const disposition = c.req.query('disposition') === 'inline' ? 'inline' : 'attachment'
   return c.body(stream, 200, {
     'Content-Type': mime,
-    'Content-Disposition': `${disposition}; filename="${filename}"`,
+    'Content-Disposition': contentDisposition(disposition, filename),
     'Content-Length': String(fs.statSync(abs).size),
   })
 })
@@ -87,7 +96,7 @@ artifacts.get('/:artifactId/download', (c) => {
   const stream = fs.createReadStream(art.path) as unknown as ReadableStream
   return c.body(stream, 200, {
     'Content-Type': art.mime ?? 'application/octet-stream',
-    'Content-Disposition': `attachment; filename="${path.basename(art.filename)}"`,
+    'Content-Disposition': contentDisposition('attachment', path.basename(art.filename)),
     'Content-Length': String(art.size ?? fs.statSync(art.path).size),
   })
 })

@@ -44,6 +44,7 @@ interface ServerSessionRow {
   finished_at: number | null
   title?: string | null
   pinned?: boolean
+  viewed_at?: number | null
 }
 
 function mapServerStatus(row: ServerSessionRow): Session['status'] {
@@ -70,6 +71,7 @@ function rowToSession(row: ServerSessionRow): Session {
     messages: [],
     title: row.title ?? null,
     pinned: row.pinned ?? false,
+    viewedAt: row.viewed_at ? new Date(row.viewed_at).toISOString() : undefined,
   }
 }
 
@@ -393,12 +395,17 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
   },
 
   markViewed: (id) => {
+    const existing = get().sessions.find((x) => x.id === id)
+    if (existing?.viewedAt) return
     const now = new Date().toISOString()
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id && !x.viewedAt ? { ...x, viewedAt: now } : x,
       ),
     }))
+    // Persist server-side so the flag survives reload / server restart. Other
+    // meta mutations (pin/title) already do this; viewed was missed until now.
+    void patchSession(id, { viewed: true })
   },
 
   removeSession: (id) => {
