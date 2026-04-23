@@ -390,6 +390,7 @@ sessions.get('/:sessionId', (c) => {
     filename: a.filename,
     size: a.size,
     mime: a.mime,
+    created_at: a.created_at,
   }))
   const usage = usageForSession(sessionId)
   const pendingAsk =

@@ -844,10 +844,22 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     const manifestBlock = renderSessionArtifacts(
       artifactRecords.map((r) => toManifestEntry(r, sessionId)),
     )
+    // Engine-injected deliverables policy — runs for Lead only. Without this,
+    // a "PDF 만들어줘" request routinely produced PDF + CSV + summary.txt +
+    // sources.txt + assumptions.txt (session df76dd49 is the canonical
+    // example). Gating on `depth === 0` keeps it out of sub-agent prompts
+    // where the policy is enforced via briefing in `delegate_to`. We append
+    // it to the teamBlock prefix so it lives INSIDE the system prompt but
+    // doesn't mutate user-authored persona bodies.
+    const deliverablesPolicy =
+      depth === 0
+        ? `# Files & Deliverables\nProduce ONLY the file(s) the user explicitly asked for. "PDF 만들어줘" = one PDF, not a PDF plus a CSV plus a summary.txt plus a sources.txt. If supporting data helps the answer, fold it into the single requested file or into your prose reply — do not spin off auxiliary files the user didn't ask for. When in doubt about how many files, default to ONE.\n\nDo not enumerate filenames or paste \`artifact://\` links in your reply — the UI attaches files automatically below your message. Just answer the question.\n`
+        : ''
     const prefix =
       (manifestBlock ? manifestBlock + '\n' : '') +
       (todosBlock ? todosBlock + '\n' : '') +
-      (showHints ? hintsBlock + '\n' : '')
+      (showHints ? hintsBlock + '\n' : '') +
+      (deliverablesPolicy ? deliverablesPolicy + '\n' : '')
     const teamBlock = prefix ? prefix + staticTeamBlock : staticTeamBlock
     return composeSystemPrompt(personaBody, agentSkills, teamBlock)
   }

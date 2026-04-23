@@ -17,7 +17,6 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { flushSync } from 'react-dom'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { ArtifactLink } from '@/components/chat/ArtifactLink'
 import { AskInlineCard } from '@/components/tasks/AskInlineCard'
 import { useT } from '@/lib/i18n'
 import { postAnswer, type AskUserQuestion } from '@/lib/api/sessions'
@@ -29,6 +28,10 @@ interface SessionArtifact {
   filename: string
   size: number | null
   mime: string | null
+  /** Epoch ms from the server. Used to slice artifacts per assistant message
+   *  in buildChat — Claude-Desktop-style "attachments appear below the
+   *  message that produced them". */
+  created_at?: number | null
 }
 
 interface SessionUsage {
@@ -102,6 +105,12 @@ type ChatItem =
       id: string
       author: string
       text: string
+      /** Artifacts produced during the turn that ended with this assistant
+       *  message. Rendered as a card stack BELOW the prose, Claude-Desktop-
+       *  style, so the user sees "here's the answer, here are the files"
+       *  without the agent having to manually list download links in the
+       *  body. */
+      attachments: SessionArtifact[]
     }
   | {
       kind: 'tool'
@@ -146,6 +155,11 @@ function buildChat(
   if (summary.goal) {
     out.push({ kind: 'user', id: 'goal', text: summary.goal })
   }
+  // Track the timestamp of each assistant message as we go so we can slice
+  // artifacts into "created between prev assistant and this one" buckets.
+  // Assistant messages without an explicit ts (e.g. the `final` legacy
+  // fallback) get Number.POSITIVE_INFINITY so they absorb any tail artifacts.
+  const assistantTsByIndex: number[] = []
   summary.transcript.forEach((e, i) => {
     const id = `t-${i}`
     switch (e.kind) {
@@ -160,7 +174,11 @@ function buildChat(
           id,
           author: agentLabel(team, e.node_id, e.agent_role ?? 'agent'),
           text: txt,
+          attachments: [],
         })
+        assistantTsByIndex.push(
+          typeof e.ts === 'number' ? e.ts : Number.POSITIVE_INFINITY,
+        )
         break
       }
       case 'tool_call':
@@ -205,12 +223,37 @@ function buildChat(
         id: 'final',
         author: team?.agents[0]?.role ?? 'lead',
         text: summary.output,
+        attachments: [],
       })
+      assistantTsByIndex.push(Number.POSITIVE_INFINITY)
     }
   }
   if (summary.error) {
     out.push({ kind: 'error', id: 'error', text: summary.error })
   }
+
+  // Attach artifacts to whichever assistant message was "the answer that
+  // produced this file" — by timestamp. An artifact with created_at T goes
+  // to the first assistant whose ts >= T (i.e. the one that wraps the tool
+  // calls that generated it). Artifacts without created_at (older sessions)
+  // fall through to the final assistant so they're still reachable.
+  const assistantItems = out.flatMap((x) =>
+    x.kind === 'assistant' ? [x] : [],
+  )
+  if (assistantItems.length > 0) {
+    const sorted = [...(summary.artifacts ?? [])].sort((a, b) => {
+      const ta = typeof a.created_at === 'number' ? a.created_at : Number.POSITIVE_INFINITY
+      const tb = typeof b.created_at === 'number' ? b.created_at : Number.POSITIVE_INFINITY
+      return ta - tb
+    })
+    for (const art of sorted) {
+      const t = typeof art.created_at === 'number' ? art.created_at : Number.POSITIVE_INFINITY
+      let idx = assistantTsByIndex.findIndex((ts) => ts >= t)
+      if (idx < 0) idx = assistantItems.length - 1
+      assistantItems[idx]!.attachments.push(art)
+    }
+  }
+
   return out
 }
 
@@ -819,6 +862,78 @@ function SidePanel({
   )
 }
 
+/**
+ * Claude-Desktop-style file attachment stack — rendered BELOW the assistant
+ * prose. Each card is a horizontal row: icon · filename + type label ·
+ * size · download affordance. Clicking anywhere on the card downloads via
+ * /api/artifacts/{id}/download.
+ */
+function AttachmentStack({ attachments }: { attachments: SessionArtifact[] }) {
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      {attachments.map((a) => (
+        <AttachmentCard key={a.id} artifact={a} />
+      ))}
+    </div>
+  )
+}
+
+const ATTACHMENT_TYPE_LABEL: Record<string, string> = {
+  pdf: '문서 · PDF',
+  docx: '문서 · Word',
+  pptx: '슬라이드 · PowerPoint',
+  xlsx: '스프레드시트 · Excel',
+  md: '문서 · Markdown',
+  txt: '텍스트 · Text',
+  json: '데이터 · JSON',
+  csv: '데이터 · CSV',
+  html: '웹 · HTML',
+  png: '이미지 · PNG',
+  jpg: '이미지 · JPEG',
+  jpeg: '이미지 · JPEG',
+  gif: '이미지 · GIF',
+  webp: '이미지 · WebP',
+  svg: '이미지 · SVG',
+}
+
+function AttachmentCard({ artifact }: { artifact: SessionArtifact }) {
+  const ext = (artifact.filename.split('.').pop() ?? '').toLowerCase()
+  const typeLabel =
+    ATTACHMENT_TYPE_LABEL[ext] ?? (ext ? `파일 · ${ext.toUpperCase()}` : '파일')
+  const size = fmtBytes(artifact.size)
+  const downloadUrl = `/api/artifacts/${artifact.id}/download`
+  return (
+    <a
+      href={downloadUrl}
+      download={artifact.filename}
+      className="group flex items-center gap-3 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-900/60 px-3.5 py-3 max-w-[560px] hover:bg-neutral-100 dark:hover:bg-neutral-800/80 transition-colors no-underline"
+      title={`Download ${artifact.filename}`}
+    >
+      <span
+        className="shrink-0 w-10 h-10 rounded-lg bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 flex items-center justify-center"
+        aria-hidden
+      >
+        <FileText className="w-5 h-5 text-neutral-500" />
+      </span>
+      <span className="flex-1 min-w-0 leading-tight">
+        <span className="block font-semibold text-[14px] text-neutral-900 dark:text-neutral-100 truncate group-hover:underline">
+          {artifact.filename}
+        </span>
+        <span className="block text-[12px] text-neutral-500 dark:text-neutral-400 mt-0.5">
+          {typeLabel}
+          {size ? ` · ${size}` : ''}
+        </span>
+      </span>
+      <span
+        className="shrink-0 p-1.5 rounded-md text-neutral-400 group-hover:text-neutral-700 group-hover:bg-neutral-200 dark:group-hover:text-neutral-200 dark:group-hover:bg-neutral-700"
+        aria-hidden
+      >
+        <DownloadSimple className="w-4 h-4" />
+      </span>
+    </a>
+  )
+}
+
 function EmptyNote({ children }: { children: ReactNode }) {
   return (
     <div className="text-[12.5px] text-neutral-400 leading-relaxed">
@@ -1073,8 +1188,14 @@ const Markdown = memo(function MarkdownInner({ text }: { text: string }) {
           ),
           em: ({ children }) => <em className="italic">{children}</em>,
           a: ({ href, children }) => {
+            // `artifact://` links are now rendered by AttachmentStack at the
+            // END of the assistant bubble (Claude-Desktop style). Inline
+            // occurrences of the filename in the body are stripped of their
+            // link affordance — the UI already tells the user "here is the
+            // file" via the card stack, so the inline mention should read
+            // as plain prose text.
             if (href && href.startsWith('artifact://')) {
-              return <ArtifactLink href={href}>{children}</ArtifactLink>
+              return <span>{children}</span>
             }
             return (
               <a
@@ -1157,6 +1278,9 @@ const ChatBubble = memo(
     return (
       <div className="text-[15.5px] text-neutral-900 dark:text-neutral-100 leading-relaxed">
         <Markdown text={item.text} />
+        {item.attachments.length > 0 && (
+          <AttachmentStack attachments={item.attachments} />
+        )}
       </div>
     )
   }
@@ -1201,7 +1325,16 @@ const ChatBubble = memo(
       return a.text === b.text && a.pending === b.pending
     }
     if (a.kind === 'assistant' && b.kind === 'assistant') {
-      return a.text === b.text
+      if (a.text !== b.text) return false
+      // Cheap attachment-set equality — the list is usually 0-6 items; we only
+      // care that identities and order match. The parent recomputes the array
+      // from summary.artifacts every poll so reference inequality is expected
+      // even when content is identical — compare by id instead.
+      if (a.attachments.length !== b.attachments.length) return false
+      for (let i = 0; i < a.attachments.length; i++) {
+        if (a.attachments[i]!.id !== b.attachments[i]!.id) return false
+      }
+      return true
     }
     if (a.kind === 'tool' && b.kind === 'tool') {
       return a.summary === b.summary

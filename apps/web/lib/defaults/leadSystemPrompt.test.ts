@@ -6,10 +6,12 @@ describe('DEFAULT_LEAD_SYSTEM_PROMPT', () => {
 
   it('kept short (positive framing; avoid priming structured output)', () => {
     // Hard ceiling — the previous 2100-char prompt caused gpt-5-mini to emit
-    // structured meta-labels (요약/가정/artifacts). Stay well under that. If
-    // someone grows this past ~1200 chars, revisit whether the added rule is
-    // essential or can live in a tool description instead.
-    expect(p.length).toBeLessThan(1200)
+    // structured meta-labels (요약/가정/artifacts). Stay well under that.
+    // Raised 1200 → 1400 once to accommodate the "# Files" section — runaway
+    // aux-file generation (session df76dd49 producing PDF + 5 satellites) was
+    // a concrete production bug that the prompt needed to address positively.
+    // Don't grow past 1400 without similarly load-bearing justification.
+    expect(p.length).toBeLessThan(1400)
   })
 
   it('persona + delegate intent', () => {
