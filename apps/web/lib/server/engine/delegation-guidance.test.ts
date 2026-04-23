@@ -23,6 +23,21 @@ describe('askUserGuidance', () => {
     expect(g).toMatch(/default format/i)
   })
 
+  it('explicitly forbids asking about deliverable / document output language', () => {
+    expect(g).toMatch(/document output language|deliverable.*language/i)
+    // Regresses if someone collapses back to the one-liner "default formats".
+    expect(g).toMatch(/default to the user's conversation language/i)
+  })
+
+  it('explicitly forbids asking about deliverable tone (존댓말/반말)', () => {
+    expect(g).toMatch(/document tone|deliverable.*tone/i)
+    expect(g).toMatch(/한국어\(존댓말\).*한국어\(반말\)/)
+  })
+
+  it('lists enumerable branching as NOT-reason with example', () => {
+    expect(g).toMatch(/enumerable branching|state your interpretation/i)
+  })
+
   it('bundles questions into one call', () => {
     expect(g).toMatch(/bundle.*ONE call|ONE call/i)
   })
