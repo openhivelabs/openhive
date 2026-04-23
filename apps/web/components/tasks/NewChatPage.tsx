@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowUp, FileText, Plus, X } from '@phosphor-icons/react'
-import { memo, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useT } from '@/lib/i18n'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
@@ -76,7 +76,7 @@ export function NewChatPage() {
             <ArrowLeft className="w-4 h-4" />
           </button>
           <h1 className="text-[14px] font-semibold text-neutral-900 dark:text-neutral-100 truncate">
-            새 채팅
+            {t('chatPage.newChat')}
           </h1>
         </div>
       </div>
@@ -91,7 +91,7 @@ export function NewChatPage() {
             <div className="max-w-[760px] mx-auto px-6 pt-6 pb-4 space-y-4">
               {pendingText && (
                 <div className="flex justify-end">
-                  <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100 px-4 py-3 text-[15.5px] whitespace-pre-wrap leading-relaxed opacity-60">
+                  <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-neutral-200 text-neutral-900 dark:bg-neutral-700 dark:text-neutral-100 px-4 py-3 text-[15.5px] whitespace-pre-wrap leading-relaxed opacity-60">
                     {pendingText}
                   </div>
                 </div>
@@ -135,10 +135,22 @@ const Composer = memo(function Composer({
   sending: boolean
   onSend: (text: string) => void
 }) {
+  const t = useT()
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const disabled = sending || (!text.trim() && attachments.length === 0)
+
+  useEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    const MAX = 240
+    ta.style.height = 'auto'
+    const next = Math.min(ta.scrollHeight, MAX)
+    ta.style.height = `${next}px`
+    ta.style.overflowY = ta.scrollHeight > MAX ? 'auto' : 'hidden'
+  }, [text])
 
   const addFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return
@@ -193,6 +205,7 @@ const Composer = memo(function Composer({
       )}
 
       <textarea
+        ref={textareaRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -201,10 +214,10 @@ const Composer = memo(function Composer({
             submit()
           }
         }}
-        placeholder="메시지를 입력하세요…"
+        placeholder={t('chatPage.composerPlaceholder')}
         rows={1}
         autoFocus
-        className="w-full resize-none bg-transparent text-[15.5px] text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 outline-none max-h-60 py-0.5 leading-relaxed"
+        className="w-full resize-none bg-transparent text-[15.5px] text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 outline-none max-h-60 py-0.5 leading-relaxed scrollbar-quiet"
       />
 
       <div className="flex items-center justify-between pt-1">
@@ -233,8 +246,8 @@ const Composer = memo(function Composer({
           type="button"
           onClick={submit}
           disabled={disabled}
-          className="shrink-0 w-8 h-8 rounded-full bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-800 dark:hover:bg-neutral-200"
-          aria-label="전송"
+          className="shrink-0 w-8 h-8 rounded-md bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-800 dark:hover:bg-neutral-200"
+          aria-label={t('chatPage.send')}
         >
           <ArrowUp className="w-[18px] h-[18px]" />
         </button>

@@ -2,6 +2,7 @@ import { CircleNotch, X } from '@phosphor-icons/react'
 import { useState } from 'react'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { useT } from '@/lib/i18n'
+import { useAppStore } from '@/lib/stores/useAppStore'
 import type { Agent } from '@/lib/types'
 import { Button } from '../ui/Button'
 
@@ -14,6 +15,7 @@ interface AskAiAgentModalProps {
 
 export function AskAiAgentModal({ open, onClose, onCreate, companySlug }: AskAiAgentModalProps) {
   const t = useT()
+  const defaultModel = useAppStore((s) => s.defaultModel)
   const [description, setDescription] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -31,13 +33,19 @@ export function AskAiAgentModal({ open, onClose, onCreate, companySlug }: AskAiA
 
   const submit = async () => {
     if (!description.trim()) return
+    if (!defaultModel) return
     setLoading(true)
     setError(null)
     try {
       const res = await fetch('/api/agents/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description, company_slug: companySlug || undefined }),
+        body: JSON.stringify({
+          description,
+          company_slug: companySlug || undefined,
+          provider_id: defaultModel.providerId,
+          model: defaultModel.model,
+        }),
       })
       if (!res.ok) {
         const body = await res.text()
@@ -52,8 +60,8 @@ export function AskAiAgentModal({ open, onClose, onCreate, companySlug }: AskAiA
         id: String(raw.id ?? ''),
         role: String(raw.role ?? 'Member'),
         label: String(raw.label ?? 'Copilot'),
-        providerId: String(raw.provider_id ?? 'copilot'),
-        model: String(raw.model ?? 'gpt-5-mini'),
+        providerId: String(raw.provider_id ?? defaultModel.providerId),
+        model: String(raw.model ?? defaultModel.model),
         systemPrompt: String(raw.system_prompt ?? ''),
         skills: (raw.skills as string[]) ?? [],
         position: (raw.position as { x: number; y: number }) ?? { x: 0, y: 0 },
@@ -108,6 +116,11 @@ export function AskAiAgentModal({ open, onClose, onCreate, companySlug }: AskAiA
             // biome-ignore lint/a11y/noAutofocus: the modal is intent-driven — typing is the only thing to do
             autoFocus
           />
+          {!defaultModel && (
+            <div className="text-[12px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
+              {t('canvas.askAiDefaultModelRequired')}
+            </div>
+          )}
           {error && (
             <div className="text-[12px] text-red-700 bg-red-50 border border-red-200 rounded px-2.5 py-1.5 whitespace-pre-wrap">
               {error}
@@ -120,7 +133,7 @@ export function AskAiAgentModal({ open, onClose, onCreate, companySlug }: AskAiA
             <Button
               variant="primary"
               onClick={submit}
-              disabled={loading || !description.trim()}
+              disabled={loading || !description.trim() || !defaultModel}
             >
               {loading && <CircleNotch className="w-3.5 h-3.5 animate-spin" />}
               {loading ? t('canvas.askAiGenerating') : t('canvas.askAiSubmit')}

@@ -159,16 +159,17 @@ function describeCron(cron: string): string {
 
 
 /** 섹션 접힘 상태 persist. 팀 전환해도 재현되게 LS 에 저장한다.
- *  SSR-safe: 첫 렌더는 기본값으로 오고, 브라우저 mount 후 값이 동기화된다. */
-function useCollapsedSections(): {
+ *  기본값 규칙: 유저가 아직 토글한 적 없는 섹션은 "비어 있으면 접힘, 항목이
+ *  하나라도 있으면 펼침". 한 번이라도 토글하면 그 의사를 유지한다. */
+function useCollapsedSections(counts: { drafts: number; scheduled: number }): {
   collapsed: { drafts: boolean; scheduled: boolean }
   toggle: (key: 'drafts' | 'scheduled') => void
 } {
   const LS_KEY = 'openhive.tasks.rail.collapsed'
-  const [collapsed, setCollapsed] = useState<{
-    drafts: boolean
-    scheduled: boolean
-  }>({ drafts: false, scheduled: false })
+  const [stored, setStored] = useState<{
+    drafts: boolean | undefined
+    scheduled: boolean | undefined
+  }>({ drafts: undefined, scheduled: undefined })
 
   useEffect(() => {
     try {
@@ -178,18 +179,21 @@ function useCollapsedSections(): {
         drafts: boolean
         scheduled: boolean
       }>
-      setCollapsed((s) => ({
-        drafts: parsed.drafts ?? s.drafts,
-        scheduled: parsed.scheduled ?? s.scheduled,
-      }))
+      setStored({ drafts: parsed.drafts, scheduled: parsed.scheduled })
     } catch {
       /* ignore corrupt LS */
     }
   }, [])
 
+  const collapsed = {
+    drafts: stored.drafts ?? counts.drafts === 0,
+    scheduled: stored.scheduled ?? counts.scheduled === 0,
+  }
+
   const toggle = (key: 'drafts' | 'scheduled') => {
-    setCollapsed((s) => {
-      const next = { ...s, [key]: !s[key] }
+    setStored((s) => {
+      const current = s[key] ?? counts[key] === 0
+      const next = { ...s, [key]: !current }
       try {
         localStorage.setItem(LS_KEY, JSON.stringify(next))
       } catch {
@@ -230,7 +234,6 @@ export function TasksTab() {
   const setSessionTitle = useSessionsStore((s) => s.setTitle)
 
   const [showNew, setShowNew] = useState(false)
-  const { collapsed, toggle: toggleSection } = useCollapsedSections()
   // Viewed flag is still localStorage-only. Pin / title are server-backed via
   // useSessionsStore actions.
   const [viewedIds, setViewedIds] = useState<Set<string>>(new Set())
@@ -366,9 +369,14 @@ export function TasksTab() {
   )
 
   const { scheduledTemplates, draftTemplates } = useMemo(() => {
-    const sorted = [...teamTasks].sort(
-      (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
-    )
+    // Primary sort: user-defined orderIndex (lower first). Fallback: newest
+    // createdAt first. Tasks without an orderIndex land after ordered ones.
+    const sorted = [...teamTasks].sort((a, b) => {
+      const ai = a.orderIndex ?? Number.POSITIVE_INFINITY
+      const bi = b.orderIndex ?? Number.POSITIVE_INFINITY
+      if (ai !== bi) return ai - bi
+      return Date.parse(b.createdAt) - Date.parse(a.createdAt)
+    })
     return {
       scheduledTemplates: sorted.filter(
         (x) => x.mode === 'scheduled' && !!x.cron,
@@ -378,6 +386,11 @@ export function TasksTab() {
       ),
     }
   }, [teamTasks])
+
+  const { collapsed, toggle: toggleSection } = useCollapsedSections({
+    drafts: draftTemplates.length,
+    scheduled: scheduledTemplates.length,
+  })
 
   const selectedTask = teamTasks.find((x) => x.id === selectedTaskId) ?? null
 
@@ -404,14 +417,56 @@ export function TasksTab() {
     }
     addTask(task)
     setShowNew(false)
-    if (input.mode === 'session' && team) {
-      void startSessionFromTask(task, team)
-    }
   }
 
-  const play = (task: Task) => {
-    if (!team) return
-    void startSessionFromTask(task, team)
+  const updateTask = useTasksStore((s) => s.updateTask)
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<{
+    id: string
+    position: 'before' | 'after'
+  } | null>(null)
+
+  /** Commit a new order for a group (drafts or scheduled). Writes orderIndex
+   *  on every member so the list round-trips through yaml/server. */
+  const reorderGroup = (groupIds: string[]) => {
+    groupIds.forEach((id, i) => {
+      const current = tasks.find((t) => t.id === id)
+      if (!current || current.orderIndex === i) return
+      updateTask(id, { orderIndex: i })
+    })
+  }
+
+  const handleDrop = (
+    groupIds: string[],
+    targetId: string,
+    position: 'before' | 'after',
+  ) => {
+    setDropTarget(null)
+    const src = draggingTaskId
+    setDraggingTaskId(null)
+    if (!src || src === targetId) return
+    if (!groupIds.includes(src) || !groupIds.includes(targetId)) return
+    const without = groupIds.filter((x) => x !== src)
+    const idx = without.indexOf(targetId)
+    if (idx === -1) return
+    without.splice(position === 'before' ? idx : idx + 1, 0, src)
+    reorderGroup(without)
+  }
+
+  const [launchingTaskId, setLaunchingTaskId] = useState<string | null>(null)
+  const play = async (task: Task) => {
+    if (!team || launchingTaskId) return
+    setLaunchingTaskId(task.id)
+    try {
+      const sessionId = await startSessionFromTask(task, team)
+      if (sessionId && params?.companySlug && params?.teamSlug) {
+        // Navigate to the session so the user sees the run and doesn't
+        // double-click (which was spawning zombie sessions).
+        navigate(`/${params.companySlug}/${params.teamSlug}/s/${sessionId}`)
+      }
+    } finally {
+      setLaunchingTaskId(null)
+    }
   }
 
   /** 새 채팅 화면으로 이동. 거기서 첫 메시지 입력 → 세션 생성 → `/s/{id}` 로. */
@@ -479,6 +534,52 @@ export function TasksTab() {
           </div>
 
           <div className="flex-1 overflow-y-auto">
+            {/* 스케줄 — cron 걸린 템플릿. Drafts 위에 배치. */}
+            <CollapsibleSection
+              icon={<Clock className="w-3.5 h-3.5" />}
+              label={t('tasks.scheduled')}
+              count={scheduledTemplates.length}
+              collapsed={collapsed.scheduled}
+              onToggle={() => toggleSection('scheduled')}
+            >
+              {scheduledTemplates.length === 0 ? null : (
+                scheduledTemplates.map((task) => {
+                  const groupIds = scheduledTemplates.map((x) => x.id)
+                  return (
+                    <TemplateRow
+                      key={task.id}
+                      task={task}
+                      onRun={() => play(task)}
+                      onEdit={() => selectTaskAsDraft(task.id)}
+                      isDragging={draggingTaskId === task.id}
+                      dropIndicator={
+                        dropTarget?.id === task.id ? dropTarget.position : null
+                      }
+                      onDragStart={() => setDraggingTaskId(task.id)}
+                      onDragEnd={() => {
+                        setDraggingTaskId(null)
+                        setDropTarget(null)
+                      }}
+                      onDragOver={(pos) => {
+                        if (!draggingTaskId || draggingTaskId === task.id) return
+                        setDropTarget((prev) =>
+                          prev?.id === task.id && prev.position === pos
+                            ? prev
+                            : { id: task.id, position: pos },
+                        )
+                      }}
+                      onDragLeave={() =>
+                        setDropTarget((prev) => (prev?.id === task.id ? null : prev))
+                      }
+                      onDrop={() => {
+                        if (!dropTarget) return
+                        handleDrop(groupIds, dropTarget.id, dropTarget.position)
+                      }}
+                    />
+                  )
+                })
+              )}
+            </CollapsibleSection>
             {/* 드래프트 — 일회성 템플릿 */}
             <CollapsibleSection
               icon={<FileText className="w-3.5 h-3.5" />}
@@ -487,43 +588,42 @@ export function TasksTab() {
               collapsed={collapsed.drafts}
               onToggle={() => toggleSection('drafts')}
             >
-              {draftTemplates.length === 0 ? (
-                <div className="px-4 py-3 text-[12px] text-neutral-400 dark:text-neutral-500">
-                  {t('tasks.none')}
-                </div>
-              ) : (
-                draftTemplates.map((task) => (
-                  <TemplateRow
-                    key={task.id}
-                    task={task}
-                    onRun={() => play(task)}
-                    onEdit={() => selectTaskAsDraft(task.id)}
-                  />
-                ))
-              )}
-            </CollapsibleSection>
-            {/* 스케줄 — cron 걸린 템플릿 */}
-            <CollapsibleSection
-              icon={<Clock className="w-3.5 h-3.5" />}
-              label={t('tasks.scheduled')}
-              count={scheduledTemplates.length}
-              collapsed={collapsed.scheduled}
-              onToggle={() => toggleSection('scheduled')}
-              accent="amber"
-            >
-              {scheduledTemplates.length === 0 ? (
-                <div className="px-4 py-3 text-[12px] text-neutral-400 dark:text-neutral-500">
-                  {t('tasks.none')}
-                </div>
-              ) : (
-                scheduledTemplates.map((task) => (
-                  <TemplateRow
-                    key={task.id}
-                    task={task}
-                    onRun={() => play(task)}
-                    onEdit={() => selectTaskAsDraft(task.id)}
-                  />
-                ))
+              {draftTemplates.length === 0 ? null : (
+                draftTemplates.map((task) => {
+                  const groupIds = draftTemplates.map((x) => x.id)
+                  return (
+                    <TemplateRow
+                      key={task.id}
+                      task={task}
+                      onRun={() => play(task)}
+                      onEdit={() => selectTaskAsDraft(task.id)}
+                      isDragging={draggingTaskId === task.id}
+                      dropIndicator={
+                        dropTarget?.id === task.id ? dropTarget.position : null
+                      }
+                      onDragStart={() => setDraggingTaskId(task.id)}
+                      onDragEnd={() => {
+                        setDraggingTaskId(null)
+                        setDropTarget(null)
+                      }}
+                      onDragOver={(pos) => {
+                        if (!draggingTaskId || draggingTaskId === task.id) return
+                        setDropTarget((prev) =>
+                          prev?.id === task.id && prev.position === pos
+                            ? prev
+                            : { id: task.id, position: pos },
+                        )
+                      }}
+                      onDragLeave={() =>
+                        setDropTarget((prev) => (prev?.id === task.id ? null : prev))
+                      }
+                      onDrop={() => {
+                        if (!dropTarget) return
+                        handleDrop(groupIds, dropTarget.id, dropTarget.position)
+                      }}
+                    />
+                  )
+                })
               )}
             </CollapsibleSection>
           </div>
@@ -542,12 +642,7 @@ export function TasksTab() {
             <div className="flex-1 overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800">
               {visibleSessions.map((u) => {
                 const sid = u.id ?? ''
-                const canDelete =
-                  !!sid &&
-                  (u.state === 'done-fresh' ||
-                    u.state === 'done-seen' ||
-                    u.state === 'failed-fresh' ||
-                    u.state === 'failed-seen')
+                const canDelete = !!sid
                 return (
                   <SessionInboxRow
                     key={sid || `${u.taskId}:${u.timestampIso}`}
@@ -623,17 +718,9 @@ function CollapsibleSection({
   accent?: 'amber'
   children: React.ReactNode
 }) {
-  const accentBar =
-    accent === 'amber'
-      ? 'before:bg-amber-400'
-      : 'before:bg-neutral-200 dark:before:bg-neutral-700'
   return (
     <section
-      className={clsx(
-        'relative border-t border-neutral-100 dark:border-neutral-800 first:border-t-0',
-        'before:content-[""] before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[2px]',
-        accentBar,
-      )}
+      className="relative border-t border-neutral-100 dark:border-neutral-800 first:border-t-0"
     >
       <button
         type="button"
@@ -731,10 +818,24 @@ function TemplateRow({
   task,
   onRun,
   onEdit,
+  isDragging,
+  dropIndicator,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDragLeave,
+  onDrop,
 }: {
   task: Task
   onRun: () => void
   onEdit: () => void
+  isDragging?: boolean
+  dropIndicator?: 'before' | 'after' | null
+  onDragStart?: () => void
+  onDragEnd?: () => void
+  onDragOver?: (pos: 'before' | 'after') => void
+  onDragLeave?: () => void
+  onDrop?: () => void
 }) {
   const t = useT()
   const isScheduled = task.mode === 'scheduled' && !!task.cron
@@ -746,18 +847,45 @@ function TemplateRow({
     <div
       role="button"
       tabIndex={0}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('text/plain', task.id)
+        onDragStart?.()
+      }}
+      onDragEnd={() => onDragEnd?.()}
+      onDragOver={(e) => {
+        if (!onDragOver) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        const rect = e.currentTarget.getBoundingClientRect()
+        const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+        onDragOver(pos)
+      }}
+      onDragLeave={(e) => {
+        const next = e.relatedTarget as Node | null
+        if (!next || !e.currentTarget.contains(next)) onDragLeave?.()
+      }}
+      onDrop={(e) => {
+        e.preventDefault()
+        onDrop?.()
+      }}
       onClick={onEdit}
       onKeyDown={(e) => e.key === 'Enter' && onEdit()}
       className={clsx(
-        'group px-4 py-2.5 cursor-pointer transition-colors',
-        isScheduled
-          ? 'hover:bg-amber-50/60 dark:hover:bg-amber-900/10'
-          : 'hover:bg-neutral-50 dark:hover:bg-neutral-800/40',
+        'group relative px-4 py-2.5 cursor-pointer transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-800/40',
+        isDragging && 'opacity-40',
       )}
     >
+      {dropIndicator === 'before' && (
+        <div className="absolute -top-px left-0 right-0 h-0.5 bg-neutral-400 dark:bg-neutral-500 pointer-events-none" />
+      )}
+      {dropIndicator === 'after' && (
+        <div className="absolute -bottom-px left-0 right-0 h-0.5 bg-neutral-400 dark:bg-neutral-500 pointer-events-none" />
+      )}
       <div className="flex items-center gap-2">
         {isScheduled ? (
-          <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+          <Clock className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
         ) : (
           <FileText className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
         )}
@@ -775,9 +903,7 @@ function TemplateRow({
           className={clsx(
             'shrink-0 w-6 h-6 rounded-sm flex items-center justify-center transition-colors',
             'opacity-0 group-hover:opacity-100',
-            isScheduled
-              ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-100/70 dark:hover:bg-amber-900/30'
-              : 'text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800',
+            'text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800',
           )}
         >
           <Play weight="fill" className="w-3 h-3" />

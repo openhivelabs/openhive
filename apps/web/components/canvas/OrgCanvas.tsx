@@ -7,6 +7,7 @@ import {
   ReactFlow,
 } from '@xyflow/react'
 import { useCallback, useMemo, useState } from 'react'
+import { CreateAgentModal } from '@/components/modals/CreateAgentModal'
 import { NodeEditor } from '@/components/modals/NodeEditor'
 import { mockProviders } from '@/lib/mock/companies'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
@@ -146,8 +147,16 @@ export function OrgCanvas() {
     return c?.slug ?? ''
   })
   const { addAgent, addEdge, removeAgent, removeEdge } = useCanvasStore()
-  const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
+  // Track the agent being edited by id (not by snapshot) so server-scaffold
+  // updates (persona_path, persona_name) flow into NodeEditor as soon as
+  // saveTeam resolves — avoids "opened too early, no AGENT.md" races.
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null)
+  const editingAgent = useMemo<Agent | null>(() => {
+    if (!editingAgentId || !team) return null
+    return team.agents.find((a) => a.id === editingAgentId) ?? null
+  }, [editingAgentId, team])
   const [askAiOpen, setAskAiOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
   const [frameGalleryOpen, setFrameGalleryOpen] = useState(false)
 
   const positions = useMemo(() => {
@@ -252,20 +261,10 @@ export function OrgCanvas() {
   )
 
   const addManualMember = useCallback(() => {
-    const defaultProvider = mockProviders.find((p) => p.id === 'copilot') ?? mockProviders[0]!
-    const newAgent: Agent = {
-      id: rid('a'),
-      role: 'Member',
-      label: defaultProvider.label,
-      providerId: defaultProvider.id,
-      model: 'gpt-5-mini',
-      systemPrompt: 'You are a Member.',
-      skills: [],
-      position: { x: 0, y: 0 },
-    }
-    addAgent(newAgent)
-    setEditingAgent(newAgent)
-  }, [addAgent])
+    // Open the dedicated Create form instead of opening NodeEditor on a
+    // half-formed stub. NodeEditor is edit-only now.
+    setCreateOpen(true)
+  }, [])
 
   const addViaAi = useCallback(() => {
     setAskAiOpen(true)
@@ -275,7 +274,7 @@ export function OrgCanvas() {
     (agent: Agent, warnings?: string[]) => {
       addAgent(agent)
       if (warnings && warnings.length > 0) console.warn('[agent generate]', warnings)
-      setEditingAgent(agent)
+      setEditingAgentId(agent.id)
     },
     [addAgent],
   )
@@ -292,7 +291,7 @@ export function OrgCanvas() {
       // state) and keeps the write path uniform with manual/AI creation.
       addAgent(agent)
       if (warnings.length > 0) console.warn('[agent frame install]', warnings)
-      setEditingAgent(agent)
+      setEditingAgentId(agent.id)
     },
     [addAgent],
   )
@@ -326,7 +325,7 @@ export function OrgCanvas() {
         onNodeClick={(_, node) => {
           if (mode !== 'design') return
           const a = team.agents.find((x) => x.id === node.id)
-          if (a) setEditingAgent(a)
+          if (a) setEditingAgentId(a.id)
         }}
         fitView
         // maxZoom caps auto-fit so a small chart (3-4 nodes) doesn't blow up to
@@ -343,7 +342,8 @@ export function OrgCanvas() {
         <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="#e5e5e5" />
       </ReactFlow>
 
-      <NodeEditor agent={editingAgent} onClose={() => setEditingAgent(null)} />
+      <NodeEditor agent={editingAgent} onClose={() => setEditingAgentId(null)} />
+      <CreateAgentModal open={createOpen} onClose={() => setCreateOpen(false)} />
       <AskAiAgentModal
         open={askAiOpen}
         onClose={() => setAskAiOpen(false)}

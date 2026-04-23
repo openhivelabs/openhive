@@ -116,7 +116,7 @@ function walkTree(root: string): string[] {
       if (e.isDirectory()) {
         walk(abs, relNext)
         if (out.length >= MAX_LISTED_FILES) return
-      } else if (e.isFile() && e.name !== 'AGENT.md') {
+      } else if (e.isFile()) {
         out.push(relNext)
         if (out.length >= MAX_LISTED_FILES) {
           out.push(`…and more (showing first ${MAX_LISTED_FILES})`)

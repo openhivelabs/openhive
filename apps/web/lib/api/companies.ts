@@ -75,13 +75,19 @@ export async function fetchCompanies(): Promise<Company[]> {
   }))
 }
 
-export async function saveTeam(companySlug: string, team: Team): Promise<void> {
+export async function saveTeam(companySlug: string, team: Team): Promise<Team | null> {
   const res = await fetch(`/api/companies/${encodeURIComponent(companySlug)}/teams`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ team: teamToServer(team) }),
   })
   if (!res.ok) throw new Error(`PUT team ${res.status}`)
+  try {
+    const body = (await res.json()) as { team?: Record<string, unknown> }
+    return body.team ? teamFromServer(body.team) : null
+  } catch {
+    return null
+  }
 }
 
 export async function saveCompany(company: Company): Promise<void> {

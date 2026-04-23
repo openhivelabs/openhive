@@ -137,6 +137,19 @@ export function artifactDirForSession(sessionId: string): string {
   return sessionArtifactDir(sessionId)
 }
 
+/** Scratch dir — internal working files produced by research/verify
+ *  sub-agents. Lives alongside artifacts/ but is NOT surfaced to the user
+ *  (not registered in artifacts.json, not included in the <session-artifacts>
+ *  manifest, not returned by listForSession). Per-node subdirectory keeps
+ *  sibling workers from trampling each other's scratch files. */
+export function sessionScratchDir(sessionId: string): string {
+  return path.join(sessionDir(sessionId), 'scratch')
+}
+export function scratchDirForNode(sessionId: string, nodeId: string): string {
+  // Node IDs are internal slugs (e.g. 'a-ce59a9') — safe to use verbatim.
+  return path.join(sessionScratchDir(sessionId), nodeId)
+}
+
 // ---------- meta read/write ----------
 
 function readMeta(sessionId: string): SessionMeta | null {
@@ -161,10 +174,7 @@ function writeMeta(sessionId: string, meta: SessionMeta): void {
 /** Partially update a session's meta.json. Silently no-ops if the session
  *  folder is gone (e.g. deleted mid-run). Used by async enrichers like the
  *  auto-title generator. */
-export function updateMeta(
-  sessionId: string,
-  patch: Partial<SessionMeta>,
-): SessionMeta | null {
+export function updateMeta(sessionId: string, patch: Partial<SessionMeta>): SessionMeta | null {
   const current = readMeta(sessionId)
   if (!current) return null
   const next: SessionMeta = { ...current, ...patch, id: current.id }
@@ -260,7 +270,11 @@ export async function finalizeSession(
 
   const artDir = sessionArtifactDir(sessionId)
   if (fs.existsSync(artDir) && fs.readdirSync(artDir).length === 0) {
-    try { fs.rmdirSync(artDir) } catch { /* ignore */ }
+    try {
+      fs.rmdirSync(artDir)
+    } catch {
+      /* ignore */
+    }
   }
   const artifactCount = fs.existsSync(artDir) ? fs.readdirSync(artDir).length : 0
 
@@ -322,10 +336,15 @@ export function eventsForSession(sessionId: string): StoredEventRow[] {
     if (!line.trim()) continue
     try {
       const row = JSON.parse(line) as {
-        seq: number; ts: number; kind: string; depth: number;
-        node_id: string | null; tool_call_id: string | null;
-        tool_name: string | null; data_json?: string;
-        data?: Record<string, unknown>;
+        seq: number
+        ts: number
+        kind: string
+        depth: number
+        node_id: string | null
+        tool_call_id: string | null
+        tool_name: string | null
+        data_json?: string
+        data?: Record<string, unknown>
       }
       out.push({
         seq: row.seq,
@@ -335,7 +354,8 @@ export function eventsForSession(sessionId: string): StoredEventRow[] {
         node_id: row.node_id,
         tool_call_id: row.tool_call_id,
         tool_name: row.tool_name,
-        data: row.data ?? (row.data_json ? JSON.parse(row.data_json) as Record<string, unknown> : {}),
+        data:
+          row.data ?? (row.data_json ? (JSON.parse(row.data_json) as Record<string, unknown>) : {}),
       })
     } catch {
       // Truncated last line after crash — skip it, don't fail the whole session.
@@ -387,10 +407,21 @@ export function getSession(sessionId: string): SessionMeta | null {
 export function deleteSession(sessionId: string): boolean {
   const dir = sessionDir(sessionId)
   const existed = fs.existsSync(dir)
-  try { fs.rmSync(dir, { recursive: true, force: true }) }
-  catch { /* best-effort */ }
-  try { fs.rmSync(artifactDirForSession(sessionId), { recursive: true, force: true }) }
-  catch { /* best-effort */ }
+  try {
+    fs.rmSync(dir, { recursive: true, force: true })
+  } catch {
+    /* best-effort */
+  }
+  try {
+    fs.rmSync(artifactDirForSession(sessionId), { recursive: true, force: true })
+  } catch {
+    /* best-effort */
+  }
+  try {
+    fs.rmSync(sessionScratchDir(sessionId), { recursive: true, force: true })
+  } catch {
+    /* best-effort */
+  }
   return existed
 }
 
@@ -548,18 +579,30 @@ function pruneEmptyTree(root: string): void {
       if (e.isDirectory()) {
         if (!walk(abs)) allEmpty = false
       } else if (JUNK_FILENAMES.has(e.name)) {
-        try { fs.unlinkSync(abs) } catch { /* ignore */ }
+        try {
+          fs.unlinkSync(abs)
+        } catch {
+          /* ignore */
+        }
       } else {
         allEmpty = false
       }
     }
     if (allEmpty && dir !== root) {
-      try { fs.rmdirSync(dir) } catch { /* ignore */ }
+      try {
+        fs.rmdirSync(dir)
+      } catch {
+        /* ignore */
+      }
     }
     return allEmpty
   }
   if (walk(root)) {
-    try { fs.rmdirSync(root) } catch { /* ignore */ }
+    try {
+      fs.rmdirSync(root)
+    } catch {
+      /* ignore */
+    }
   }
 }
 

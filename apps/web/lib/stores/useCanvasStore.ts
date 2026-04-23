@@ -35,7 +35,23 @@ function mutate(updater: Updater, persist: boolean) {
   })
   useAppStore.setState({ companies })
   if (persist && savedTeam && savedCompanySlug) {
-    void saveTeam(savedCompanySlug, savedTeam).catch((e) => console.error('saveTeam failed', e))
+    const companySlug = savedCompanySlug
+    void saveTeam(companySlug, savedTeam)
+      .then((saved) => {
+        // Server may have filled in persona_path / persona_name on any new
+        // agent (ensureAgentBundle). Merge those back so NodeEditor / engine
+        // see the scaffolded AGENT.md.
+        if (!saved) return
+        const st = useAppStore.getState()
+        useAppStore.setState({
+          companies: st.companies.map((c) =>
+            c.slug === companySlug
+              ? { ...c, teams: c.teams.map((t) => (t.id === saved.id ? saved : t)) }
+              : c,
+          ),
+        })
+      })
+      .catch((e) => console.error('saveTeam failed', e))
   }
 }
 

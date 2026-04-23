@@ -105,14 +105,39 @@ const MAX_BUFFER = 2000
 const MD_ARTIFACT_LINK_RE = /\[([^\]]+)\]\((artifact:\/\/[^)\s]+)\)/g
 const BARE_ARTIFACT_URI_RE = /(?<![\]()])artifact:\/\/[^\s)]+/g
 
+/**
+ * Normalise an artifact URI for equality comparison. LLMs (especially
+ * gpt-5-mini) auto percent-encode non-ASCII path segments when emitting
+ * markdown links — "꼬북칩.pdf" → "%EA%BC%AC%EB%B6%81%EC%B9%A9.pdf".
+ * The real-URI set stores raw UTF-8 paths (what's on disk), so a
+ * byte-literal `Set.has()` falsely marks the link as hallucinated and
+ * strips the URI, leaving a dangling `[label]` in the user-facing text.
+ *
+ * Fix: compare decode-once. `%20` / `%EA...` and the raw byte both
+ * collapse to the same canonical form. `decodeURIComponent` can throw on
+ * malformed escapes — in that case fall back to the original string so a
+ * garbage URI is treated as non-matching rather than crashing the strip.
+ */
+function canonicalizeArtifactUri(uri: string): string {
+  try {
+    return decodeURIComponent(uri)
+  } catch {
+    return uri
+  }
+}
+
 export function stripFakeArtifactLinks(text: string, realUris: Set<string>): string {
   if (!text) return text
+  // Build a canonical-form set once per call so the hot-path inside
+  // `.replace` is a straight `has()` lookup.
+  const canonicalReal = new Set<string>()
+  for (const u of realUris) canonicalReal.add(canonicalizeArtifactUri(u))
   let out = text.replace(MD_ARTIFACT_LINK_RE, (full, label, uri) => {
-    if (realUris.has(uri)) return full
+    if (canonicalReal.has(canonicalizeArtifactUri(uri))) return full
     return `[${label}]`
   })
   out = out.replace(BARE_ARTIFACT_URI_RE, (uri) => {
-    if (realUris.has(uri)) return uri
+    if (canonicalReal.has(canonicalizeArtifactUri(uri))) return uri
     return ''
   })
   return out

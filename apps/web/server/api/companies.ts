@@ -122,7 +122,9 @@ companies.put('/:companySlug/teams', async (c) => {
     return c.json({ detail: 'team.slug or team.id required' }, 400)
   }
   saveTeam(companySlug, team)
-  return c.json({ ok: true })
+  // Return the post-save team so the client can pick up fields the server
+  // filled in (e.g. persona_path / persona_name after ensureAgentBundle).
+  return c.json({ ok: true, team })
 })
 
 // DELETE /api/companies/:companySlug/teams/:teamSlug

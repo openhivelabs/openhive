@@ -15,6 +15,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { ensureAgentBundle } from './agents/scaffold'
 import { companiesRoot, companyDir, teamYamlPath } from './paths'
 import { invalidateCachePrefix, readYamlCached, writeYaml } from './yaml-io'
 
@@ -145,7 +146,37 @@ export function reorderTeams(companySlug: string, teamSlugs: string[]): void {
 
 export function saveTeam(companySlug: string, team: TeamDict): void {
   const slug = team.slug ?? team.id ?? 'team'
-  writeYaml(teamYamlPath(companySlug, String(slug)), team)
+  const yamlPath = teamYamlPath(companySlug, String(slug))
+
+  // Merge persona fields from the on-disk team so stale client state (which
+  // may have re-sent an agent without persona_path after the server
+  // scaffolded one) doesn't trigger duplicate bundles.
+  const existing = readYamlCached(yamlPath) as TeamDict | null
+  const existingAgents = Array.isArray(existing?.agents)
+    ? (existing?.agents as Record<string, unknown>[])
+    : []
+  const existingById = new Map<string, Record<string, unknown>>()
+  for (const a of existingAgents) {
+    const id = typeof a.id === 'string' ? a.id : null
+    if (id) existingById.set(id, a)
+  }
+
+  const agents = Array.isArray(team.agents)
+    ? (team.agents as Record<string, unknown>[])
+    : []
+  for (const agent of agents) {
+    const id = typeof agent.id === 'string' ? agent.id : null
+    const prev = id ? existingById.get(id) : undefined
+    if (prev && typeof prev.persona_path === 'string' && prev.persona_path) {
+      if (!agent.persona_path) agent.persona_path = prev.persona_path
+      if (!agent.persona_name && typeof prev.persona_name === 'string') {
+        agent.persona_name = prev.persona_name
+      }
+    }
+    ensureAgentBundle(companySlug, agent)
+  }
+
+  writeYaml(yamlPath, team)
 }
 
 export function saveCompany(company: CompanyDict): void {

@@ -1,9 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  askUserGuidance,
-  delegateToGuidance,
-  activateSkillGuidance,
-} from './delegation-guidance'
+import { askUserGuidance, delegateToGuidance, activateSkillGuidance } from './delegation-guidance'
 
 describe('askUserGuidance', () => {
   const g = askUserGuidance()
@@ -42,7 +38,7 @@ describe('askUserGuidance', () => {
     expect(g).toMatch(/bundle.*ONE call|ONE call/i)
   })
 
-  it("defers to system prompt for full policy (stays terse)", () => {
+  it('defers to system prompt for full policy (stays terse)', () => {
     expect(g).toMatch(/system prompt/i)
   })
 })
@@ -66,9 +62,20 @@ describe('delegateToGuidance', () => {
     expect(g).toMatch(/parallel|concurrently|fan out/i)
   })
 
-  it('instructs reading subordinate assumption + citing artifacts', () => {
-    expect(g).toMatch(/Assumption/)
-    expect(g).toMatch(/artifact:\/\//)
+  it('requires the three-valued mode param (research/verify/produce)', () => {
+    expect(g).toMatch(/research/)
+    expect(g).toMatch(/verify/)
+    expect(g).toMatch(/produce/)
+  })
+
+  it('states research/verify cannot leak files to user', () => {
+    // Enforced by engine (scratch dir routing), but the tool description
+    // must surface the contract so the Lead picks mode deliberately.
+    expect(g).toMatch(/scratch|private|hidden from user|CAN.?T (leak|create)/i)
+  })
+
+  it('locks "one file per produce delegation"', () => {
+    expect(g).toMatch(/one file per produce delegation/i)
   })
 })
 

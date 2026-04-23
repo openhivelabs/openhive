@@ -157,4 +157,7 @@ export interface Task {
   sessions: Session[]
   /** Reference materials the Lead should ground the task in (files, snippets). */
   references: TaskReference[]
+  /** User-defined sort position within its section (drafts or scheduled). Lower
+   *  = earlier. Missing = fall back to createdAt desc. */
+  orderIndex?: number
 }

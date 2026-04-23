@@ -195,18 +195,21 @@ body {
   animation: caretBlink 1s step-end infinite;
 }
 
-/* Overlay-style scrollbar — no visible track/gutter line, faint thumb that
- *  lights up only on hover/scroll. Use on tall scroll containers where the
- *  default Firefox/Chromium track would paint a distracting vertical line. */
+/* Overlay-style scrollbar — no visible track/gutter line, thumb always
+ *  visible (faint) and darker on hover. Use on tall scroll containers where
+ *  the default Firefox/Chromium track would paint a distracting vertical line. */
 .scrollbar-quiet {
   scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
+  scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
+}
+.dark .scrollbar-quiet {
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
 }
 .scrollbar-quiet:hover {
-  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+  scrollbar-color: rgba(0, 0, 0, 0.3) transparent;
 }
 .dark .scrollbar-quiet:hover {
-  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.35) transparent;
 }
 .scrollbar-quiet::-webkit-scrollbar {
   width: 8px;
@@ -216,12 +219,15 @@ body {
   background: transparent;
 }
 .scrollbar-quiet::-webkit-scrollbar-thumb {
-  background: transparent;
+  background: rgba(0, 0, 0, 0.18);
   border-radius: 9999px;
 }
+.dark .scrollbar-quiet::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+}
 .scrollbar-quiet:hover::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(0, 0, 0, 0.3);
 }
 .dark .scrollbar-quiet:hover::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.35);
 }

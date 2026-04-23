@@ -725,11 +725,28 @@ interface SessionNodeOpts {
    *  Concatenated to the built system prompt only for the Lead (depth 0) on
    *  the first turn of the session. Undefined = no injection. */
   injectedSystemSuffix?: string
+  /** File-write visibility this node operates under. Derived from the
+   *  parent's `delegate_to(mode: ...)`:
+   *    - `'user'`     — this node may produce user-facing artifacts (the
+   *                     Lead's default; also the mode for a single
+   *                     designated producer sub-agent such as a
+   *                     report-specialist).
+   *    - `'scratch'`  — this node is doing research / verification; its
+   *                     skill tool file outputs land in `scratch/{nodeId}/`
+   *                     and never appear in the session artifact index.
+   *  Undefined = 'user' (lead / back-compat). */
+  visibility?: 'user' | 'scratch'
 }
 
 async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   const { sessionId, team, node, task, depth, externalHistory, injectedSystemSuffix } = opts
   const teamSlugs = state().teamSlugs.get(sessionId) ?? null
+  // Lead (depth 0) is always 'user' — it owns the session's artifact
+  // namespace. Sub-agents inherit visibility from their parent's
+  // `delegate_to(mode)`; absent opts.visibility keeps legacy behaviour
+  // (treats the node as a producer, same as before this change).
+  const visibility: 'user' | 'scratch' =
+    depth === 0 ? 'user' : (opts.visibility ?? 'user')
 
   yield makeEvent('node_started', sessionId, { role: node.role, task }, { depth, node_id: node.id })
 
@@ -791,14 +808,21 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     if (skill.kind === 'typed') typedSkills.push(skill)
     else agentSkills.push(skill)
   }
+  const skillCtx: SkillToolContext = {
+    sessionId,
+    team,
+    teamSlugs,
+    nodeId: node.id,
+    visibility,
+  }
   for (const skill of typedSkills) {
-    tools.push(skillTool(skill, { sessionId, team, teamSlugs }))
+    tools.push(skillTool(skill, skillCtx))
   }
   if (agentSkills.length > 0) {
     tools.push(skillActivateTool(agentSkills))
     tools.push(skillListFilesTool(agentSkills))
     tools.push(skillReadTool(agentSkills, sessionId))
-    tools.push(skillRunTool(agentSkills, { sessionId, team, teamSlugs }))
+    tools.push(skillRunTool(agentSkills, skillCtx))
   }
 
   // MCP: per-server get_tools, wrap each as <server>__<tool>. A misconfigured
@@ -846,16 +870,18 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     const manifestBlock = renderSessionArtifacts(
       artifactRecords.map((r) => toManifestEntry(r, sessionId)),
     )
-    // Engine-injected deliverables policy — runs for Lead only. Without this,
-    // a "PDF 만들어줘" request routinely produced PDF + CSV + summary.txt +
-    // sources.txt + assumptions.txt (session df76dd49 is the canonical
-    // example). Gating on `depth === 0` keeps it out of sub-agent prompts
-    // where the policy is enforced via briefing in `delegate_to`. We append
-    // it to the teamBlock prefix so it lives INSIDE the system prompt but
-    // doesn't mutate user-authored persona bodies.
+    // Engine-injected deliverables policy — Lead only. Earlier symptom (PDF +
+    // CSV + summary.txt sidecars, sessions df76dd49 / 3e0c65e1) proved that
+    // prompt-only enforcement is not enough — research/verify workers were
+    // obligingly writing JSON+CSV+TXT because their briefings demanded it.
+    // Fixed structurally: research/verify delegations now route file writes
+    // to private scratch (invisible to user). This block reminds the Lead of
+    // the phase workflow at the point of use; the backing mechanism lives in
+    // delegate_to's mode parameter. Gating on depth === 0 keeps this out of
+    // sub-agent prompts — subs get their policy via the task brief.
     const deliverablesPolicy =
       depth === 0
-        ? `# Files\nMake exactly one file of the requested type. "PDF 만들어줘" = one PDF. Weave supporting data (evidence, sources, assumptions) into the PDF itself or into your prose reply — never into sidecar .txt / .csv / summary / notes files. Reply in prose only; the UI attaches files below your message automatically.\n`
+        ? `# Phase reminder\nResearch/verify sub-agents CAN'T create user-visible files — those delegations' files go to private scratch. Only a \`mode: produce\` delegation (or your own skill call) makes a user artifact. Before you dispatch \`mode: produce\`, synthesize findings into a concrete spec (content, structure, filename). One produce delegation = one file.\n`
         : ''
     const prefix =
       (manifestBlock ? manifestBlock + '\n' : '') +
@@ -1644,6 +1670,10 @@ interface RunNodeForkedOpts {
   task: string
   depth: number
   snapshot: TurnSnapshot
+  /** Inherited from the parent delegation's `mode`. Forked round-2+ falls
+   *  through to runNode and needs the same visibility so any skill tool
+   *  calls the child makes honour the parent's research/produce intent. */
+  visibility?: 'user' | 'scratch'
 }
 
 /**
@@ -1749,6 +1779,7 @@ async function* runNodeForked(opts: RunNodeForkedOpts): AsyncGenerator<Event> {
     node,
     task: `${task}\n\n[PRIOR DRAFT]\n${firstTurnOutput}`,
     depth,
+    visibility: opts.visibility,
   })
 }
 
@@ -1792,8 +1823,14 @@ function delegateTool(team: TeamSpec, node: AgentSpec): Tool {
           type: 'string',
           description: 'Clear instructions for the subordinate. Include context.',
         },
+        mode: {
+          type: 'string',
+          enum: ['research', 'verify', 'produce'],
+          description:
+            "research/verify = worker reports findings in prose only; any files it creates go to private scratch storage and do NOT appear as user artifacts. produce = worker creates the single user-facing deliverable (one file per delegation) based on YOUR synthesized spec. Use 'produce' only after you have synthesized research findings into a concrete file spec.",
+        },
       },
-      required: ['assignee', 'task'],
+      required: ['assignee', 'task', 'mode'],
     },
     handler: async () => 'delegation handled by engine',
     hint: 'Delegating…',
@@ -1813,6 +1850,15 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
   const { sessionId, team, fromNode, args, toolCallId, depth } = opts
   const assigneeKey = String(args.assignee ?? '')
   const task = String(args.task ?? '')
+  // Delegation mode decides the sub-agent's file-write visibility:
+  //   research/verify → scratch (internal; never a user artifact)
+  //   produce          → user   (creates THE deliverable)
+  // Missing/invalid defaults to 'produce' for back-compat with legacy teams
+  // that haven't been retrained on the mode parameter. Lead prompts push
+  // models toward explicit research-before-produce.
+  const rawMode = String((args as Record<string, unknown>).mode ?? '')
+  const childVisibility: 'user' | 'scratch' =
+    rawMode === 'research' || rawMode === 'verify' ? 'scratch' : 'user'
 
   const subs = teamSubordinates(team, fromNode.id)
   let target: AgentSpec | null = null
@@ -1899,6 +1945,7 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
       node: target,
       task,
       depth: depth + 1,
+      visibility: childVisibility,
     })) {
       if (ev.kind === 'node_finished' && ev.depth === depth + 1 && ev.node_id === target.id) {
         subOutput = (ev.data.output as string | undefined) ?? ''
@@ -2047,8 +2094,14 @@ function delegateParallelTool(team: TeamSpec, node: AgentSpec): Tool {
             'One task per parallel instance. Each must be self-contained. ' +
             "Length is also bounded by the chosen assignee's ceiling.",
         },
+        mode: {
+          type: 'string',
+          enum: ['research', 'verify', 'produce'],
+          description:
+            'Same semantics as delegate_to.mode — applies to EVERY parallel sibling. research/verify keep all child file outputs in private scratch; produce lets each child write one user-visible artifact (rare with fan-out; usually research).',
+        },
       },
-      required: ['assignee', 'tasks'],
+      required: ['assignee', 'tasks', 'mode'],
     },
     handler: async () => 'delegate_parallel handled by engine',
     hint: 'Fanning out…',
@@ -2059,6 +2112,9 @@ async function* runParallelDelegation(opts: DelegationOpts): AsyncGenerator<Even
   const { sessionId, team, fromNode, args, toolCallId, depth } = opts
   const assigneeKey = String(args.assignee ?? '')
   const tasks = Array.isArray(args.tasks) ? (args.tasks as unknown[]) : []
+  const rawMode = String((args as Record<string, unknown>).mode ?? '')
+  const childVisibility: 'user' | 'scratch' =
+    rawMode === 'research' || rawMode === 'verify' ? 'scratch' : 'user'
 
   const subs = teamSubordinates(team, fromNode.id)
   let target: AgentSpec | null = null
@@ -2164,6 +2220,7 @@ async function* runParallelDelegation(opts: DelegationOpts): AsyncGenerator<Even
             task: taskText,
             depth: depth + 1,
             snapshot: decision.snapshot!,
+            visibility: childVisibility,
           })
         : runNode({
             sessionId,
@@ -2171,6 +2228,7 @@ async function* runParallelDelegation(opts: DelegationOpts): AsyncGenerator<Even
             node: capturedTarget,
             task: taskText,
             depth: depth + 1,
+            visibility: childVisibility,
           })
 
       for await (const ev of childIter) {
@@ -2741,6 +2799,14 @@ interface SkillToolContext {
   sessionId: string
   team: TeamSpec
   teamSlugs: [string, string] | null
+  /** The node running this skill tool. Used for per-node scratch dirs so
+   *  sibling research workers don't trample each other. */
+  nodeId: string
+  /** 'user' = files are user-facing deliverables (go to artifacts/ + recorded
+   *  in artifacts.json, visible in UI). 'scratch' = internal working files
+   *  for research/verify sub-agents (go to scratch/{nodeId}/, NOT recorded —
+   *  so UI/manifest automatically skip them). Lead is always 'user'. */
+  visibility: 'user' | 'scratch'
 }
 
 function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
@@ -2748,7 +2814,10 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
   const names = [...byName.keys()].sort()
   const companySlug = ctx.teamSlugs ? ctx.teamSlugs[0] : null
   const teamSlug = ctx.teamSlugs ? ctx.teamSlugs[1] : null
-  const outputDir = sessionsStore.artifactDirForSession(ctx.sessionId)
+  const outputDir =
+    ctx.visibility === 'scratch'
+      ? sessionsStore.scratchDirForNode(ctx.sessionId, ctx.nodeId)
+      : sessionsStore.artifactDirForSession(ctx.sessionId)
 
   return {
     name: 'run_skill_script',
@@ -2823,6 +2892,7 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
           companySlug,
           teamSlug,
           skillName: skill.name,
+          visibility: ctx.visibility,
         })
         return JSON.stringify({
           ok: result.ok,
@@ -2970,7 +3040,10 @@ const TODO_TOOL_NAMES = new Set(['set_todos', 'add_todo', 'complete_todo'])
 function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
   const companySlug = ctx.teamSlugs ? ctx.teamSlugs[0] : null
   const teamSlug = ctx.teamSlugs ? ctx.teamSlugs[1] : null
-  const outputDir = sessionsStore.artifactDirForSession(ctx.sessionId)
+  const outputDir =
+    ctx.visibility === 'scratch'
+      ? sessionsStore.scratchDirForNode(ctx.sessionId, ctx.nodeId)
+      : sessionsStore.artifactDirForSession(ctx.sessionId)
 
   return {
     name: skill.name,
@@ -2990,6 +3063,7 @@ function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
           companySlug,
           teamSlug,
           skillName: skill.name,
+          visibility: ctx.visibility,
         })
         return JSON.stringify({
           ok: result.ok,
@@ -3033,9 +3107,32 @@ function registerSkillArtifacts(
     companySlug: string | null
     teamSlug: string | null
     skillName: string
+    /** 'user' = register in artifacts.json, surface to UI, emit artifact://
+     *  URI. 'scratch' = do NOT register (file stays in scratch/{nodeId}/
+     *  only); the tool result carries a `scratch:` path so the sub-agent
+     *  can reference it in its prose, but it never becomes a user-visible
+     *  artifact and is invisible to the Lead's <session-artifacts> block. */
+    visibility: 'user' | 'scratch'
   },
 ): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = []
+  if (ctx.visibility === 'scratch') {
+    // Research / verify sub-agents: report the file path in the tool result
+    // so the sub-agent can talk about it in its prose, but keep it out of
+    // the session artifact index. The `scratch:` scheme is deliberately
+    // non-addressable by read_artifact / the UI artifact cards — scratch is
+    // a private working surface, not a publish channel.
+    for (const f of files) {
+      out.push({
+        filename: f.name,
+        mime: f.mime,
+        size: f.size,
+        scratch_path: f.path,
+        note: 'scratch file — internal working copy, not a user-visible artifact',
+      })
+    }
+    return out
+  }
   for (const f of files) {
     try {
       const rec = artifactsStore.recordArtifact({

@@ -1,7 +1,8 @@
 # AGENT.md — reference spec
 
-Every persona (directory OR single-file) starts with `AGENT.md`. This file
-is the only mandatory one. Everything else is optional.
+Every persona (directory OR single-file) starts with `AGENT.md`. This is
+the only mandatory file. Everything else is optional and lives under a
+flat `reference/` subdirectory.
 
 ## Frontmatter
 
@@ -15,13 +16,9 @@ YAML between `---` fences. Required fields bolded.
 | `skills` | list of strings | Skills to enable (intersected with team allow list). |
 | `mcp` | list of strings | MCP servers to use (intersected with team allow list). |
 
-Anything else in frontmatter is passed through to `PersonaDef.meta` for
-future extensions — won't break current load.
+Anything else in frontmatter passes through to `PersonaDef.meta`.
 
-## Body structure (recommended)
-
-The engine doesn't enforce section order, but this layout is what templates
-use and what the runtime's decision-tree hints assume:
+## Body structure
 
 ```
 # Persona
@@ -30,36 +27,50 @@ One paragraph. Personality, responsibilities, tone.
 # Decision tree
 Bullet list of if-then rules. Covers the common 80%.
 
-# Knowledge index
-One line per file in knowledge/, explaining when to read it.
+# Reference index            ← OMIT entirely when no reference files exist.
+- reference/<file>.md — <one-line purpose>
 
 # Escalation
-When to stop / ask the user / hand back to Lead.
+When to stop, ask the user, or hand back to Lead.
 ```
 
-Sections you can add when useful:
-- `# Examples` — mini few-shot snippets (full examples belong in `examples/`)
+Optional sections (add only when they earn their keep):
 - `# Vocabulary` — domain terms the agent should use
 - `# Constraints` — hard rules the agent must obey
-- `# Output format` — if the agent always returns a specific structure
+- `# Output format` — when the agent always returns a specific structure
+
+## Reference directory
+
+Flat layout only — no sub-folders. Each file is one independent topic.
+
+```
+<agent>/
+├── AGENT.md
+└── reference/
+    ├── topic-a.md
+    └── topic-b.md
+```
+
+If you need to signal intent beyond topic name, prefix the filename:
+`example-*.md`, `rule-*.md`, `checklist-*.md`. Do NOT introduce
+category folders (`knowledge/`, `behaviors/`, `examples/` — all legacy
+and removed).
+
+Each reference file:
+- 200–600 words.
+- Plain markdown. No YAML frontmatter. No level-1 heading.
+- Concrete: checklists, procedures, named sources, heuristics.
+- Covers exactly one topic — no overlap with AGENT.md or siblings.
 
 ## Size guidance
 
-- Body body: aim under 2KB. Push details into `knowledge/`.
-- Whole AGENT.md: under 4KB. Anything bigger should be split.
-- File tree: under 30 files. Bigger than that = restructure.
+- AGENT.md body: under ~2KB. Push details into `reference/`.
+- Each reference file: 200–600 words (≈1–3KB).
+- Whole directory: under 30 files.
 
 ## Single-file vs directory
 
-Use single-file `.md` when:
-- The persona fits in one screen
-- No external references or examples
-- One-off or throwaway
-
-Use directory when:
-- Domain knowledge exceeds ~2KB
-- You need few-shot examples
-- The persona will be shared across teams
-- You want to version-control each aspect independently
-
-The loader picks the right path based on filesystem layout — no separate flag.
+Use single-file `.md` when the persona fits on one screen with no
+external references. Use a directory when the agent benefits from
+on-demand reference material. The loader picks the right path from
+filesystem layout — no separate flag.

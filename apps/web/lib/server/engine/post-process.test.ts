@@ -161,6 +161,29 @@ describe('stripFakeArtifactLinks', () => {
     const out = stripFakeArtifactLinks(t, new Set())
     expect(out).toBe('[a] [b]')
   })
+
+  // Regression for session 6f95a200: gpt-5-mini percent-encoded the
+  // Korean filename in the markdown link's URI, which didn't match the
+  // raw-UTF-8 entry in realUris — the post-processor stripped the URI
+  // and left the user with a dangling `[label]`.
+  it('matches percent-encoded URIs against raw-UTF-8 real entries (Korean filename)', () => {
+    const real = new Set([
+      'artifact://session/s1/artifacts/꼬북칩_원가_마진_보고서.pdf',
+    ])
+    const t =
+      '다운로드/열기: [꼬북칩_원가_마진_보고서.pdf](artifact://session/s1/artifacts/%EA%BC%AC%EB%B6%81%EC%B9%A9_%EC%9B%90%EA%B0%80_%EB%A7%88%EC%A7%84_%EB%B3%B4%EA%B3%A0%EC%84%9C.pdf) — 확인해 주세요.'
+    // Whole link preserved byte-for-byte: post-process must not rewrite
+    // an encoded-but-valid URI just because its raw form is stored.
+    expect(stripFakeArtifactLinks(t, real)).toBe(t)
+  })
+
+  it('matches raw-UTF-8 URIs against percent-encoded real entries (either direction)', () => {
+    const real = new Set([
+      'artifact://session/s1/artifacts/%EA%BC%AC%EB%B6%81%EC%B9%A9.pdf',
+    ])
+    const t = 'See [k](artifact://session/s1/artifacts/꼬북칩.pdf).'
+    expect(stripFakeArtifactLinks(t, real)).toBe(t)
+  })
 })
 
 describe('stripMetaLabelsStreaming', () => {

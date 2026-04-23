@@ -295,7 +295,21 @@ export const useAppStore = create<AppState>((set, get) => {
         currentTeamId: team.id,
       }))
       if (company) {
-        void saveTeam(company.slug, team).catch((e) => console.error('saveTeam failed', e))
+        void saveTeam(company.slug, team)
+          .then((saved) => {
+            // Merge server-authoritative fields (persona_path / persona_name
+            // after ensureAgentBundle) back into client state so NodeEditor
+            // picks up the scaffolded AGENT.md.
+            if (!saved) return
+            set((s) => ({
+              companies: s.companies.map((c) =>
+                c.id === companyId
+                  ? { ...c, teams: c.teams.map((t) => (t.id === saved.id ? saved : t)) }
+                  : c,
+              ),
+            }))
+          })
+          .catch((e) => console.error('saveTeam failed', e))
       }
     },
 
@@ -309,7 +323,18 @@ export const useAppStore = create<AppState>((set, get) => {
         ),
       }))
       if (company) {
-        void saveTeam(company.slug, team).catch((e) => console.error('saveTeam failed', e))
+        void saveTeam(company.slug, team)
+          .then((saved) => {
+            if (!saved) return
+            set((s) => ({
+              companies: s.companies.map((c) =>
+                c.id === companyId
+                  ? { ...c, teams: c.teams.map((t) => (t.id === saved.id ? saved : t)) }
+                  : c,
+              ),
+            }))
+          })
+          .catch((e) => console.error('saveTeam failed', e))
       }
     },
 
