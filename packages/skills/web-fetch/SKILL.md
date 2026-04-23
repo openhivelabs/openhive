@@ -1,6 +1,9 @@
 ---
 name: web-fetch
 description: Fetch a web page and return clean markdown of its main content. Strips nav/ads/scripts, caches with ETag, and (if a query is given) returns only the most relevant chunks via BM25 — designed for maximum signal per token. Use whenever an agent needs to read a URL.
+triggers:
+  keywords: [url, 웹, 크롤, 크롤링, 스크랩, scrape, crawl, fetch, 링크]
+  patterns: ['https?://']
 runtime: python
 entrypoint: scripts/run.py
 parameters:

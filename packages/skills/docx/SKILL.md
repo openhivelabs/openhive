@@ -1,6 +1,9 @@
 ---
 name: docx
 description: Build, inspect, edit, and reverse-engineer Word (.docx) documents. Two edit tracks — live ops (set_text/update_table_cell/swap_image/set_style) and spec round-trip for structural changes.
+triggers:
+  keywords: [docx, word, 워드, 문서, document]
+  patterns: ['\.docx\b']
 ---
 
 # docx skill

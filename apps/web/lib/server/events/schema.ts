@@ -31,6 +31,7 @@ export type EventKind =
   // A4 — token estimation + window math
   | 'token.estimate.drift'
   | 'turn.blocked'
+  | 'turn.round_limit'
   | 'autocompact.disabled'
   // A2 — lifecycle hooks
   | 'hook.invoked'

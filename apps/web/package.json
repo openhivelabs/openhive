@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "concurrently -k -n hono,web -c yellow,cyan \"pnpm dev:hono\" \"pnpm dev:web\"",
-    "dev:hono": "tsx watch server/index.ts",
+    "dev:hono": "tsx watch --include 'lib/**/*.ts' --include 'server/**/*.ts' server/index.ts",
     "dev:web": "vite",
     "build:web": "vite build",
     "build:server": "tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json",

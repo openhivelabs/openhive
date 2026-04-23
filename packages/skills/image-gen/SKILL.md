@@ -1,6 +1,9 @@
 ---
 name: image-gen
 description: Render PNG images from HTML. Two modes — `template` (pick a built-in preset + fill vars, ~hundreds of tokens) or `freeform` (provide full HTML, kB of tokens). Good for text-first graphics: YouTube thumbnails, report covers, stat cards. NOT a photo generator.
+triggers:
+  keywords: [이미지, 그림, 썸네일, 표지, cover, thumbnail, image, png, 배너, banner]
+  patterns: ['\.png\b']
 runtime: python
 entrypoint: scripts/run.py
 parameters:

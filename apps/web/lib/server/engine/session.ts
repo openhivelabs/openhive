@@ -36,7 +36,7 @@ import { dataDir } from '../paths'
 import type { ChatMessage, ToolSpec } from '../providers/types'
 import { readArtifactTool, buildArtifactUri } from '../sessions/artifacts'
 import * as sessionsStore from '../sessions'
-import { type SkillDef, getSkill, matchSkillHints } from '../skills/loader'
+import { type SkillDef, getSkill, listSkills, matchSkillHints } from '../skills/loader'
 import { readSkillFile, runSkill, runSkillScript } from '../skills/runner'
 import { type Tool, toolsToOpenAI } from '../tools/base'
 import { teamDataTools } from '../tools/team-data-tool'
@@ -265,7 +265,7 @@ function summarizeLargeDelegationResult(content: string): string {
 
 // -------- Semaphore (replaces asyncio.Semaphore) --------
 
-class Semaphore {
+export class Semaphore {
   private permits: number
   private waiters: Array<() => void> = []
   private max: number
@@ -301,6 +301,71 @@ class Semaphore {
 
   total(): number {
     return this.max
+  }
+}
+
+/**
+ * Round-limit fallback — centralised so the runNode emission path and the
+ * unit test agree on message shape and locale.
+ */
+export function roundLimitFallback(maxRounds: number, locale: 'ko' | 'en'): string {
+  if (locale === 'ko') {
+    return `이번 턴에서 도구 호출 한도(${maxRounds}회)에 도달해 작업을 마무리하지 못했습니다. 필요하면 다음 메시지로 "계속"이라고 알려주시거나, 범위를 더 좁혀 다시 요청해 주세요.`
+  }
+  return `Hit the tool-call budget for this turn (${maxRounds} rounds) before finishing. Send "continue" to resume, or narrow the request and try again.`
+}
+
+interface RoundLimitOpts {
+  sessionId: string
+  nodeId: string
+  role: string
+  depth: number
+  maxRounds: number
+  locale: 'ko' | 'en'
+}
+
+export function makeRoundLimitEvents(opts: RoundLimitOpts): Event[] {
+  const { sessionId, nodeId, role, depth, maxRounds, locale } = opts
+  const output = roundLimitFallback(maxRounds, locale)
+  return [
+    makeEvent(
+      'turn.round_limit',
+      sessionId,
+      { max_rounds: maxRounds, depth, agent_role: role },
+      { depth, node_id: nodeId },
+    ),
+    makeEvent(
+      'node_finished',
+      sessionId,
+      { output },
+      { depth, node_id: nodeId },
+    ),
+  ]
+}
+
+/**
+ * Idempotent single-permit holder. Guards against double-acquire / double-
+ * release bugs when a chat session releases its permit to park on
+ * inbox.pop() and re-acquires when a follow-up message arrives.
+ *
+ * Exported for unit testing — the chat release-on-park wiring inside
+ * runTeamBody uses this.
+ */
+export class SemaphoreHolder {
+  private held = false
+  constructor(private readonly sem: Semaphore) {}
+  async acquire(): Promise<void> {
+    if (this.held) return
+    await this.sem.acquire()
+    this.held = true
+  }
+  release(): void {
+    if (!this.held) return
+    this.sem.release()
+    this.held = false
+  }
+  isHeld(): boolean {
+    return this.held
   }
 }
 
@@ -407,7 +472,8 @@ export async function* runTeam(
       limit: total,
     })
   }
-  await sem.acquire()
+  const permit = new SemaphoreHolder(sem)
+  await permit.acquire()
 
   try {
     state().askUser.set(sessionId, 0)
@@ -415,11 +481,12 @@ export async function* runTeam(
 
     // Wrap the entire run in the locale context so error formatter sees it.
     const iter = errors.withRunLocale(opts.locale ?? 'en', () =>
-      runTeamBody(team, goal, sessionId, opts.resume?.history),
+      runTeamBody(team, goal, sessionId, opts.resume?.history, permit),
     )
     // `iter` is the async generator that yields the engine's full event stream
     // (including the A2 SessionStart / PreToolUse / Stop hook events emitted
-    // below).
+    // below). runTeamBody hands the `permit` back and forth as it moves
+    // between active turns and parked-on-inbox states.
     for await (const ev of iter) yield ev
   } finally {
     state().askUser.delete(sessionId)
@@ -437,7 +504,9 @@ export async function* runTeam(
       if (k.startsWith(forkPrefix)) state().forkSystemCache.delete(k)
     }
     errors.clearSessionFailures(sessionId)
-    sem.release()
+    // Belt-and-suspenders: release is idempotent, so even if runTeamBody
+    // already released before its final error path, this is a no-op.
+    permit.release()
   }
 }
 
@@ -446,6 +515,7 @@ async function* runTeamBody(
   goal: string,
   sessionId: string,
   resumeHistory?: ChatMessage[],
+  permit?: SemaphoreHolder,
 ): AsyncGenerator<Event> {
   const isResume = !!resumeHistory
   const startedAt = Date.now()
@@ -517,9 +587,16 @@ async function* runTeamBody(
       injectedSystemSuffix = undefined
       // Lead finished a turn — park until the user sends another message.
       yield makeEvent('turn_finished', sessionId, { output: lastFinal })
+      // Release the concurrency permit while parked so other sessions can
+      // start. Idle chat tabs used to hold their slot indefinitely, so after
+      // `maxConcurrentRuns` unfinished chats the next one queued forever.
+      // The holder is idempotent — reacquire on the follow-up message, and
+      // the outer try/finally still releases on teardown.
+      permit?.release()
       const next = await inbox.pop()
       // null = session being torn down.
       if (next === null) break
+      await permit?.acquire()
       yield makeEvent('user_message', sessionId, { text: next })
       currentTask = next
     }
@@ -686,16 +763,27 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   tools.push(readArtifactTool(sessionId))
 
   // Skills: typed get a structured tool; agent-format go through activate/read/run.
-  // team.allowed_skills is an OPTIONAL whitelist. If it's undefined or empty,
-  // trust the agent's own declared skills — a fresh team shouldn't have to
-  // re-declare every skill at the team level just to make its own agents work.
-  // Only filter when the team explicitly narrowed the set.
+  //
+  // Resolution:
+  //   1. Start with what the agent declared (node.skills ∪ persona.tools.skills).
+  //   2. If the agent declared NOTHING, fall back to every bundled + user skill
+  //      so legacy teams (created before DEFAULT_AGENT_SKILLS was introduced —
+  //      see 61cae18) still expose pdf/docx/etc. metadata to the LLM. Without
+  //      this, an agent with `skills: []` got zero skill tools registered and
+  //      the LLM had no way to produce files even when they were physically
+  //      available on disk.
+  //   3. team.allowed_skills, if non-empty, narrows whatever we resolved above.
+  //      Empty team.allowed_skills is treated as "no narrowing", matching the
+  //      mental model that whitelist = opt-in restriction.
+  const declared = effectiveSkills(node, persona)
+  const candidates =
+    declared.length > 0 ? declared : Array.from(listSkills().keys())
   const rawAllowed = team.allowed_skills ?? []
   const hasAllowlist = rawAllowed.length > 0
   const allowed = new Set(rawAllowed)
   const typedSkills: SkillDef[] = []
   const agentSkills: SkillDef[] = []
-  for (const name of effectiveSkills(node, persona)) {
+  for (const name of candidates) {
     if (hasAllowlist && !allowed.has(name)) continue
     const skill = getSkill(name)
     if (!skill) continue
@@ -777,7 +865,26 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   let rounds = 0
   while (true) {
     rounds += 1
-    if (rounds > maxRounds) break
+    if (rounds > maxRounds) {
+      // Round budget exhausted. Without a final node_finished here, runTeamBody
+      // would set lastFinal="" and emit turn_finished with an empty output —
+      // the UI showed nothing, so the user thought the session had silently
+      // died. Instead we emit a telemetry event and a localized fallback
+      // message so the chat actually reads "I hit my tool-round limit before
+      // finishing — here's where I got to", and downstream code (task title,
+      // resume) has real text to work with.
+      for (const ev of makeRoundLimitEvents({
+        sessionId,
+        nodeId: node.id,
+        role: node.role,
+        depth,
+        maxRounds,
+        locale: errors.currentLocale(),
+      })) {
+        yield ev
+      }
+      return
+    }
 
     // Only pays when the node has opted into a finite window.
     if (Number.isFinite(historyWindow)) {

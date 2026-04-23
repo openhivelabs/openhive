@@ -1,6 +1,9 @@
 ---
 name: pdf
 description: Build, inspect, edit, and extract PDF documents. Two edit tracks — page-level ops (merge/split/rotate/watermark) via pypdf, and content changes via spec round-trip (build_doc regenerates from .spec.json).
+triggers:
+  keywords: [pdf, 피디에프, 보고서, 리포트, report]
+  patterns: ['\.pdf\b']
 ---
 
 # pdf skill

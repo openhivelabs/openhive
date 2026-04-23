@@ -1,6 +1,9 @@
 ---
 name: pptx
 description: Build, inspect, edit, and reverse-engineer PowerPoint (.pptx) decks. Three rails — JSON-spec generation for new decks, patch DSL for in-place edits, round-trip extract+rebuild for heavy restructuring. Falls back to raw OOXML editing when needed.
+triggers:
+  keywords: [pptx, powerpoint, 파워포인트, 피피티, ppt, 슬라이드, slide, deck, presentation, 발표]
+  patterns: ['\.pptx?\b']
 ---
 
 # pptx skill

@@ -130,8 +130,14 @@ function filesFromEnvelope(
  *  tens of ms off every spawn. Added unconditionally — Python ignores the
  *  flag on versions that don't support it. */
 export const PYTHON_COLD_START_FLAGS: readonly string[] = [
-  '-S', // skip site.py — shaves 30-50ms and a few MB
-  '-O', // strip asserts & docstrings — micro win
+  // `-S` was here for a micro-win (skip site.py, shave 30-50ms) but it also
+  // disables the site-packages path, which makes every pip-installed
+  // dependency (reportlab, python-docx, python-pptx, Playwright, etc.)
+  // invisible to the skill subprocess. The result was that pdf/docx/pptx/
+  // image-gen/web-fetch all failed with "No module named 'X'" even when
+  // the package was installed in the interpreter's own site-packages. Not
+  // worth 30ms.
+  '-O', // strip asserts & docstrings — micro win, no dependency impact
   '-X',
   'frozen_modules=on',
 ]
