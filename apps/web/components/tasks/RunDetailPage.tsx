@@ -17,6 +17,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { flushSync } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { ArtifactLink } from '@/components/chat/ArtifactLink'
 import { AskInlineCard } from '@/components/tasks/AskInlineCard'
 import { useT } from '@/lib/i18n'
 import { postAnswer, type AskUserQuestion } from '@/lib/api/sessions'
@@ -55,6 +56,7 @@ interface SessionSummary {
   id: string
   session_id: string
   goal: string
+  title?: string | null
   output: string | null
   error: string | null
   started_at: number
@@ -192,14 +194,19 @@ function buildChat(
     }
   })
   if (summary.output) {
-    // The session's "output" is just the latest assistant message from the
-    // top-level agent — render it as a normal assistant bubble.
-    out.push({
-      kind: 'assistant',
-      id: 'final',
-      author: team?.agents[0]?.role ?? 'lead',
-      text: summary.output,
-    })
+    // The session's "output" mirrors the latest top-level agent_message.
+    // Skip if the transcript already rendered that bubble (the common case);
+    // push only for legacy sessions that stored `output` without emitting the
+    // streamed message event.
+    const lastAssistant = [...out].reverse().find((x) => x.kind === 'assistant')
+    if (!lastAssistant || lastAssistant.text.trim() !== summary.output.trim()) {
+      out.push({
+        kind: 'assistant',
+        id: 'final',
+        author: team?.agents[0]?.role ?? 'lead',
+        text: summary.output,
+      })
+    }
   }
   if (summary.error) {
     out.push({ kind: 'error', id: 'error', text: summary.error })
@@ -561,7 +568,11 @@ export function RunDetailPage() {
   // A chat session's server-side status stays 'running' while idle between
   // turns, so we drive this from live engine events instead.
   const running = aiActive && !pendingAsk
-  const title = task?.title ?? summary.goal.split('\n')[0]?.slice(0, 80) ?? 'Session'
+  const title =
+    summary.title ??
+    task?.title ??
+    summary.goal.split('\n')[0]?.slice(0, 80) ??
+    'Session'
   const references = task?.references ?? []
 
   return (
@@ -857,10 +868,25 @@ const Composer = memo(function Composer({
   sending: boolean
   onSend: (text: string) => void
 }) {
+  const t = useT()
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const disabled = sending || (!text.trim() && attachments.length === 0)
+
+  // Auto-grow textarea to content height, clamp at MAX, hide scrollbar until
+  // we actually overflow. (Relying on CSS max-height alone still paints the
+  // scrollbar for a tick because scrollHeight includes padding.)
+  useEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    const MAX = 240
+    ta.style.height = 'auto'
+    const next = Math.min(ta.scrollHeight, MAX)
+    ta.style.height = `${next}px`
+    ta.style.overflowY = ta.scrollHeight > MAX ? 'auto' : 'hidden'
+  }, [text])
 
   const addFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return
@@ -902,6 +928,9 @@ const Composer = memo(function Composer({
     onSend(combined)
     setText('')
     setAttachments([])
+    // Send button steals focus on click; Enter submits don't blur but a parent
+    // re-render mid-send can. Either way, keep the user typing.
+    textareaRef.current?.focus()
   }
 
   return (
@@ -932,6 +961,7 @@ const Composer = memo(function Composer({
       )}
 
       <textarea
+        ref={textareaRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -940,9 +970,10 @@ const Composer = memo(function Composer({
             void submit()
           }
         }}
-        placeholder="메시지를 입력하세요…"
+        placeholder={t('chatPage.composerPlaceholder')}
         rows={1}
-        className="w-full resize-none bg-transparent text-[15.5px] text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 outline-none max-h-60 py-0.5 leading-relaxed"
+        autoFocus
+        className="w-full resize-none bg-transparent text-[15.5px] text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 outline-none max-h-60 py-0.5 leading-relaxed scrollbar-quiet"
       />
 
       <div className="flex items-center justify-between pt-1">
@@ -971,8 +1002,8 @@ const Composer = memo(function Composer({
           type="button"
           onClick={() => void submit()}
           disabled={disabled}
-          className="shrink-0 w-8 h-8 rounded-full bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-800 dark:hover:bg-neutral-200"
-          aria-label="전송"
+          className="shrink-0 w-8 h-8 rounded-md bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-800 dark:hover:bg-neutral-200"
+          aria-label={t('chatPage.send')}
         >
           <ArrowUp className="w-[18px] h-[18px]" />
         </button>
@@ -1016,16 +1047,21 @@ function Markdown({ text }: { text: string }) {
             <strong className="font-semibold">{children}</strong>
           ),
           em: ({ children }) => <em className="italic">{children}</em>,
-          a: ({ href, children }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-              className="underline underline-offset-2 hover:text-blue-600"
-            >
-              {children}
-            </a>
-          ),
+          a: ({ href, children }) => {
+            if (href && href.startsWith('artifact://')) {
+              return <ArtifactLink href={href}>{children}</ArtifactLink>
+            }
+            return (
+              <a
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2 hover:text-blue-600"
+              >
+                {children}
+              </a>
+            )
+          },
           code: ({ className, children, ...props }) => {
             const isBlock = (props as { node?: { tagName?: string } }).node?.tagName
             void isBlock
@@ -1082,7 +1118,7 @@ function ChatBubble({ item }: { item: ChatItem }) {
     return (
       <div className="flex justify-end">
         <div
-          className={`max-w-[80%] rounded-2xl rounded-br-sm bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100 px-4 py-3 text-[15.5px] whitespace-pre-wrap leading-relaxed ${
+          className={`max-w-[80%] rounded-2xl rounded-br-sm bg-neutral-200 text-neutral-900 dark:bg-neutral-700 dark:text-neutral-100 px-4 py-3 text-[15.5px] whitespace-pre-wrap leading-relaxed ${
             item.pending ? 'opacity-60' : ''
           }`}
         >
