@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { stripMetaLabels, stripMetaLabelsStreaming } from './post-process'
+import {
+  stripFakeArtifactLinks,
+  stripMetaLabels,
+  stripMetaLabelsStreaming,
+} from './post-process'
 
 describe('stripMetaLabels', () => {
   it('passes clean text through', () => {
@@ -67,6 +71,50 @@ describe('stripMetaLabels', () => {
 
   it('empty input', () => {
     expect(stripMetaLabels('')).toBe('')
+  })
+})
+
+describe('stripFakeArtifactLinks', () => {
+  const REAL = new Set([
+    'artifact://session/s1/artifacts/report.pdf',
+    'artifact://session/s1/artifacts/chart.png',
+  ])
+
+  it('keeps markdown links pointing at real artifacts', () => {
+    const t = 'See [report](artifact://session/s1/artifacts/report.pdf) for details.'
+    expect(stripFakeArtifactLinks(t, REAL)).toBe(t)
+  })
+
+  it('strips fake markdown links but preserves label', () => {
+    const t = 'See [fake](artifact://session/s1/artifacts/nope.pdf) now.'
+    expect(stripFakeArtifactLinks(t, REAL)).toBe('See [fake] now.')
+  })
+
+  it('strips bare fake URIs', () => {
+    const t = 'Download artifact://session/s1/artifacts/nope.pdf now.'
+    expect(stripFakeArtifactLinks(t, REAL)).toBe('Download  now.')
+  })
+
+  it('keeps bare real URIs', () => {
+    const t = 'See artifact://session/s1/artifacts/report.pdf'
+    expect(stripFakeArtifactLinks(t, REAL)).toBe(t)
+  })
+
+  it('handles mixed real + fake in one message', () => {
+    const t = 'Real: [x](artifact://session/s1/artifacts/report.pdf) · Fake: [y](artifact://session/s1/artifacts/bogus.pdf)'
+    expect(stripFakeArtifactLinks(t, REAL)).toBe(
+      'Real: [x](artifact://session/s1/artifacts/report.pdf) · Fake: [y]',
+    )
+  })
+
+  it('passes through text without any artifact URIs', () => {
+    expect(stripFakeArtifactLinks('hello world', REAL)).toBe('hello world')
+  })
+
+  it('empty whitelist strips ALL artifact links (hallucination session)', () => {
+    const t = '[a](artifact://session/x/artifacts/a.pdf) [b](artifact://session/x/artifacts/b.pdf)'
+    const out = stripFakeArtifactLinks(t, new Set())
+    expect(out).toBe('[a] [b]')
   })
 })
 

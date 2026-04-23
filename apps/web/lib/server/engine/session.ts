@@ -68,6 +68,7 @@ import { entryAgent, subordinates as teamSubordinates } from './team'
 import { TRAJECTORY_TOOLS, type ToolRun, partitionRuns } from './tool-partition'
 import {
   appendArtifactBlock,
+  getRealArtifactUriSet,
   renderSessionArtifacts,
   toManifestEntry,
 } from './artifacts-manifest'
@@ -76,7 +77,7 @@ import {
   delegateToGuidance,
   activateSkillGuidance,
 } from './delegation-guidance'
-import { stripMetaLabels } from './post-process'
+import { stripFakeArtifactLinks, stripMetaLabels } from './post-process'
 
 // Guard defaults + hard ceilings.
 export const MAX_TOOL_ROUNDS = 8
@@ -1072,9 +1073,19 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
 
   // For Lead turns the assembled history/content should match what the user
   // saw — strip meta labels here too so downstream (history, transcript,
-  // microcompact, S1) never re-encounter them.
-  const assembledText =
-    depth === 0 ? stripMetaLabels(textBuf.join('')).trim() : textBuf.join('').trim()
+  // microcompact, S1) never re-encounter them. Also strip any artifact://
+  // URIs that don't correspond to a real session artifact (hallucination
+  // safety net — sub-agents without file-producing skills sometimes invent
+  // plausible URIs).
+  const assembledText = (() => {
+    if (depth !== 0) return textBuf.join('').trim()
+    const realUris = getRealArtifactUriSet(sessionId)
+    const cleaned = stripFakeArtifactLinks(
+      stripMetaLabels(textBuf.join('')),
+      realUris,
+    )
+    return cleaned.trim()
+  })()
 
   if (pending.size > 0) {
     const ordered = [...pending.entries()].sort(([a], [b]) => a - b)
@@ -1208,7 +1219,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
               if (subEv.kind === 'delegation_closed') {
                 const body = (subEv.data.result as string | undefined) ?? ''
                 const paths = subEv.data.artifact_paths as string[] | undefined
-                content = appendArtifactBlock(body, paths)
+                content = appendArtifactBlock(body, paths, sessionId)
                 isError = !!subEv.data.error
               }
               yield subEv
@@ -1225,7 +1236,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
               if (subEv.kind === 'delegation_closed' && subEv.data.group_final) {
                 const body = (subEv.data.result as string | undefined) ?? ''
                 const paths = subEv.data.artifact_paths as string[] | undefined
-                content = appendArtifactBlock(body, paths)
+                content = appendArtifactBlock(body, paths, sessionId)
                 isError = !!subEv.data.error
               }
               yield subEv
@@ -2353,7 +2364,17 @@ function buildRelaySection(depth: number, hasSubs: boolean): string {
     'assumption at the top of your result (a single line starting with ' +
     '"Assumption:" in the task\'s working language), and deliver the best work ' +
     'under that assumption. Your parent will verify. Picking-and-delivering ' +
-    'with a stated assumption is always better than kicking the decision upward.\n'
+    'with a stated assumption is always better than kicking the decision upward.\n' +
+    '\n# Artifacts — do NOT fabricate URIs (hard rule)\n' +
+    'NEVER write an `artifact://...` URI in your result unless you actually ' +
+    'produced that file THIS turn via a skill tool call (e.g. `run_skill_script`, ' +
+    'a typed skill like `pdf` / `image-gen` / `text-file` / `docx` / `pptx`). ' +
+    'Inventing plausible-looking URIs is a hard fault — the engine validates ' +
+    'your output against the session artifact index and will strip fake URIs ' +
+    'before returning to your parent. If you cannot produce the requested file ' +
+    '(no appropriate skill in your tool catalog, or the tool call failed), say ' +
+    'so plainly: "요청한 파일을 생성할 수 없습니다 — 이 에이전트에 적합한 ' +
+    'skill (pdf / docx / …) 이 연결되어 있지 않습니다." Do NOT pretend.\n'
   if (hasSubs) {
     section +=
       '\n# Relaying from your own delegates\n' +

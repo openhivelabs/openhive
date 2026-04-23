@@ -78,6 +78,36 @@ export function stripMetaLabels(text: string): string {
  */
 const MAX_BUFFER = 2000
 
+/**
+ * Strip `artifact://` markdown links whose URIs don't resolve to a real
+ * session artifact. The sub-agent has `<delegation-artifacts>` injection
+ * + the Lead has a `<session-artifacts>` manifest, so any artifact:// URI
+ * in the Lead's final text that's NOT in the real list is a hallucination
+ * — probably repeated from a fabricated sub-agent response.
+ *
+ * Strategy:
+ * - For each `[label](artifact://...)` markdown link, check the URI against
+ *   the provided whitelist. Unknown → replace the whole link with just
+ *   "[label]" (keep the display text so sentence structure survives).
+ * - For bare `artifact://` URIs (no link wrapper), same check; unknown →
+ *   remove the URI.
+ */
+const MD_ARTIFACT_LINK_RE = /\[([^\]]+)\]\((artifact:\/\/[^)\s]+)\)/g
+const BARE_ARTIFACT_URI_RE = /(?<![\]()])artifact:\/\/[^\s)]+/g
+
+export function stripFakeArtifactLinks(text: string, realUris: Set<string>): string {
+  if (!text) return text
+  let out = text.replace(MD_ARTIFACT_LINK_RE, (full, label, uri) => {
+    if (realUris.has(uri)) return full
+    return `[${label}]`
+  })
+  out = out.replace(BARE_ARTIFACT_URI_RE, (uri) => {
+    if (realUris.has(uri)) return uri
+    return ''
+  })
+  return out
+}
+
 export async function* stripMetaLabelsStreaming(
   src: AsyncIterable<string>,
 ): AsyncIterable<string> {

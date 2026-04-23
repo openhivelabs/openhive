@@ -1,13 +1,39 @@
-import { useState } from 'react'
+import { DownloadSimple, FileText } from '@phosphor-icons/react'
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'])
 
+const TYPE_LABELS: Record<string, string> = {
+  pdf: 'PDF',
+  docx: 'Word',
+  pptx: 'PowerPoint',
+  xlsx: 'Excel',
+  md: 'Markdown',
+  txt: 'Text',
+  json: 'JSON',
+  csv: 'CSV',
+  html: 'HTML',
+  png: 'PNG',
+  jpg: 'JPEG',
+  jpeg: 'JPEG',
+  gif: 'GIF',
+  webp: 'WebP',
+  svg: 'SVG',
+}
+
 /**
- * Renders an `artifact://` URI (as written by agents in their final response)
- * as a downloadable chip. Images get an inline preview toggle.
+ * Inline chat artifact card — Claude Desktop-style.
  *
- * Path is resolved through /api/artifacts/by-uri which streams the file from
- * ~/.openhive/sessions/{sid}/artifacts/{rel} with a proper Content-Type.
+ * Large horizontal card with a file icon / image thumbnail on the left,
+ * filename + type label in the middle, and a download affordance on the
+ * right. Clicking either the filename or the download button triggers
+ * a file download via /api/artifacts/by-uri.
+ *
+ * For image artifacts the thumbnail shows a live preview (served inline
+ * from the same endpoint with ?disposition=inline).
+ *
+ * Server-side strips `artifact://` URIs that don't resolve in the session
+ * index before this component ever renders (see engine/post-process.ts),
+ * so a rendered card always points at a real, downloadable file.
  */
 export function ArtifactLink({
   href,
@@ -16,55 +42,55 @@ export function ArtifactLink({
   href: string
   children: React.ReactNode
 }) {
-  const [previewOpen, setPreviewOpen] = useState(false)
-
   const filename = (() => {
     const m = href.match(/\/([^/]+)$/)
     return m?.[1] ?? String(children) ?? 'artifact'
   })()
-  const ext = filename.split('.').pop()?.toLowerCase() ?? ''
+  const ext = (filename.split('.').pop() ?? '').toLowerCase()
   const isImage = IMAGE_EXTS.has(ext)
+  const typeLabel = TYPE_LABELS[ext] ?? (ext ? ext.toUpperCase() : '파일')
 
   const downloadUrl = `/api/artifacts/by-uri?uri=${encodeURIComponent(href)}`
   const inlineUrl = `${downloadUrl}&disposition=inline`
 
-  const label =
-    typeof children === 'string' && children.length > 0 ? children : filename
-
   return (
-    <span className="inline-flex flex-col gap-1 my-1">
-      <span
-        className="inline-flex items-center gap-2 rounded-md border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50 px-2 py-1 text-[14px] max-w-full"
+    <span className="block my-2">
+      <a
+        href={downloadUrl}
+        download={filename}
+        className="group flex items-center gap-3 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50/60 dark:bg-neutral-800/40 px-3 py-2.5 max-w-[560px] hover:bg-neutral-100 dark:hover:bg-neutral-800/60 transition-colors no-underline"
+        title={`Download ${filename}`}
       >
-        <span aria-hidden className="shrink-0 text-neutral-500">
-          {isImage ? '🖼' : ext === 'pdf' ? '📄' : '📎'}
-        </span>
-        <a
-          href={downloadUrl}
-          download={filename}
-          className="font-medium underline underline-offset-2 hover:text-blue-600 truncate"
-          title={`Download ${filename}`}
+        <span
+          className="shrink-0 w-10 h-10 rounded-lg bg-white dark:bg-neutral-700 border border-neutral-200 dark:border-neutral-600 flex items-center justify-center overflow-hidden"
+          aria-hidden
         >
-          {label}
-        </a>
-        {isImage && (
-          <button
-            type="button"
-            onClick={() => setPreviewOpen((v) => !v)}
-            className="shrink-0 text-[12.5px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
-            aria-label={previewOpen ? '미리보기 닫기' : '미리보기'}
-          >
-            {previewOpen ? '접기' : '보기'}
-          </button>
-        )}
-      </span>
-      {previewOpen && isImage && (
-        <img
-          src={inlineUrl}
-          alt={filename}
-          className="max-h-64 rounded-md border border-neutral-200 dark:border-neutral-700"
-        />
-      )}
+          {isImage ? (
+            <img
+              src={inlineUrl}
+              alt=""
+              className="w-full h-full object-cover"
+              loading="lazy"
+            />
+          ) : (
+            <FileText className="w-5 h-5 text-neutral-500" />
+          )}
+        </span>
+        <span className="flex-1 min-w-0 leading-tight">
+          <span className="block font-semibold text-[14px] text-neutral-900 dark:text-neutral-100 truncate group-hover:underline">
+            {filename}
+          </span>
+          <span className="block text-[12px] text-neutral-500 dark:text-neutral-400 mt-0.5">
+            {typeLabel}
+          </span>
+        </span>
+        <span
+          className="shrink-0 p-1.5 rounded-md text-neutral-400 group-hover:text-neutral-700 group-hover:bg-neutral-200 dark:group-hover:text-neutral-200 dark:group-hover:bg-neutral-700"
+          aria-hidden
+        >
+          <DownloadSimple className="w-4 h-4" />
+        </span>
+      </a>
     </span>
   )
 }
