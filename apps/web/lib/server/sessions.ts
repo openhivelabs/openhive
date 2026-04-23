@@ -281,6 +281,17 @@ export async function finalizeSession(
 
 // ---------- events ----------
 
+/**
+ * Event kinds whose appearance on disk the UI depends on *immediately* —
+ * the client receives the SSE frame, schedules a refetch ~60ms later,
+ * and that refetch reads events.jsonl to build the chat feed. Events on
+ * the default 100ms flush interval can race the refetch, so the ask card
+ * (for example) doesn't appear until a second refetch or page reload.
+ *
+ * Forcing a flush on these kinds is cheap — they're rare and tiny.
+ */
+const UI_CRITICAL_EVENT_KINDS = new Set(['user_question', 'user_answered'])
+
 export function appendSessionEvent(input: AppendEventInput): void {
   const row = {
     seq: input.seq,
@@ -293,6 +304,13 @@ export function appendSessionEvent(input: AppendEventInput): void {
     data_json: JSON.stringify(input.data),
   }
   enqueueEvent(input.sessionId, JSON.stringify(row))
+  if (UI_CRITICAL_EVENT_KINDS.has(input.kind)) {
+    // Fire-and-forget — the regular interval would catch it eventually,
+    // but we want it durable before the client's refetch window.
+    void flushSession(input.sessionId).catch(() => {
+      /* ignore — next flush cycle will retry */
+    })
+  }
 }
 
 export function eventsForSession(sessionId: string): StoredEventRow[] {
