@@ -182,7 +182,7 @@ function buildTeamYaml(
     edges,
     entry_agent_id: null,
     allowed_skills: [],
-    limits: { max_tool_rounds_per_turn: 8, max_delegation_depth: 4 },
+    limits: { max_tool_rounds_per_turn: 24, max_delegation_depth: 4 },
   }
 }
 

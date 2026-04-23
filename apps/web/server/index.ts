@@ -4,6 +4,7 @@ import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { logger } from 'hono/logger'
+import { migrateAllAgents } from '@/lib/server/agents/scaffold'
 import { registerNode } from '../instrumentation-node'
 import { api } from './api'
 
@@ -15,6 +16,21 @@ const startTime = Date.now()
 void registerNode().catch((exc) => {
   console.error('[hono] registerNode failed', exc)
 })
+
+// One-shot migration: agents created before the AGENT.md-first refactor may
+// still live as inline system_prompt in team.yaml. Scaffold bundles for them
+// so every agent shares the same on-disk shape. Idempotent.
+try {
+  const { scanned, migrated, limits_bumped } = migrateAllAgents()
+  if (migrated > 0) {
+    console.log(`[hono] agent migration: scaffolded ${migrated}/${scanned} agents`)
+  }
+  if (limits_bumped > 0) {
+    console.log(`[hono] team migration: bumped max_tool_rounds_per_turn on ${limits_bumped} team(s)`)
+  }
+} catch (exc) {
+  console.error('[hono] agent migration failed', exc)
+}
 
 const app = new Hono()
 app.use('*', logger())

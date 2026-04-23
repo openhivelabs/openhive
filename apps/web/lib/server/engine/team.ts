@@ -140,7 +140,7 @@ export function toTeamSpec(raw: Record<string, unknown>): TeamSpec {
         )
       : [],
     limits: {
-      max_tool_rounds_per_turn: Number(limitsRaw.max_tool_rounds_per_turn ?? 8),
+      max_tool_rounds_per_turn: Number(limitsRaw.max_tool_rounds_per_turn ?? 24),
       max_delegation_depth: Number(limitsRaw.max_delegation_depth ?? 4),
     },
     domain: typeof raw.domain === 'string' ? raw.domain : undefined,

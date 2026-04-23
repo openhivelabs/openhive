@@ -885,7 +885,7 @@ function buildCompanySpec(
     entryAgentId: leadId,
     allowedSkills,
     allowedMcpServers: [],
-    limits: { max_tool_rounds_per_turn: 8, max_delegation_depth: 4 },
+    limits: { max_tool_rounds_per_turn: 24, max_delegation_depth: 4 },
   }
 
   return { id: companyId, slug, name: companyName, teams: [team] }
