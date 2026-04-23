@@ -1,4 +1,5 @@
 import { DEFAULT_LEAD_SYSTEM_PROMPT } from './defaults/leadSystemPrompt'
+import { DEFAULT_AGENT_SKILLS } from './defaults/skills'
 import type { Team } from './types'
 
 function slug(s: string) {
@@ -209,7 +210,7 @@ function buildEmptyTeam(): Team {
         providerId: 'copilot',
         model: 'gpt-5-mini',
         systemPrompt: DEFAULT_LEAD_SYSTEM_PROMPT,
-        skills: [],
+        skills: [...DEFAULT_AGENT_SKILLS],
         position: { x: 400, y: 120 },
       },
     ],
