@@ -291,6 +291,8 @@ const en: Dict = {
   'session.askNext': 'Next',
   'session.askOtherPlaceholder': 'Other (type your own)',
   'session.download': 'Download',
+  'session.copyMessage': 'Copy message',
+  'session.copied': 'Copied',
   // tool-step summaries — shown as small chips between chat bubbles
   'session.tool.delegate': 'delegating to {assignee}',
   'session.tool.skillActivate': 'activating skill ({name})',
@@ -901,6 +903,8 @@ const ko: Dict = {
   'session.askNext': '다음',
   'session.askOtherPlaceholder': '기타 (직접 입력)',
   'session.download': '다운로드',
+  'session.copyMessage': '메시지 복사',
+  'session.copied': '복사됨',
   // tool-step summaries — 채팅 버블 사이에 뜨는 작은 진행 칩
   'session.tool.delegate': '{assignee} 에게 위임',
   'session.tool.skillActivate': '스킬 활성화 ({name})',

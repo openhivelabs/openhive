@@ -2,8 +2,10 @@ import {
   ArrowLeft,
   ArrowUp,
   CaretDown,
+  Check,
   CircleNotch,
   Coins,
+  Copy,
   DownloadSimple,
   FileText,
   Paperclip,
@@ -1000,7 +1002,7 @@ function AttachmentCard({ artifact }: { artifact: SessionArtifact }) {
     <a
       href={downloadUrl}
       download={artifact.filename}
-      className="group flex items-center gap-3 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-900/60 px-3.5 py-3 max-w-[560px] hover:bg-neutral-100 dark:hover:bg-neutral-800/80 transition-colors no-underline"
+      className="group flex items-center gap-3 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-900/60 px-3.5 py-3 w-full hover:bg-neutral-100 dark:hover:bg-neutral-800/80 transition-colors no-underline"
       title={`Download ${artifact.filename}`}
     >
       <span
@@ -1409,11 +1411,67 @@ const Markdown = memo(function MarkdownInner({ text }: { text: string }) {
   )
 })
 
+// Strip inlined attachment blocks ("--- 첨부파일: name (size) ---\n<body>")
+// from user messages before copying. Composer.submit() joins the body and
+// each attachment part with `\n\n`, and every attachment part begins with
+// this exact Korean marker — so cutting at the first `\n\n--- 첨부파일:`
+// drops the marker line, any inlined file contents, and all subsequent
+// attachments in one go.
+const ATTACHMENT_MARKER_RE = /\n\n--- 첨부파일: [\s\S]*$/
+// Replace `[label](artifact://...)` with just `label` — the UI already
+// renders these as plain text (not a link), and the URI exposes internal
+// session paths the user shouldn't see on paste.
+const ARTIFACT_LINK_RE = /\[([^\]]+)\]\(artifact:\/\/[^)]+\)/g
+
+function textForCopy(item: ChatItem): string {
+  if (item.kind === 'user') {
+    return item.text.replace(ATTACHMENT_MARKER_RE, '').trimEnd()
+  }
+  if (item.kind === 'assistant') {
+    return item.text.replace(ARTIFACT_LINK_RE, '$1').trimEnd()
+  }
+  return ''
+}
+
+function CopyButton({
+  getText,
+  className,
+}: {
+  getText: () => string
+  className?: string
+}) {
+  const t = useT()
+  const [copied, setCopied] = useState(false)
+  const onClick = async () => {
+    const text = getText()
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* clipboard blocked — fail silently */
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={copied ? t('session.copied') : t('session.copyMessage')}
+      title={copied ? t('session.copied') : t('session.copyMessage')}
+      className={`inline-flex items-center justify-center w-7 h-7 rounded-md text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 dark:hover:text-neutral-200 dark:hover:bg-neutral-800 transition-colors ${className ?? ''}`}
+    >
+      {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+    </button>
+  )
+}
+
 const ChatBubble = memo(
   function ChatBubbleInner({ item }: { item: ChatItem }) {
   if (item.kind === 'user') {
+    const canCopy = !item.pending && item.text.length > 0
     return (
-      <div className="flex justify-end">
+      <div className="group flex flex-col items-end">
         <div
           className={`max-w-[80%] rounded-2xl rounded-br-sm bg-neutral-200 text-neutral-900 dark:bg-neutral-700 dark:text-neutral-100 px-4 py-3 text-[15.5px] whitespace-pre-wrap leading-relaxed ${
             item.pending ? 'opacity-60' : ''
@@ -1421,15 +1479,26 @@ const ChatBubble = memo(
         >
           {item.text}
         </div>
+        {canCopy && (
+          <div className="mt-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            <CopyButton getText={() => textForCopy(item)} />
+          </div>
+        )}
       </div>
     )
   }
   if (item.kind === 'assistant') {
+    const canCopy = item.text.length > 0
     return (
-      <div className="text-[15.5px] text-neutral-900 dark:text-neutral-100 leading-relaxed">
+      <div className="group text-[15.5px] text-neutral-900 dark:text-neutral-100 leading-relaxed">
         <Markdown text={item.text} />
         {item.attachments.length > 0 && (
           <AttachmentStack attachments={item.attachments} />
+        )}
+        {canCopy && (
+          <div className="mt-1 -ml-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            <CopyButton getText={() => textForCopy(item)} />
+          </div>
         )}
       </div>
     )
