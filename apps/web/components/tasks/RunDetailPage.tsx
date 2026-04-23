@@ -758,9 +758,6 @@ export function RunDetailPage() {
                       >
                         <FileText className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
                         <span className="flex-1 truncate">{a.filename}</span>
-                        <span className="text-[11px] font-mono text-neutral-400 shrink-0">
-                          {fmtBytes(a.size)}
-                        </span>
                         <DownloadSimple className="w-3.5 h-3.5 text-neutral-400 opacity-0 group-hover:opacity-100 shrink-0" />
                       </a>
                     </li>
