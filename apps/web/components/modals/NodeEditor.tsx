@@ -518,14 +518,11 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
                   className="font-mono text-[12px] text-neutral-700 bg-transparent outline-none focus:bg-white focus:border focus:border-neutral-300 rounded px-1 min-w-[260px]"
                 />
               )}
-              <span className="text-[11px] text-neutral-500 ml-auto">
-                {selectedIsFolder
-                  ? 'folder'
-                  : selectedFile === 'AGENT.md'
-                    ? 'persona body'
-                    : 'file content'}
-                {readOnly && ` · ${t('nodeEditor.referenceSourceBundled')}`}
-              </span>
+              {readOnly && (
+                <span className="text-[11px] text-neutral-500 ml-auto">
+                  {t('nodeEditor.referenceSourceBundled')}
+                </span>
+              )}
             </div>
             {selectedIsFolder ? (
               <div className="flex-1 min-h-0 flex items-center justify-center text-[13px] text-neutral-400">
@@ -549,12 +546,8 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
         </div>
 
         <div className="flex items-center justify-between px-5 py-3 border-t border-neutral-200 bg-neutral-50 rounded-b-md gap-3">
-          <div className="flex items-center gap-3">
-            {agent.role === 'Lead' ? (
-              <span className="text-[14px] text-neutral-400">
-                Lead는 팀당 하나로 고정 — 삭제할 수 없습니다
-              </span>
-            ) : (
+          <div className="flex items-center gap-2">
+            {agent.role !== 'Lead' && (
               <Button
                 variant="ghost"
                 onClick={() => setConfirmDelete(true)}
@@ -563,22 +556,23 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
                 Delete
               </Button>
             )}
-            {saveError && (
-              <span className="text-[12px] text-red-600 truncate">{saveError}</span>
-            )}
-          </div>
-          <div className="flex gap-2">
             <Button
-              variant="ghost"
+              variant="outline"
               onClick={() => {
                 if (companySlug && team?.slug) downloadAgentFrame(companySlug, team.slug, agent.id)
               }}
               disabled={!companySlug || !team?.slug}
               title={t('canvas.exportAsFrameHint')}
+              className="!text-neutral-700"
             >
               <Package className="w-3.5 h-3.5" />
               {t('canvas.exportAsFrame')}
             </Button>
+            {saveError && (
+              <span className="text-[12px] text-red-600 truncate">{saveError}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={onClose}>
               Cancel
             </Button>
