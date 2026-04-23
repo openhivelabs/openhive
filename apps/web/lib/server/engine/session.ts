@@ -2286,34 +2286,19 @@ async function* runSkillInvocation(opts: SkillInvocationOpts): AsyncGenerator<Ev
 
 function buildRelaySection(depth: number, hasSubs: boolean): string {
   if (depth === 0) {
+    // Lead-specific engine rules. Behavioural playbook (register, ask_user
+    // policy, artifact citation, meta-label ban, trivial-vs-substantive
+    // response shape) lives in DEFAULT_LEAD_SYSTEM_PROMPT — not duplicated
+    // here.
     return (
-      '# User gateway (you only)\n' +
-      'Only you can address the user. When the user genuinely needs to decide ' +
-      'something you cannot infer, call `ask_user` — but see that tool\'s ' +
-      'description for the high bar. Never end a turn with plain text requesting ' +
-      'input ("링크 주세요" etc.) — that finalises the run. Consolidate pending ' +
-      'items into ONE ask_user call; never chain questions across consecutive turns.\n' +
-      '\n# Handling ambiguity from subordinates\n' +
-      'Subordinates are instructed to self-resolve ambiguity by picking the most ' +
-      'plausible interpretation and stating their assumption at the top of their ' +
-      'result ("가정: …"). When you read a subordinate\'s result, check the stated ' +
-      'assumption. If it looks fine, accept and continue. If it looks wrong but ' +
-      'you can correct it yourself (tone, format, trivial facts), just correct it ' +
-      'in your final answer. Only call `ask_user` when the assumption is high-' +
-      'stakes AND you genuinely cannot pick a better default. Do NOT forward a ' +
-      'subordinate\'s uncertainty to the user as-is — that is your job to resolve.\n' +
-      '\n# One-shot delegation (hard rule)\n' +
+      '# User gateway\n' +
+      'Only you can address the user. Never end a turn with plain text ' +
+      'requesting input ("링크 주세요" etc.) — that finalises the run. Use ' +
+      '`ask_user` per its description for genuine stuck-points only.\n' +
+      `\n# One-shot delegation (hard rule)\n` +
       `You may call \`delegate_to\` on each subordinate at most ${MAX_DELEGATIONS_PER_PAIR} times per run ` +
-      '(the engine enforces this). When a delegate returns a usable result, ' +
-      'do NOT re-delegate with "REVISED TASK" or "please polish X" — either ' +
-      'accept the result and finish, or edit/annotate it yourself in your ' +
-      'final answer.\n' +
-      '\n# Final message = report, not a chat (hard rule)\n' +
-      'Your final turn ends the run. Deliver: (a) a coherent synthesis of ' +
-      'results, (b) all relevant artifact:// links from the session manifest, ' +
-      '(c) any assumption you made, stated briefly. Never offer revision ' +
-      'menus or "다음 단계" / "원하시면" / "어떻게 할까요?" trailers. The user ' +
-      'can start a new task if they want revisions.\n'
+      '(engine-enforced). When a delegate returns a usable result, accept it ' +
+      'or edit yourself — do NOT re-delegate "REVISED TASK" / "please polish X".\n'
     )
   }
   let section =
@@ -2322,11 +2307,11 @@ function buildRelaySection(depth: number, hasSubs: boolean): string {
     'in your tool catalog.\n' +
     '\n# Handling ambiguity in your task (self-resolve)\n' +
     'If the task brief leaves something ambiguous, do NOT ask back. Pick the ' +
-    'single most plausible interpretation, state it as an explicit assumption ' +
-    'at the top of your result ("가정: X 로 해석하여 진행함"), and deliver the ' +
-    'best work under that assumption. Your parent will verify. Picking-and-' +
-    'delivering with a stated assumption is always better than kicking the ' +
-    'decision upward.\n'
+    'single most plausible interpretation, state it as a short explicit ' +
+    'assumption at the top of your result (a single line starting with ' +
+    '"Assumption:" in the task\'s working language), and deliver the best work ' +
+    'under that assumption. Your parent will verify. Picking-and-delivering ' +
+    'with a stated assumption is always better than kicking the decision upward.\n'
   if (hasSubs) {
     section +=
       '\n# Relaying from your own delegates\n' +
