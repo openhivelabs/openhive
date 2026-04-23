@@ -179,7 +179,7 @@ Hero stats arranged horizontally.
 Thank-you / Q&A slide. If `title` is omitted, uses "Thank you".
 
 ```jsonc
-{ "type": "closing", "title": "고맙습니다", "subtitle": "github.com/openhive" }
+{ "type": "closing", "title": "고맙습니다", "subtitle": "github.com/openhivelabs/openhive" }
 ```
 
 ---

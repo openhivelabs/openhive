@@ -14,7 +14,7 @@ const WEBFETCH_TIMEOUT_MS = 10_000
 const WEBFETCH_MAX_CHARS = 20_000
 const WEBFETCH_MAX_BYTES = 2_000_000
 const WEBFETCH_USER_AGENT =
-  'OpenHive/0.1 (+https://github.com/openhive/openhive)'
+  'OpenHive/0.1 (+https://github.com/openhivelabs/openhive)'
 
 /** Narrow test: reject localhost, link-local, loopback, and private RFC1918
  *  ranges. Hostnames are not resolved — we only guard the literal form so a
