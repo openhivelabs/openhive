@@ -28,13 +28,22 @@
  * sales...") but are meta-labels when followed by a colon or newline.
  */
 const META_LABEL_INTRO_RE =
-  /^(?:다음 행동|다음 단계|next steps?|next actions?|次のステップ|산출물|생성된 파일)(?:\s|[:：(（]|$)/i
+  /^(?:다음 행동|다음 단계|next steps?|next actions?|次のステップ|산출물|생성된 파일|첨부|첨부\s*파일|첨부파일|다운로드|보조\s*자료|참고\s*자료|attachments?|downloads?|attached\s*files?|generated\s*files?|deliverables?)(?:\s|[:：(（]|$)/i
 
 const META_LABEL_COLON_RE =
   /^(?:artifacts?|파일|가정|assumption|assumptions|summary|요약|제안\s*사항|제안|참고|note|notes)\s*[:：]/i
 
 const META_LABEL_BARE_LINE_RE =
   /^(?:artifacts?|가정|assumption|summary|요약|산출물)\s*$/i
+
+/**
+ * Paren-headed meta labels like "참고(보조 자료)" or "첨부(다운로드)" —
+ * gpt-5-mini habit in Korean output for enumerating attachments. Bare
+ * `참고` or `첨부` is too generic to strip unconditionally ("참고 바랍니다"
+ * is legitimate prose), so we require the open-paren boundary.
+ */
+const META_LABEL_PAREN_INTRO_RE =
+  /^(?:참고|첨부|다운로드|보조|downloads?|attachments?)\s*[(（]/i
 
 /** Cheap paragraph-boundary split. A paragraph ends at a blank line (\n\n). */
 const PARAGRAPH_SPLIT = /\n\s*\n/
@@ -47,7 +56,8 @@ function isMetaLabelParagraph(firstLine: string): boolean {
   return (
     META_LABEL_INTRO_RE.test(firstLine) ||
     META_LABEL_COLON_RE.test(firstLine) ||
-    META_LABEL_BARE_LINE_RE.test(firstLine)
+    META_LABEL_BARE_LINE_RE.test(firstLine) ||
+    META_LABEL_PAREN_INTRO_RE.test(firstLine)
   )
 }
 

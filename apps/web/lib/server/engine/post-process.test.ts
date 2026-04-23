@@ -72,6 +72,51 @@ describe('stripMetaLabels', () => {
   it('empty input', () => {
     expect(stripMetaLabels('')).toBe('')
   })
+
+  // ── enumeration blocks (session 4a787313 style) ───────────────────────
+  // When the Lead leaks a "첨부(다운로드)" or "참고(보조 자료)" section listing
+  // artifact links, the UI's AttachmentStack already renders the files
+  // below the message — the enumeration block in the prose is pure
+  // redundancy and also visually weighs the message toward "여러 개 만들었네"
+  // even when the extras are pdf-skill sidecars.
+
+  it('strips "첨부(다운로드)" section with bullet list', () => {
+    const t =
+      '요청하신 보고서를 작성했습니다.\n\n첨부(다운로드)\n- [report.pdf](artifact://session/s1/artifacts/report.pdf)'
+    const out = stripMetaLabels(t)
+    expect(out).not.toMatch(/첨부/)
+    expect(out).toMatch(/작성했습니다/)
+  })
+
+  it('strips "참고(보조 자료)" section', () => {
+    const t =
+      '답변입니다.\n\n참고(보조 자료)\n- [data.csv](artifact://session/s1/artifacts/data.csv)'
+    const out = stripMetaLabels(t)
+    expect(out).not.toMatch(/참고/)
+  })
+
+  it('strips "다운로드" header paragraph', () => {
+    const t = 'Done.\n\n다운로드:\n- [x.pdf](artifact://…)'
+    const out = stripMetaLabels(t)
+    expect(out).not.toMatch(/다운로드/)
+  })
+
+  it('strips English "Attachments" / "Downloads" / "Deliverables" sections', () => {
+    const t =
+      'Done.\n\nAttachments:\n- report.pdf\n\nDownloads\n- data.csv\n\nDeliverables:\n- final.docx'
+    const out = stripMetaLabels(t)
+    expect(out).not.toMatch(/Attachments/i)
+    expect(out).not.toMatch(/Downloads/i)
+    expect(out).not.toMatch(/Deliverables/i)
+    expect(out.trim()).toBe('Done.')
+  })
+
+  it('does NOT strip "첨부" / "참고" mid-paragraph', () => {
+    // These words appear in real prose; the heuristic only fires at
+    // paragraph start followed by `:` `(` or newline.
+    const t = '해당 자료를 첨부합니다. 참고 바랍니다.'
+    expect(stripMetaLabels(t)).toBe(t)
+  })
 })
 
 describe('stripFakeArtifactLinks', () => {

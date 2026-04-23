@@ -853,7 +853,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     // doesn't mutate user-authored persona bodies.
     const deliverablesPolicy =
       depth === 0
-        ? `# Files & Deliverables\nProduce ONLY the file(s) the user explicitly asked for. "PDF 만들어줘" = one PDF, not a PDF plus a CSV plus a summary.txt plus a sources.txt. If supporting data helps the answer, fold it into the single requested file or into your prose reply — do not spin off auxiliary files the user didn't ask for. When in doubt about how many files, default to ONE.\n\nDo not enumerate filenames or paste \`artifact://\` links in your reply — the UI attaches files automatically below your message. Just answer the question.\n`
+        ? `# Files\nMake exactly one file of the requested type. "PDF 만들어줘" = one PDF. Weave supporting data (evidence, sources, assumptions) into the PDF itself or into your prose reply — never into sidecar .txt / .csv / summary / notes files. Reply in prose only; the UI attaches files below your message automatically.\n`
         : ''
     const prefix =
       (manifestBlock ? manifestBlock + '\n' : '') +

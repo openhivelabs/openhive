@@ -147,6 +147,39 @@ function summarizeTool(e: TranscriptEntry): string {
   return tool
 }
 
+/**
+ * Split a session's artifacts into (user-visible, hidden-helpers).
+ *
+ * Some skills emit helper side-outputs alongside their primary deliverable
+ * (pdf's `build_doc.py` always writes a `.pdf.spec.json` next to the PDF
+ * for round-trip edits). Those helpers shouldn't appear as chat
+ * attachments — the user asked for "one PDF", not "a PDF and a JSON
+ * blueprint". Rule: any artifact whose filename is
+ * `<primary>.spec.json` is hidden when `<primary>` also exists.
+ *
+ * The helpers still live on disk at ~/.openhive/sessions/{id}/artifacts/
+ * so power users with round-trip editing needs can find them.
+ */
+function partitionArtifacts(artifacts: SessionArtifact[]): {
+  visible: SessionArtifact[]
+  hidden: SessionArtifact[]
+} {
+  const filenames = new Set(artifacts.map((a) => a.filename))
+  const visible: SessionArtifact[] = []
+  const hidden: SessionArtifact[] = []
+  for (const a of artifacts) {
+    if (a.filename.endsWith('.spec.json')) {
+      const parent = a.filename.slice(0, -'.spec.json'.length)
+      if (filenames.has(parent)) {
+        hidden.push(a)
+        continue
+      }
+    }
+    visible.push(a)
+  }
+  return { visible, hidden }
+}
+
 function buildChat(
   summary: SessionSummary,
   team: ReturnType<typeof useCurrentTeam>,
@@ -236,12 +269,15 @@ function buildChat(
   // produced this file" — by timestamp. An artifact with created_at T goes
   // to the first assistant whose ts >= T (i.e. the one that wraps the tool
   // calls that generated it). Artifacts without created_at (older sessions)
-  // fall through to the final assistant so they're still reachable.
+  // fall through to the final assistant so they're still reachable. Hidden
+  // helper artifacts (e.g. pdf's sidecar `.spec.json`) are filtered out
+  // here too.
   const assistantItems = out.flatMap((x) =>
     x.kind === 'assistant' ? [x] : [],
   )
   if (assistantItems.length > 0) {
-    const sorted = [...(summary.artifacts ?? [])].sort((a, b) => {
+    const { visible } = partitionArtifacts(summary.artifacts ?? [])
+    const sorted = [...visible].sort((a, b) => {
       const ta = typeof a.created_at === 'number' ? a.created_at : Number.POSITIVE_INFINITY
       const tb = typeof b.created_at === 'number' ? b.created_at : Number.POSITIVE_INFINITY
       return ta - tb
@@ -699,17 +735,21 @@ export function RunDetailPage() {
         {/* Artifacts column */}
         <aside className="w-[272px] shrink-0 flex flex-col min-h-0">
           <div className="flex-1 min-h-0 overflow-y-auto scrollbar-quiet px-3 py-4 space-y-3">
-            {/* Artifacts */}
+            {/* Artifacts — hide sidecar helpers (e.g. pdf's .spec.json)
+             *  so the count/list match what the user actually cares about. */}
+            {(() => {
+              const visibleArtifacts = partitionArtifacts(summary.artifacts).visible
+              return (
             <SidePanel
               icon={<FileText className="w-4 h-4" />}
               title={t('session.artifactsTitle')}
-              count={summary.artifacts.length}
+              count={visibleArtifacts.length}
             >
-              {summary.artifacts.length === 0 ? (
+              {visibleArtifacts.length === 0 ? (
                 <EmptyNote>{t('session.artifactsEmpty')}</EmptyNote>
               ) : (
                 <ul className="space-y-0.5">
-                  {summary.artifacts.map((a) => (
+                  {visibleArtifacts.map((a) => (
                     <li key={a.id}>
                       <a
                         href={`/api/artifacts/${encodeURIComponent(a.id)}/download`}
@@ -728,6 +768,8 @@ export function RunDetailPage() {
                 </ul>
               )}
             </SidePanel>
+              )
+            })()}
 
             {/* References */}
             <SidePanel
