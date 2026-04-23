@@ -119,6 +119,15 @@ type ChatItem =
       summary: string
     }
   | {
+      // 2+ consecutive tool steps fold into one expandable bar. Rendered as
+      // "진행 내역 N개 ∨" when collapsed, expands into the original tool
+      // chip list when clicked. Prevents long research turns from burying
+      // the actual answer under 20 vertical tool rows.
+      kind: 'tool_group'
+      id: string
+      items: { id: string; author: string; summary: string }[]
+    }
+  | {
       kind: 'ask'
       id: string
       toolCallId: string
@@ -302,6 +311,40 @@ function buildChat(
     }
   }
 
+  // Collapse consecutive tool steps (≥2) into a single expandable group.
+  // User asked for a Claude-Desktop-style "N steps ∨" bar — raw chip
+  // stream gets visually noisy once a turn runs 10+ tools.
+  return collapseToolRuns(out)
+}
+
+function collapseToolRuns(items: ChatItem[]): ChatItem[] {
+  const out: ChatItem[] = []
+  let run: Extract<ChatItem, { kind: 'tool' }>[] = []
+  const flush = () => {
+    if (run.length >= 2) {
+      out.push({
+        kind: 'tool_group',
+        id: `g-${run[0]!.id}`,
+        items: run.map((r) => ({
+          id: r.id,
+          author: r.author,
+          summary: r.summary,
+        })),
+      })
+    } else if (run.length === 1) {
+      out.push(run[0]!)
+    }
+    run = []
+  }
+  for (const it of items) {
+    if (it.kind === 'tool') {
+      run.push(it)
+    } else {
+      flush()
+      out.push(it)
+    }
+  }
+  flush()
   return out
 }
 
@@ -985,6 +1028,62 @@ function AttachmentCard({ artifact }: { artifact: SessionArtifact }) {
   )
 }
 
+/**
+ * Collapsible bar that stands in for a run of 2+ consecutive tool chips.
+ * Collapsed: "진행 내역 N개 ∨". Expanded: the original chip list with a
+ * left rail connecting line, so a long research turn doesn't bury the
+ * assistant's actual answer under 20 vertical rows.
+ *
+ * Wording is intentionally neutral ("진행 내역" / "N steps") rather than
+ * Claude Desktop's "명령 N개 실행함" — OpenHive tool steps aren't always
+ * shell commands (delegation, ask_user, artifact reads, etc.). Swap the
+ * i18n value when a better word surfaces.
+ */
+function ToolGroupBar({
+  group,
+}: {
+  group: Extract<ChatItem, { kind: 'tool_group' }>
+}) {
+  const t = useT()
+  const [expanded, setExpanded] = useState(false)
+  const label = t('session.tool.groupLabel', { count: group.items.length })
+  return (
+    <div className="px-4">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        aria-label={
+          expanded ? t('session.tool.groupCollapse') : t('session.tool.groupExpand')
+        }
+        className="group inline-flex items-center gap-1.5 text-[13px] text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200 transition-colors"
+      >
+        <Wrench className="w-3.5 h-3.5 shrink-0 opacity-60" />
+        <span className="font-medium">{label}</span>
+        <CaretDown
+          className={`w-3 h-3 transition-transform duration-150 ${
+            expanded ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+      {expanded && (
+        <ul className="mt-2 ml-[7px] pl-3 border-l border-neutral-200 dark:border-neutral-800 flex flex-col gap-1.5">
+          {group.items.map((it) => (
+            <li key={it.id} className="flex">
+              <span className="inline-flex items-center gap-2 rounded-full border border-neutral-200 dark:border-neutral-800 bg-neutral-100/60 dark:bg-neutral-900/60 px-2.5 py-1 text-[12px] text-neutral-500 font-mono w-fit">
+                <Wrench className="w-3 h-3" />
+                <span className="text-neutral-700 dark:text-neutral-300">
+                  {it.summary}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function EmptyNote({ children }: { children: ReactNode }) {
   return (
     <div className="text-[12.5px] text-neutral-400 leading-relaxed">
@@ -1347,6 +1446,9 @@ const ChatBubble = memo(
       </div>
     )
   }
+  if (item.kind === 'tool_group') {
+    return <ToolGroupBar group={item} />
+  }
   if (item.kind === 'ask') {
     // Handled inline at the map site where submit/skip callbacks live.
     return null
@@ -1389,6 +1491,13 @@ const ChatBubble = memo(
     }
     if (a.kind === 'tool' && b.kind === 'tool') {
       return a.summary === b.summary
+    }
+    if (a.kind === 'tool_group' && b.kind === 'tool_group') {
+      if (a.items.length !== b.items.length) return false
+      for (let i = 0; i < a.items.length; i++) {
+        if (a.items[i]!.summary !== b.items[i]!.summary) return false
+      }
+      return true
     }
     if (a.kind === 'error' && b.kind === 'error') {
       return a.text === b.text

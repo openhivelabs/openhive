@@ -300,6 +300,10 @@ const en: Dict = {
   'session.tool.askUser': 'asking user',
   'session.tool.readArtifact': 'reading artifact',
   'session.tool.generic': '{tool}',
+  // collapsible group header when 2+ tool steps run back-to-back
+  'session.tool.groupLabel': '{count} steps',
+  'session.tool.groupExpand': 'Expand',
+  'session.tool.groupCollapse': 'Collapse',
   'tasks.startedAt': 'started',
   'tasks.finishedAt': 'finished',
   'tasks.createdAt': 'created',
@@ -906,6 +910,10 @@ const ko: Dict = {
   'session.tool.askUser': '사용자에게 질문',
   'session.tool.readArtifact': '아티팩트 읽기',
   'session.tool.generic': '{tool}',
+  // 2개 이상 연속 tool 호출을 하나로 접는 그룹 헤더. 문구는 우선 sample, 추후 조정.
+  'session.tool.groupLabel': '진행 내역 {count}개',
+  'session.tool.groupExpand': '펼치기',
+  'session.tool.groupCollapse': '접기',
   'tasks.startedAt': '시작',
   'tasks.finishedAt': '완료',
   'tasks.createdAt': '생성',
