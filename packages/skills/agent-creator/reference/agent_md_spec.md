@@ -11,12 +11,24 @@ YAML between `---` fences. Required fields bolded.
 | Field | Type | Description |
 |---|---|---|
 | **`name`** | string | Unique persona identifier. Lowercase, hyphen-separated preferred. |
-| `description` | string | One-line purpose — shown in UI pickers and logs. |
+| `description` | string | Routing hint parent agents read to decide delegation. Concrete verb + object, distinguishable from siblings. See "Description rules" below. |
 | `model` | string | Override the team's default model for this agent. |
 | `skills` | list of strings | Skills to enable (intersected with team allow list). |
 | `mcp` | list of strings | MCP servers to use (intersected with team allow list). |
 
 Anything else in frontmatter passes through to `PersonaDef.meta`.
+
+## Description rules
+
+`description` is the only signal a parent agent reads when deciding whether to delegate. Treat it as a routing hint, not a UI label.
+
+- Concrete verb + object — name the input, output, or domain.
+- Must distinguish this agent from siblings with similar roles.
+- One sentence, in the user's language.
+- Bad: `research agent`, `Copilot`, `helps with tasks`
+- Good: `researches academic papers and returns citations with DOI`
+- Good: `summarises long PDFs into 3-bullet TL;DRs`
+- Good: `extracts article body from a URL and formats it as markdown`
 
 ## Body structure
 

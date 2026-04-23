@@ -137,7 +137,7 @@ Exact format:
 
 ---
 name: <slug>
-description: <one-line purpose>
+description: <routing hint — see rules below>
 ---
 
 # Persona
@@ -158,7 +158,18 @@ Rules:
 - OMIT the "Reference index" section entirely if no references are listed.
 - Do NOT invent reference files that aren't in the provided list.
 - Match the user's language (Korean description → Korean body).
-- Return the file body only. No markdown fences around the whole output.`
+- Return the file body only. No markdown fences around the whole output.
+
+\`description\` field (critical — this is the ONLY signal a parent agent
+reads when deciding whether to delegate to you):
+- Start with a concrete verb + object. Name the input, the output, or the
+  domain you specialise in.
+- Must distinguish you from sibling agents that share a similar role.
+- One sentence, no trailing period required. Match the user's language.
+- Bad examples: "research agent", "Copilot", "helps with tasks"
+- Good examples: "researches academic papers and returns citations with DOI",
+  "summarises long PDFs into 3-bullet TL;DRs",
+  "extracts article body from a URL and formats it as markdown"`
 
 const REFERENCE_SYSTEM = `You are writing one reference file for an OpenHive agent. The agent reads
 this file on demand when it needs context for the single topic below.
