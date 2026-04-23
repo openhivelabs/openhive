@@ -97,7 +97,7 @@ export async function stopBackendSession(sessionId: string): Promise<void> {
  *  (A user who can't reach their own local server has bigger problems.) */
 export async function patchSession(
   sessionId: string,
-  patch: { title?: string | null; pinned?: boolean },
+  patch: { title?: string | null; pinned?: boolean; viewed?: boolean },
 ): Promise<void> {
   try {
     await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {

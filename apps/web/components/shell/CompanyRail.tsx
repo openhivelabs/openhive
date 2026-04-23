@@ -1,7 +1,8 @@
-import { GearSix, Plus } from '@phosphor-icons/react'
+import { GearSix, Package, Plus } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { FrameMarketModal } from '@/components/modals/FrameMarketModal'
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
 
@@ -17,12 +18,14 @@ export function CompanyRail() {
   const navigate = useNavigate()
   const companies = useAppStore((s) => s.companies)
   const currentCompanyId = useAppStore((s) => s.currentCompanyId)
+  const currentTeamId = useAppStore((s) => s.currentTeamId)
   const setCompany = useAppStore((s) => s.setCompany)
   const reorderCompanies = useAppStore((s) => s.reorderCompanies)
   const selectedId = currentCompanyId || companies[0]?.id
 
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<{ id: string; position: 'before' | 'after' } | null>(null)
+  const [marketOpen, setMarketOpen] = useState(false)
 
   function handleDrop(targetId: string, position: 'before' | 'after') {
     if (!draggingId || draggingId === targetId) {
@@ -121,6 +124,15 @@ export function CompanyRail() {
         >
           <Plus className="w-4 h-4" />
         </button>
+        <button
+          type="button"
+          onClick={() => setMarketOpen(true)}
+          aria-label="Frame Market"
+          title="Frame Market"
+          className="mt-6 w-9 h-9 rounded-md flex items-center justify-center text-neutral-500 hover:text-neutral-900 hover:bg-neutral-200/60 dark:hover:bg-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100 cursor-pointer"
+        >
+          <Package className="w-5 h-5" />
+        </button>
       </div>
       <Link
         to="/settings"
@@ -130,6 +142,12 @@ export function CompanyRail() {
       >
         <GearSix className="w-5 h-5" />
       </Link>
+      <FrameMarketModal
+        open={marketOpen}
+        onClose={() => setMarketOpen(false)}
+        defaultCompanyId={selectedId ?? null}
+        defaultTeamId={currentTeamId ?? null}
+      />
     </aside>
   )
 }

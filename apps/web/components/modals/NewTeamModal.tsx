@@ -1,5 +1,5 @@
-import { CircleNotch, Package, Sparkle, Upload, Warning, X } from '@phosphor-icons/react'
-import { useRef, useState } from 'react'
+import { ArrowLeft, CircleNotch, Package, Sparkle, Upload, Warning, X } from '@phosphor-icons/react'
+import { useEffect, useRef, useState } from 'react'
 import {
   type FramePreview,
   installFrame,
@@ -10,6 +10,7 @@ import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { PRESETS, type PresetDef } from '@/lib/presets'
 import type { Team } from '@/lib/types'
+import { DEFAULT_TEAM_ICON_KEY, IconPickerButton } from '../shell/TeamIcon'
 import { Button } from '../ui/Button'
 
 interface NewTeamModalProps {
@@ -18,7 +19,7 @@ interface NewTeamModalProps {
   onClose: () => void
 }
 
-type Mode = 'picker' | 'nl' | 'frame'
+type Mode = 'picker' | 'empty' | 'nl' | 'frame'
 
 export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
   const addTeam = useAppStore((s) => s.addTeam)
@@ -30,6 +31,20 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
   const [framePreview, setFramePreview] = useState<FramePreview | null>(null)
   const [frameWarnings, setFrameWarnings] = useState<string[]>([])
   const frameFileInput = useRef<HTMLInputElement>(null)
+  // Empty-preset config step
+  const [emptyName, setEmptyName] = useState('New Team')
+  const [emptyIcon, setEmptyIcon] = useState<string>(DEFAULT_TEAM_ICON_KEY)
+  const emptyNameInput = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (mode === 'empty') {
+      // Auto-focus + select so the user can just start typing.
+      const el = emptyNameInput.current
+      if (el) {
+        el.focus()
+        el.select()
+      }
+    }
+  }, [mode])
 
   useEscapeClose(open && companyId, onClose)
 
@@ -38,7 +53,24 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
   const company = companies.find((c) => c.id === companyId)
 
   const applyPreset = (p: PresetDef) => {
+    // Empty preset gets a follow-up form (name + icon) instead of silently
+    // landing as "New Team". Every other preset is opinionated enough to
+    // commit straight away.
+    if (p.id === 'empty-team') {
+      setEmptyName('New Team')
+      setEmptyIcon(DEFAULT_TEAM_ICON_KEY)
+      setMode('empty')
+      return
+    }
     addTeam(companyId, p.build())
+    reset()
+  }
+
+  const applyEmpty = () => {
+    const name = emptyName.trim() || 'New Team'
+    const base = PRESETS.find((x) => x.id === 'empty-team')?.build()
+    if (!base) return
+    addTeam(companyId, { ...base, name, icon: emptyIcon })
     reset()
   }
 
@@ -108,6 +140,8 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
     setError(null)
     setFramePreview(null)
     setFrameWarnings([])
+    setEmptyName('New Team')
+    setEmptyIcon(DEFAULT_TEAM_ICON_KEY)
     if (frameFileInput.current) frameFileInput.current.value = ''
     onClose()
   }
@@ -138,61 +172,120 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
           </button>
         </div>
 
-        <div className="px-5 pt-4">
-          <div className="inline-flex rounded border border-neutral-200 p-0.5 text-[15px]">
-            <button
-              type="button"
-              onClick={() => setMode('picker')}
-              className={
-                mode === 'picker'
-                  ? 'px-3 py-1 rounded-sm bg-neutral-900 text-white'
-                  : 'px-3 py-1 rounded-sm text-neutral-600 hover:bg-neutral-100'
-              }
-            >
-              From preset
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('nl')}
-              className={
-                mode === 'nl'
-                  ? 'px-3 py-1 rounded-sm bg-neutral-900 text-white'
-                  : 'px-3 py-1 rounded-sm text-neutral-600 hover:bg-neutral-100'
-              }
-            >
-              From description
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('frame')}
-              className={
-                mode === 'frame'
-                  ? 'px-3 py-1 rounded-sm bg-neutral-900 text-white'
-                  : 'px-3 py-1 rounded-sm text-neutral-600 hover:bg-neutral-100'
-              }
-            >
-              From Frame
-            </button>
+        {mode !== 'empty' && (
+          <div className="px-5 pt-4">
+            <div className="inline-flex rounded border border-neutral-200 p-0.5 text-[15px]">
+              <button
+                type="button"
+                onClick={() => setMode('picker')}
+                className={
+                  mode === 'picker'
+                    ? 'px-3 py-1 rounded-sm bg-neutral-900 text-white'
+                    : 'px-3 py-1 rounded-sm text-neutral-600 hover:bg-neutral-100'
+                }
+              >
+                From preset
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('nl')}
+                className={
+                  mode === 'nl'
+                    ? 'px-3 py-1 rounded-sm bg-neutral-900 text-white'
+                    : 'px-3 py-1 rounded-sm text-neutral-600 hover:bg-neutral-100'
+                }
+              >
+                From description
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('frame')}
+                className={
+                  mode === 'frame'
+                    ? 'px-3 py-1 rounded-sm bg-neutral-900 text-white'
+                    : 'px-3 py-1 rounded-sm text-neutral-600 hover:bg-neutral-100'
+                }
+              >
+                From Frame
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {mode === 'picker' && (
           <div className="px-5 py-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {PRESETS.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => applyPreset(p)}
-                className="text-left rounded-md border border-neutral-200 bg-white p-4 hover:border-neutral-400 hover:shadow-sm transition-all"
+            {PRESETS.map((p) => {
+              const isEmpty = p.id === 'empty-team'
+              const agentCount = p.build().agents.length
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => applyPreset(p)}
+                  className="group text-left rounded-md border border-neutral-200 bg-white p-4 hover:border-neutral-900 hover:shadow-sm transition-all flex flex-col"
+                >
+                  <div className="text-2xl mb-2">{p.icon}</div>
+                  <div className="font-semibold text-neutral-900 text-[15px]">{p.name}</div>
+                  <div className="text-[14px] text-neutral-500 mt-1 leading-relaxed flex-1">{p.tagline}</div>
+                  <div className="text-[13px] text-neutral-400 mt-2 flex items-center justify-between">
+                    <span>{agentCount} agent{agentCount === 1 ? '' : 's'}</span>
+                    {isEmpty && (
+                      <span className="opacity-0 group-hover:opacity-100 transition-opacity text-neutral-700">
+                        Customize →
+                      </span>
+                    )}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        {mode === 'empty' && (
+          <div className="px-5 py-5 space-y-4">
+            <button
+              type="button"
+              onClick={() => setMode('picker')}
+              className="inline-flex items-center gap-1 text-[13px] text-neutral-500 hover:text-neutral-900"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" /> Back to presets
+            </button>
+            <div>
+              <div className="text-[15px] font-medium text-neutral-700 mb-2">
+                Team name & icon
+              </div>
+              <div className="flex items-stretch gap-2">
+                <IconPickerButton value={emptyIcon} onChange={setEmptyIcon} />
+                <input
+                  ref={emptyNameInput}
+                  value={emptyName}
+                  onChange={(e) => setEmptyName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      applyEmpty()
+                    }
+                  }}
+                  placeholder="New Team"
+                  className="flex-1 px-3 py-2 text-[15px] rounded-sm border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-300"
+                />
+              </div>
+              <p className="text-[13px] text-neutral-500 mt-2">
+                Starts with just a Lead agent. Add more from the team canvas later.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setMode('picker')}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={applyEmpty}
+                disabled={!emptyName.trim()}
               >
-                <div className="text-2xl mb-2">{p.icon}</div>
-                <div className="font-semibold text-neutral-900 text-[15px]">{p.name}</div>
-                <div className="text-[15px] text-neutral-500 mt-1 leading-relaxed">{p.tagline}</div>
-                <div className="text-[14px] text-neutral-400 mt-2">
-                  {p.build().agents.length} agents
-                </div>
-              </button>
-            ))}
+                Create team
+              </Button>
+            </div>
           </div>
         )}
 

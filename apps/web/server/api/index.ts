@@ -9,6 +9,7 @@ import { composer } from './composer'
 import { credentials } from './credentials'
 import { frames } from './frames'
 import { health } from './health'
+import { market } from './market'
 import { mcp } from './mcp'
 import { panelTemplates } from './panel-templates'
 import { panels } from './panels'
@@ -29,6 +30,7 @@ api.route('/ai', ai)
 api.route('/artifacts', artifacts)
 api.route('/backup', backup)
 api.route('/frames', frames)
+api.route('/market', market)
 api.route('/mcp', mcp)
 api.route('/panel-templates', panelTemplates)
 api.route('/panels', panels)

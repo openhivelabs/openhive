@@ -23,7 +23,9 @@ import { AskInlineCard } from '@/components/tasks/AskInlineCard'
 import { useT } from '@/lib/i18n'
 import { postAnswer, type AskUserQuestion } from '@/lib/api/sessions'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
+import { useSessionsStore } from '@/lib/stores/useSessionsStore'
 import { useTasksStore } from '@/lib/stores/useTasksStore'
+import { addViewedId } from '@/lib/sessionViewed'
 
 interface SessionArtifact {
   id: string
@@ -408,6 +410,7 @@ export function RunDetailPage() {
     let es: EventSource | null = null
     let refetchTimer: ReturnType<typeof setTimeout> | null = null
     let inflight = false
+    let viewedMarked = false
     // If events arrive while a fetch is inflight, set this so we kick off
     // one more fetch when the current one resolves — otherwise late events
     // (tokens after the first refetch started) never get reflected.
@@ -431,7 +434,21 @@ export function RunDetailPage() {
           return
         }
         const data = (await res.json()) as SessionSummary
-        if (!cancelled) setSummary(data)
+        if (!cancelled) {
+          setSummary(data)
+          // Mark the session as read — previously only TasksTab.openSession did
+          // this, so a user who landed on /s/:id directly (deep link, nav from
+          // the chat, etc.) would see the run stuck as "new result" forever.
+          if (!viewedMarked && id) {
+            viewedMarked = true
+            useSessionsStore.getState().markViewed(id)
+            const owner = useTasksStore
+              .getState()
+              .tasks.find((t) => t.sessions.some((r) => r.id === id))
+            if (owner) useTasksStore.getState().markRunViewed(owner.id, id)
+            addViewedId(id)
+          }
+        }
       } catch {
         /* transient — will refetch on next event */
       } finally {
@@ -1002,7 +1019,7 @@ function AttachmentCard({ artifact }: { artifact: SessionArtifact }) {
     <a
       href={downloadUrl}
       download={artifact.filename}
-      className="group flex items-center gap-3 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-900/60 px-3.5 py-3 w-full hover:bg-neutral-100 dark:hover:bg-neutral-800/80 transition-colors no-underline"
+      className="group/card flex items-center gap-3 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-900/60 px-3.5 py-3 w-full hover:bg-neutral-100 dark:hover:bg-neutral-800/80 transition-colors no-underline"
       title={`Download ${artifact.filename}`}
     >
       <span
@@ -1012,7 +1029,7 @@ function AttachmentCard({ artifact }: { artifact: SessionArtifact }) {
         <FileText className="w-5 h-5 text-neutral-500" />
       </span>
       <span className="flex-1 min-w-0 leading-tight">
-        <span className="block font-semibold text-[14px] text-neutral-900 dark:text-neutral-100 truncate group-hover:underline">
+        <span className="block font-semibold text-[14px] text-neutral-900 dark:text-neutral-100 truncate group-hover/card:underline">
           {artifact.filename}
         </span>
         <span className="block text-[12px] text-neutral-500 dark:text-neutral-400 mt-0.5">
@@ -1021,7 +1038,7 @@ function AttachmentCard({ artifact }: { artifact: SessionArtifact }) {
         </span>
       </span>
       <span
-        className="shrink-0 p-1.5 rounded-md text-neutral-400 group-hover:text-neutral-700 group-hover:bg-neutral-200 dark:group-hover:text-neutral-200 dark:group-hover:bg-neutral-700"
+        className="shrink-0 p-1.5 rounded-md text-neutral-400 group-hover/card:text-neutral-700 group-hover/card:bg-neutral-200 dark:group-hover/card:text-neutral-200 dark:group-hover/card:bg-neutral-700"
         aria-hidden
       >
         <DownloadSimple className="w-4 h-4" />

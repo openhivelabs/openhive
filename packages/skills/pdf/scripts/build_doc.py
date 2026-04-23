@@ -137,11 +137,6 @@ def _run(args: argparse.Namespace) -> int:
             "very tall blocks or oversized images can abort a build",
         ) from e
 
-    # pair .spec.json for edit round-trip
-    spec_out = out.with_suffix(out.suffix + ".spec.json")
-    spec_out.write_text(json.dumps(spec, ensure_ascii=False, indent=2),
-                        encoding="utf-8")
-
     # self-check: a valid PDF is comfortably over 1KB
     check_file(str(out), min_bytes=1000)
 
@@ -151,11 +146,6 @@ def _run(args: argparse.Namespace) -> int:
                 "name": out.name,
                 "path": str(out),
                 "mime": "application/pdf",
-            },
-            {
-                "name": spec_out.name,
-                "path": str(spec_out),
-                "mime": "application/json",
             },
         ],
         warnings=warnings,

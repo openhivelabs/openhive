@@ -22,6 +22,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { type CreateTaskInput, NewTaskModal } from '@/components/modals/NewTaskModal'
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal'
 import { useT } from '@/lib/i18n'
+import { loadViewedIds, saveViewedIds } from '@/lib/sessionViewed'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
 import { useSessionsStore } from '@/lib/stores/useSessionsStore'
 import { useTasksStore } from '@/lib/stores/useTasksStore'
@@ -73,29 +74,6 @@ function stateInTab(state: SessionState, tab: SessionTabKey): boolean {
   if (tab === 'working') return state === 'working'
   if (tab === 'done') return state === 'done-fresh' || state === 'done-seen'
   return state === 'failed-fresh' || state === 'failed-seen'
-}
-
-/** Pin / rename state lives on the backend (session meta.json). Viewed flag is
- *  still localStorage-only because there's no server counterpart yet. */
-const LS_VIEWED_KEY = 'openhive.sessions.viewed'
-
-function loadViewedIds(): Set<string> {
-  try {
-    const raw = localStorage.getItem(LS_VIEWED_KEY)
-    if (!raw) return new Set()
-    const arr = JSON.parse(raw)
-    return Array.isArray(arr) ? new Set(arr.filter((x) => typeof x === 'string')) : new Set()
-  } catch {
-    return new Set()
-  }
-}
-
-function saveViewedIds(ids: Set<string>) {
-  try {
-    localStorage.setItem(LS_VIEWED_KEY, JSON.stringify(Array.from(ids)))
-  } catch {
-    /* ignore */
-  }
 }
 
 /** 라이브(task.sessions 기반)든 아카이브(sessions store 기반)든 동일 모양으로 뽑아
@@ -458,12 +436,7 @@ export function TasksTab() {
     if (!team || launchingTaskId) return
     setLaunchingTaskId(task.id)
     try {
-      const sessionId = await startSessionFromTask(task, team)
-      if (sessionId && params?.companySlug && params?.teamSlug) {
-        // Navigate to the session so the user sees the run and doesn't
-        // double-click (which was spawning zombie sessions).
-        navigate(`/${params.companySlug}/${params.teamSlug}/s/${sessionId}`)
-      }
+      await startSessionFromTask(task, team)
     } finally {
       setLaunchingTaskId(null)
     }
