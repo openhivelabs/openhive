@@ -58,7 +58,7 @@ export function ArtifactLink({
       <a
         href={downloadUrl}
         download={filename}
-        className="group flex items-center gap-3 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50/60 dark:bg-neutral-800/40 px-3 py-2.5 max-w-[560px] hover:bg-neutral-100 dark:hover:bg-neutral-800/60 transition-colors no-underline"
+        className="group flex items-center gap-3 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50/60 dark:bg-neutral-800/40 px-3 py-2.5 w-full hover:bg-neutral-100 dark:hover:bg-neutral-800/60 transition-colors no-underline"
         title={`Download ${filename}`}
       >
         <span
