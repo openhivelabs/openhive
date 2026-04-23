@@ -11,37 +11,46 @@
 import fs from 'node:fs'
 
 import { listSessions, sessionDir, sessionUsagePath } from './sessions'
+import { computeCost, getPricingForModel } from './usage/pricing'
 
 export type UsagePeriod = '24h' | '7d' | '30d' | 'all'
 
-// Rough $ / 1M tokens (input, output).
-const RATES: Record<string, [number, number]> = {
-  'claude-opus-4': [15.0, 75.0],
-  'claude-sonnet-4': [3.0, 15.0],
-  'claude-haiku-4': [0.8, 4.0],
-  'gpt-5': [5.0, 15.0],
-  'gpt-5-mini': [0.6, 2.4],
-  'gpt-4o': [2.5, 10.0],
-  'gpt-4o-mini': [0.15, 0.6],
-  o3: [2.0, 8.0],
-  'o3-mini': [1.1, 4.4],
-}
-
-function rateFor(model: string): [number, number] {
-  for (const [key, rate] of Object.entries(RATES)) {
-    if (model.startsWith(key)) return rate
-  }
-  return [0, 0]
-}
-
+/**
+ * Per-model cost estimator (9router-style). See `./usage/pricing.ts` for the
+ * full rate table + resolver. This wrapper preserves the legacy
+ * `estimateCostCents(model, input, output)` signature so callers that only
+ * have two token counts still work, but new code should use the fully-
+ * decomposed `computeCost(...)` to get correct cache-read + cache-creation
+ * + reasoning billing.
+ *
+ * `inputTokens` here is interpreted as "fresh input only" — providers that
+ * report cache-inclusive `prompt_tokens` (Copilot/OpenAI) normalize upstream
+ * in `engine/providers.ts` so every call site sees the Anthropic-style
+ * disjoint convention.
+ */
 export function estimateCostCents(
   model: string,
   inputTokens: number,
   outputTokens: number,
+  opts: {
+    provider?: string
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+    reasoningTokens?: number
+  } = {},
 ): number {
-  const [rin, rout] = rateFor(model)
-  return (rin * inputTokens + rout * outputTokens) / 10_000
+  return computeCost({
+    provider: opts.provider ?? '',
+    model,
+    freshInputTokens: inputTokens,
+    outputTokens,
+    cacheReadTokens: opts.cacheReadTokens ?? 0,
+    cacheWriteTokens: opts.cacheWriteTokens ?? 0,
+    reasoningTokens: opts.reasoningTokens ?? 0,
+  }).total_cents
 }
+
+export { getPricingForModel }
 
 export type ThresholdTrigger = 'none' | 'warning' | 'autocompact' | 'blocking'
 
@@ -122,7 +131,11 @@ function writeRows(sessionId: string, rows: UsageRow[]): void {
 
 export function recordUsage(input: RecordUsageInput): void {
   if (!input.sessionId) return
-  const cost = estimateCostCents(input.model, input.inputTokens, input.outputTokens)
+  const cost = estimateCostCents(input.model, input.inputTokens, input.outputTokens, {
+    provider: input.providerId,
+    cacheReadTokens: input.cacheReadTokens ?? 0,
+    cacheWriteTokens: input.cacheWriteTokens ?? 0,
+  })
   const row: UsageRow = {
     ts: Date.now(),
     session_id: input.sessionId,

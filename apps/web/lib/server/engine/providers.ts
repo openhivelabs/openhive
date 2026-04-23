@@ -92,13 +92,21 @@ async function* streamCopilot(
     const usage = (chunk as { usage?: Record<string, unknown> }).usage
     if (usage) {
       // OpenAI-shaped usage nests cache metrics under prompt_tokens_details.
-      // prompt_tokens is the TOTAL input (cached + fresh); cached_tokens is
-      // the portion served from the auto-cache (1024+ token stable prefix).
+      // `prompt_tokens` is TOTAL input (cached + fresh); `cached_tokens` is the
+      // portion served from the auto-cache (1024+ token stable prefix).
+      //
+      // We normalize to Anthropic's disjoint convention here — `input_tokens`
+      // downstream always means "fresh only", never cache-inclusive. Cost
+      // estimation depends on this: if we leave cache folded into input_tokens
+      // it gets billed at the fresh rate instead of the 50%-off cache-read
+      // rate, and the cost display inflates 2× (or 8× for the full legacy
+      // `startsWith` bug that first prompted this refactor).
       const details = (usage.prompt_tokens_details ?? {}) as Record<string, unknown>
       const cached = Number(details.cached_tokens ?? 0)
+      const prompt = Number(usage.prompt_tokens ?? 0)
       yield {
         kind: 'usage',
-        input_tokens: Number(usage.prompt_tokens ?? 0),
+        input_tokens: Math.max(0, prompt - cached),
         output_tokens: Number(usage.completion_tokens ?? 0),
         cache_read_tokens: cached || undefined,
       }
