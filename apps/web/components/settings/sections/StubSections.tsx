@@ -1,8 +1,21 @@
 import { SectionHeader, SettingRow } from '@/components/settings/SettingsShell'
 import { useT } from '@/lib/i18n'
+import { useState } from 'react'
 
 export function DataSection() {
   const t = useT()
+  const [preparing, setPreparing] = useState(false)
+
+  const onDownload = () => {
+    if (preparing) return
+    setPreparing(true)
+    // Navigate to the streaming endpoint; browser handles the download via
+    // Content-Disposition. Reset the button after a short delay so the user
+    // can trigger another backup without reloading.
+    window.location.href = '/api/backup/download'
+    window.setTimeout(() => setPreparing(false), 4000)
+  }
+
   return (
     <>
       <SectionHeader title={t('settings.data.header')} desc={t('settings.data.headerDesc')} />
@@ -12,24 +25,11 @@ export function DataSection() {
       <SettingRow label={t('settings.data.export')} hint={t('settings.data.exportHint')}>
         <button
           type="button"
-          disabled
-          className="h-8 px-3 rounded-sm border border-neutral-300 dark:border-neutral-700 text-[13px] text-neutral-700 dark:text-neutral-200 opacity-60"
-          title={t('settings.data.comingSoon')}
+          onClick={onDownload}
+          disabled={preparing}
+          className="h-8 px-3 rounded-sm border border-neutral-300 dark:border-neutral-700 text-[13px] text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-60 disabled:cursor-wait"
         >
-          {t('settings.data.exportButton')}
-        </button>
-      </SettingRow>
-      <SettingRow
-        label={t('settings.data.cloudBackup')}
-        hint={t('settings.data.cloudBackupHint')}
-      >
-        <button
-          type="button"
-          disabled
-          className="h-8 px-3 rounded-sm border border-neutral-300 dark:border-neutral-700 text-[13px] text-neutral-700 dark:text-neutral-200 opacity-60"
-          title={t('settings.data.comingSoon')}
-        >
-          {t('settings.data.configure')}
+          {preparing ? t('settings.data.exportPreparing') : t('settings.data.exportButton')}
         </button>
       </SettingRow>
     </>

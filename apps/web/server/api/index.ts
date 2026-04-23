@@ -3,6 +3,7 @@ import { agentFrames } from './agent-frames'
 import { agents } from './agents'
 import { ai } from './ai'
 import { artifacts } from './artifacts'
+import { backup } from './backup'
 import { companies } from './companies'
 import { composer } from './composer'
 import { credentials } from './credentials'
@@ -26,6 +27,7 @@ api.route('/agents', agents)
 api.route('/agent-frames', agentFrames)
 api.route('/ai', ai)
 api.route('/artifacts', artifacts)
+api.route('/backup', backup)
 api.route('/frames', frames)
 api.route('/mcp', mcp)
 api.route('/panel-templates', panelTemplates)
