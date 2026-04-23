@@ -127,24 +127,35 @@ type ChatItem =
     }
   | { kind: 'error'; id: string; text: string }
 
-function summarizeTool(e: TranscriptEntry): string {
+function summarizeTool(
+  e: TranscriptEntry,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
   const tool = e.tool ?? 'tool'
-  if (tool === 'delegate_to') {
-    const assignee = e.args?.assignee as string | undefined
-    return `${assignee ?? '?'} 에게 위임`
+  if (tool === 'delegate_to' || tool === 'delegate_parallel') {
+    const assignee = String(e.args?.assignee ?? '?')
+    return t('session.tool.delegate', { assignee })
   }
   if (tool === 'run_skill_script') {
-    const skill = e.args?.skill as string | undefined
+    const skill = String(e.args?.skill ?? '')
     const script = e.args?.script as string | undefined
-    return `스킬 실행 ${skill ?? ''}${script ? '/' + script : ''}`
+    return script
+      ? t('session.tool.skillRunWithScript', { skill, script })
+      : t('session.tool.skillRun', { skill })
   }
   if (tool === 'activate_skill') {
-    return `스킬 활성화 (${e.args?.name ?? '?'})`
+    return t('session.tool.skillActivate', { name: String(e.args?.name ?? '?') })
   }
   if (tool === 'read_skill_file') {
-    return `파일 읽기 (${e.args?.path ?? '?'})`
+    return t('session.tool.skillReadFile', { path: String(e.args?.path ?? '?') })
   }
-  return tool
+  if (tool === 'ask_user') {
+    return t('session.tool.askUser')
+  }
+  if (tool === 'read_artifact') {
+    return t('session.tool.readArtifact')
+  }
+  return t('session.tool.generic', { tool })
 }
 
 /**
@@ -183,6 +194,7 @@ function partitionArtifacts(artifacts: SessionArtifact[]): {
 function buildChat(
   summary: SessionSummary,
   team: ReturnType<typeof useCurrentTeam>,
+  t: (key: string, vars?: Record<string, string | number>) => string,
 ): ChatItem[] {
   const out: ChatItem[] = []
   if (summary.goal) {
@@ -219,7 +231,7 @@ function buildChat(
           kind: 'tool',
           id,
           author: agentLabel(team, e.node_id, e.agent_role ?? 'agent'),
-          summary: summarizeTool(e),
+          summary: summarizeTool(e, t),
         })
         break
       case 'ask_user':
@@ -527,7 +539,7 @@ export function RunDetailPage() {
         pending: true,
       }))
     }
-    const base = buildChat(summary, team)
+    const base = buildChat(summary, team, t)
     // Drop pending bubbles whose text already appears as goal or user_message
     // in the transcript — avoids duplicates once the server catches up.
     const serverTexts = new Set<string>()
@@ -552,7 +564,7 @@ export function RunDetailPage() {
       })
     }
     return base
-  }, [summary, team, pendingUserMessages, pendingAsk])
+  }, [summary, team, pendingUserMessages, pendingAsk, t])
 
   // Once the server transcript catches up with a pending bubble, drop it
   // from state so it doesn't linger as a stale entry.
