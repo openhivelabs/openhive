@@ -49,3 +49,9 @@ packages/skills/**/*.pyc
 
 # Claude Code working state (worktrees, lock files) is per-machine
 .claude/
+
+# Docs are local-only
+docs/
+
+# Claude Code project instructions are local-only
+CLAUDE.md
