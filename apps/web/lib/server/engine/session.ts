@@ -76,6 +76,7 @@ import {
   delegateToGuidance,
   activateSkillGuidance,
 } from './delegation-guidance'
+import { stripMetaLabels } from './post-process'
 
 // Guard defaults + hard ceilings.
 export const MAX_TOOL_ROUNDS = 8
@@ -954,17 +955,49 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
   const pending = new Map<number, Pending>()
   let stopReason = 'stop'
 
+  // Depth-0 Lead gets a lower temperature — small models (gpt-5-mini) at 0.7
+  // invent section structure on simple turns. 0.3 keeps them focused on the
+  // answer without zeroing out creativity. Sub-agents keep the default 0.7.
+  const leadTemperature = depth === 0 ? 0.3 : undefined
   const streamOpts =
-    opts.systemPromptOverride !== undefined || opts.useExactTools
+    opts.systemPromptOverride !== undefined || opts.useExactTools || leadTemperature !== undefined
       ? {
           useExactTools: opts.useExactTools,
           overrideSystem: opts.systemPromptOverride,
+          temperature: leadTemperature,
         }
       : undefined
+  // Meta-label stripper buffer — only applied to Lead (depth 0) turns where
+  // small-model slop is the concern. Sub-agent output goes through un-stripped
+  // (their text is for parent synthesis, not UI display).
+  let stripBuf = ''
+  const emitStripped = (raw: string): string[] => {
+    // Returns the chunks to emit as token events. Accumulates raw text until
+    // a paragraph boundary (\n\n), at which point stable paragraphs are
+    // passed through stripMetaLabels and emitted. Remaining tail stays in
+    // stripBuf for the next call.
+    if (depth !== 0) return [raw]
+    stripBuf += raw
+    const lastBreak = stripBuf.lastIndexOf('\n\n')
+    if (lastBreak < 0) return []
+    const stable = stripBuf.slice(0, lastBreak + 2)
+    stripBuf = stripBuf.slice(lastBreak + 2)
+    const cleaned = stripMetaLabels(stable)
+    return cleaned ? [cleaned + (cleaned.endsWith('\n') ? '' : '\n\n')] : []
+  }
+  const flushStripped = (): string[] => {
+    if (depth !== 0 || stripBuf.length === 0) return []
+    const cleaned = stripMetaLabels(stripBuf)
+    stripBuf = ''
+    return cleaned ? [cleaned] : []
+  }
+
   for await (const delta of stream(node.provider_id, node.model, messages, openaiTools, streamOpts)) {
     if (delta.kind === 'text') {
       textBuf.push(delta.text)
-      yield makeEvent('token', sessionId, { text: delta.text }, { depth, node_id: node.id })
+      for (const chunk of emitStripped(delta.text)) {
+        yield makeEvent('token', sessionId, { text: chunk }, { depth, node_id: node.id })
+      }
     } else if (delta.kind === 'tool_call') {
       let p = pending.get(delta.index)
       if (!p) {
@@ -1031,8 +1064,17 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       break
     }
   }
+  // Flush any tail buffered by the meta-label stripper (last paragraph with
+  // no trailing blank line).
+  for (const chunk of flushStripped()) {
+    yield makeEvent('token', sessionId, { text: chunk }, { depth, node_id: node.id })
+  }
 
-  const assembledText = textBuf.join('').trim()
+  // For Lead turns the assembled history/content should match what the user
+  // saw — strip meta labels here too so downstream (history, transcript,
+  // microcompact, S1) never re-encounter them.
+  const assembledText =
+    depth === 0 ? stripMetaLabels(textBuf.join('')).trim() : textBuf.join('').trim()
 
   if (pending.size > 0) {
     const ordered = [...pending.entries()].sort(([a], [b]) => a - b)

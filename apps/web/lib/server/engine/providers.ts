@@ -27,6 +27,10 @@ export interface StreamOpts {
   /** Replace `system` with this exact string (skip `splitSystem` synthesis) —
    *  fork children inherit the parent's verbatim system prompt. */
   overrideSystem?: string
+  /** Per-turn sampling temperature. Lower = more deterministic / terse.
+   *  Engine passes 0.3 for depth-0 Lead turns; 0.7 default otherwise.
+   *  Currently wired for copilot only. */
+  temperature?: number
 }
 
 export async function* stream(
@@ -37,7 +41,7 @@ export async function* stream(
   opts?: StreamOpts,
 ): AsyncIterable<StreamDelta> {
   if (providerId === 'copilot') {
-    yield* streamCopilot(model, messages, tools)
+    yield* streamCopilot(model, messages, tools, opts?.temperature)
     return
   }
   if (providerId === 'claude-code') {
@@ -82,8 +86,9 @@ async function* streamCopilot(
   model: string,
   messages: ChatMessage[],
   tools: ToolSpec[] | undefined,
+  temperature?: number,
 ): AsyncIterable<StreamDelta> {
-  for await (const chunk of copilot.streamChat({ model, messages, tools })) {
+  for await (const chunk of copilot.streamChat({ model, messages, tools, temperature })) {
     const usage = (chunk as { usage?: Record<string, unknown> }).usage
     if (usage) {
       // OpenAI-shaped usage nests cache metrics under prompt_tokens_details.
