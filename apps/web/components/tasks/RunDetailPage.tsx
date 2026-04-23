@@ -15,7 +15,7 @@ import {
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { flushSync } from 'react-dom'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { ArtifactLink } from '@/components/chat/ArtifactLink'
 import { AskInlineCard } from '@/components/tasks/AskInlineCard'
@@ -1036,6 +1036,15 @@ const Markdown = memo(function MarkdownInner({ text }: { text: string }) {
     <div className="space-y-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        // react-markdown's default urlTransform only allows http/https/mailto/tel
+        // — any other scheme (including our `artifact://session/{id}/artifacts/*`
+        // deep links) gets rewritten to an empty string BEFORE the `a` component
+        // mapper runs. That's why agent-generated [report.pdf](artifact://…)
+        // links were rendering as dead `<a href="">`. We preserve the default
+        // safety filter for everything else and only whitelist `artifact:`.
+        urlTransform={(url) =>
+          url.startsWith('artifact://') ? url : defaultUrlTransform(url)
+        }
         components={{
           h1: ({ children }) => (
             <h1 className="text-[19px] font-semibold mt-3 mb-2">{children}</h1>
