@@ -2,12 +2,12 @@ import {
   ArrowLeft,
   ArrowUp,
   CaretDown,
+  CircleNotch,
   Coins,
   DownloadSimple,
   FileText,
   Paperclip,
   Plus,
-  Sparkle,
   Warning,
   Wrench,
   X,
@@ -622,9 +622,8 @@ export function RunDetailPage() {
                 return <ChatBubble key={item.id} item={item} />
               })}
               {running && (
-                <div className="flex items-center gap-2 text-[12px] text-neutral-400 px-1">
-                  <Sparkle className="w-3.5 h-3.5 animate-pulse" />
-                  <span>진행 중…</span>
+                <div className="flex items-center px-1 text-neutral-400">
+                  <CircleNotch className="w-4 h-4 animate-spin" weight="bold" />
                 </div>
               )}
               <div ref={chatEndRef} />
