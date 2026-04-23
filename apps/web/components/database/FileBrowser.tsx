@@ -357,12 +357,7 @@ export function FileBrowser() {
               </div>
             </div>
           ) : view === 'grid' ? (
-            <GridView
-              buckets={buckets}
-              selected={selected}
-              onSelect={setSelected}
-              sessionLookup={sessionLookup}
-            />
+            <GridView buckets={buckets} selected={selected} onSelect={setSelected} />
           ) : (
             <ListView
               buckets={buckets}
@@ -407,12 +402,10 @@ function GridView({
   buckets,
   selected,
   onSelect,
-  sessionLookup,
 }: {
   buckets: Bucket[]
   selected: ArtifactDetailed | null
   onSelect: (a: ArtifactDetailed) => void
-  sessionLookup: Map<string, string>
 }) {
   return (
     <div className="px-6 py-5 space-y-5">
@@ -452,9 +445,6 @@ function GridView({
                         <span>{formatBytes(a.size)}</span>
                         <span>·</span>
                         <span>{relTime(a.createdAt)}</span>
-                      </div>
-                      <div className="mt-1.5 text-[11px] text-neutral-500 truncate">
-                        {sessionLookup.get(a.sessionId) ?? a.sessionId}
                       </div>
                     </div>
                   </div>
