@@ -48,6 +48,12 @@ export function delegateToGuidance(): string {
 
 export function activateSkillGuidance(): string {
   return [
-    "Load a skill's SKILL.md guide into context and expose its files. Use `read_skill_file` for reference docs, `run_skill_script` to execute. Activate lazily — only when you need the skill.",
+    "Load a skill's SKILL.md guide into context. Returns the guide body only — call `list_skill_files` if you need to see the skill directory tree, `read_skill_file` for specific reference docs, `run_skill_script` to execute. Activate lazily — only when you need the skill.",
+  ].join('\n')
+}
+
+export function listSkillFilesGuidance(): string {
+  return [
+    "List the file tree of an already-activated skill (references/, scripts/, assets/, etc.). Call this only when SKILL.md mentions a file you cannot locate by name, or when you need to discover available scripts. Most skills are usable from the SKILL.md guide alone.",
   ].join('\n')
 }

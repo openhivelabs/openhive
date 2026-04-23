@@ -76,6 +76,7 @@ import {
   askUserGuidance,
   delegateToGuidance,
   activateSkillGuidance,
+  listSkillFilesGuidance,
 } from './delegation-guidance'
 import { stripFakeArtifactLinks, stripMetaLabels } from './post-process'
 
@@ -795,6 +796,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   }
   if (agentSkills.length > 0) {
     tools.push(skillActivateTool(agentSkills))
+    tools.push(skillListFilesTool(agentSkills))
     tools.push(skillReadTool(agentSkills, sessionId))
     tools.push(skillRunTool(agentSkills, { sessionId, team, teamSlugs }))
   }
@@ -1758,11 +1760,23 @@ function delegateTool(team: TeamSpec, node: AgentSpec): Tool {
   for (const s of subs) roleCounts[s.role] = (roleCounts[s.role] ?? 0) + 1
   const seen: Record<string, number> = {}
   const canonical: string[] = []
+  const specialtyLines: string[] = []
   for (const s of subs) {
     seen[s.role] = (seen[s.role] ?? 0) + 1
     const dup = (roleCounts[s.role] ?? 0) > 1
-    canonical.push(dup ? `${s.role}#${s.id}` : s.role)
+    const key = dup ? `${s.role}#${s.id}` : s.role
+    canonical.push(key)
+    const labelHint = s.label && s.label !== s.role ? ` — ${s.label}` : ''
+    const skills = Array.isArray(s.skills) ? s.skills.slice(0, 3) : []
+    const skillHint = skills.length > 0 ? ` [skills: ${skills.join(', ')}]` : ''
+    if (labelHint || skillHint) {
+      specialtyLines.push(`- ${key}${labelHint}${skillHint}`)
+    }
   }
+  const assigneeDesc =
+    specialtyLines.length > 0
+      ? `Who should do the task. Must be one of your direct reports.\n${specialtyLines.join('\n')}`
+      : 'Who should do the task. Must be one of your direct reports.'
   return {
     name: 'delegate_to',
     description: delegateToGuidance(),
@@ -1772,7 +1786,7 @@ function delegateTool(team: TeamSpec, node: AgentSpec): Tool {
         assignee: {
           type: 'string',
           enum: canonical,
-          description: 'Who should do the task. Must be one of your direct reports.',
+          description: assigneeDesc,
         },
         task: {
           type: 'string',
@@ -2562,6 +2576,7 @@ function composeSystemPrompt(base: string, agentSkills: SkillDef[], teamSection:
   for (const skill of agentSkills) {
     let desc = (skill.description || '(no description)').trim()
     if (desc.includes('\n')) desc = desc.split('\n', 1)[0]!.trimEnd() + ' …'
+    if (desc.length > 120) desc = desc.slice(0, 120).trimEnd() + ' …'
     parts.push(`- \`${skill.name}\` — ${desc}\n`)
   }
   return parts.join('')
@@ -2598,14 +2613,52 @@ function skillActivateTool(agentSkills: SkillDef[]): Tool {
         name: skill.name,
         description: skill.description,
         guide: skill.body ?? '',
-        files: skill.fileTree ?? [],
         hint:
-          'Read SKILL.md guide above. Use read_skill_file(skill, path) for ' +
-          'any referenced docs and run_skill_script(skill, script, ...) to ' +
-          'execute. Paths are relative to the skill directory.',
+          'Read SKILL.md guide above. Most skills are usable from this guide alone. ' +
+          'If the guide references a file you cannot place by name, call ' +
+          'list_skill_files(skill) to see the directory tree. Use ' +
+          'read_skill_file(skill, path) for referenced docs and ' +
+          'run_skill_script(skill, script, ...) to execute. Paths are relative ' +
+          'to the skill directory.',
       })
     },
     hint: 'Activating skill…',
+  }
+}
+
+function skillListFilesTool(agentSkills: SkillDef[]): Tool {
+  const byName = new Map(agentSkills.map((s) => [s.name, s]))
+  const names = [...byName.keys()].sort()
+  return {
+    name: 'list_skill_files',
+    description: listSkillFilesGuidance(),
+    parameters: {
+      type: 'object',
+      properties: {
+        skill: {
+          type: 'string',
+          enum: names,
+          description: 'Which loaded skill to list files for.',
+        },
+      },
+      required: ['skill'],
+    },
+    handler: async (args) => {
+      const name = String(args.skill ?? '')
+      const skill = byName.get(name)
+      if (!skill) {
+        return JSON.stringify({
+          ok: false,
+          error: `unknown or unauthorized skill: ${JSON.stringify(name)}`,
+        })
+      }
+      return JSON.stringify({
+        ok: true,
+        name: skill.name,
+        files: skill.fileTree ?? [],
+      })
+    },
+    hint: 'Listing skill files…',
   }
 }
 
