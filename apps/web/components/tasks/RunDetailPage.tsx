@@ -535,11 +535,23 @@ export function RunDetailPage() {
     }
   }
 
-  // Auto-scroll chat to bottom whenever new items arrive
+  // Auto-scroll chat to bottom whenever new items arrive OR the last
+  // assistant bubble grows via streaming tokens (same bubble id, growing
+  // text — chat.length alone would miss this).
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const lastAssistantText = useMemo(() => {
+    for (let i = chat.length - 1; i >= 0; i--) {
+      const item = chat[i]
+      if (item?.kind === 'assistant') return item.text.length
+      // Stop at the first non-assistant item so we don't scan the whole
+      // history every token — scroll only follows the freshest turn.
+      if (item?.kind === 'user' || item?.kind === 'ask') break
+    }
+    return 0
+  }, [chat])
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
-  }, [chat.length])
+  }, [chat.length, lastAssistantText])
 
   const backHref = params
     ? `/${params.companySlug}/${params.teamSlug}/tasks`
@@ -1011,10 +1023,15 @@ const Composer = memo(function Composer({
   )
 })
 
-function Markdown({ text }: { text: string }) {
+const Markdown = memo(function MarkdownInner({ text }: { text: string }) {
   // Terse chat-friendly prose styling. Headings are dialed down (h1/h2 look
   // oversized in a bubble), lists keep their markers, code blocks get a
   // subtle surface, links are underlined on hover.
+  //
+  // Memoised: ReactMarkdown re-parses the entire text on every render.
+  // Without memo, every token delta on any chat bubble causes ALL assistant
+  // bubbles to re-parse — visible stutter on long messages. React.memo's
+  // default shallow equality on `{text}` is sufficient here.
   return (
     <div className="space-y-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
       <ReactMarkdown
@@ -1110,9 +1127,10 @@ function Markdown({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   )
-}
+})
 
-function ChatBubble({ item }: { item: ChatItem }) {
+const ChatBubble = memo(
+  function ChatBubbleInner({ item }: { item: ChatItem }) {
   if (item.kind === 'user') {
     return (
       <div className="flex justify-end">
@@ -1160,4 +1178,28 @@ function ChatBubble({ item }: { item: ChatItem }) {
       </div>
     </div>
   )
-}
+  },
+  // Re-render only when THIS bubble's content changed. Without this, every
+  // token arriving on any bubble re-renders every other bubble, causing
+  // ReactMarkdown to re-parse long assistant messages on each keystroke-
+  // equivalent — visible stutter on responses >1KB.
+  (prev, next) => {
+    const a = prev.item
+    const b = next.item
+    if (a === b) return true
+    if (a.kind !== b.kind || a.id !== b.id) return false
+    if (a.kind === 'user' && b.kind === 'user') {
+      return a.text === b.text && a.pending === b.pending
+    }
+    if (a.kind === 'assistant' && b.kind === 'assistant') {
+      return a.text === b.text
+    }
+    if (a.kind === 'tool' && b.kind === 'tool') {
+      return a.summary === b.summary
+    }
+    if (a.kind === 'error' && b.kind === 'error') {
+      return a.text === b.text
+    }
+    return true
+  },
+)
