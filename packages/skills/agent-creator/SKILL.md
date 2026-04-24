@@ -45,7 +45,7 @@ name: <slug>
 description: <routing hint — see rules below>
 model: <provider:model>   # optional — overrides the team default
 skills: [pptx, docx]      # optional — tools.yaml takes precedence
-mcp: [notion, gmail]      # optional
+mcp: [notion, slack]      # optional
 ---
 
 # Persona

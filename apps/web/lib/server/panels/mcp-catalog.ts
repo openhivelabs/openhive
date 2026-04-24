@@ -66,7 +66,7 @@ function inferMutates(
     if (annotations.readOnlyHint === true) return false
   }
   const lower = name.toLowerCase()
-  // Match word-boundary verbs anywhere in the tool name (e.g. `gmail_send_email`).
+  // Match word-boundary verbs anywhere in the tool name (e.g. `slack_send_message`).
   for (const verb of MUTATION_VERBS) {
     const re = new RegExp(`(^|[_\\W])${verb}([_\\W]|$)`)
     if (re.test(lower)) return true

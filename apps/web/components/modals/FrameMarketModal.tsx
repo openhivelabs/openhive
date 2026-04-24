@@ -32,6 +32,12 @@ interface Props {
   /** Preselected target team for agent installs. Only honoured if the team
    *  actually belongs to the preselected company. */
   defaultTeamId?: string | null
+  /** Tabs that should be visually disabled and non-clickable — e.g. during
+   *  onboarding where no company/team exists yet so only `company` installs
+   *  make sense. */
+  disabledTabs?: MarketType[]
+  /** Hide the tab bar entirely — e.g. onboarding where the tab is forced. */
+  hideTabs?: boolean
 }
 
 const TAB_DEFS: { type: MarketType; label: string; icon: typeof UsersIcon }[] = [
@@ -45,10 +51,24 @@ export function FrameMarketModal({
   onClose,
   defaultCompanyId,
   defaultTeamId,
+  disabledTabs,
+  hideTabs = false,
 }: Props) {
   const companies = useAppStore((s) => s.companies)
   const addTeam = useAppStore((s) => s.addTeam)
-  const [tab, setTab] = useState<MarketType>('team')
+  const disabledTabSet = useMemo(
+    () => new Set(disabledTabs ?? []),
+    [disabledTabs],
+  )
+  const initialTab: MarketType = disabledTabSet.has('team')
+    ? disabledTabSet.has('company')
+      ? 'agent'
+      : 'company'
+    : 'team'
+  const [tab, setTab] = useState<MarketType>(initialTab)
+  useEffect(() => {
+    if (disabledTabSet.has(tab)) setTab(initialTab)
+  }, [disabledTabSet, tab, initialTab])
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState<MarketIndex | null>(null)
   const [loading, setLoading] = useState(false)
@@ -200,9 +220,11 @@ export function FrameMarketModal({
         {/* Tabs + search + target picker */}
         <div className="px-5 pt-3 pb-3 border-b border-neutral-100 dark:border-neutral-800 space-y-3">
           <div className="flex items-center gap-3">
+            {!hideTabs && (
             <div className="inline-flex rounded border border-neutral-200 dark:border-neutral-700 p-0.5 text-[14px]">
               {TAB_DEFS.map(({ type, label, icon: Icon }) => {
                 const active = tab === type
+                const locked = disabledTabSet.has(type)
                 const count = index
                   ? type === 'company'
                     ? index.companies.length
@@ -214,12 +236,18 @@ export function FrameMarketModal({
                   <button
                     key={type}
                     type="button"
-                    onClick={() => setTab(type)}
+                    disabled={locked}
+                    onClick={() => {
+                      if (locked) return
+                      setTab(type)
+                    }}
                     className={clsx(
                       'px-3 py-1 rounded-sm inline-flex items-center gap-1.5',
-                      active
-                        ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
-                        : 'text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800',
+                      locked && 'opacity-40 cursor-not-allowed',
+                      !locked && active &&
+                        'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900',
+                      !locked && !active &&
+                        'text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800',
                     )}
                   >
                     <Icon className="w-3.5 h-3.5" />
@@ -238,6 +266,7 @@ export function FrameMarketModal({
                 )
               })}
             </div>
+            )}
 
             <div className="flex-1 relative">
               <MagnifyingGlass className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />

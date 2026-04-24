@@ -9,15 +9,6 @@
 # they are off the happy path and are never suggested by the AI.
 
 servers:
-  - id: gmail
-    label: "Gmail"
-    icon: EnvelopeSimple
-    category: email
-    package: "@modelcontextprotocol/server-gmail"
-    auth: oauth_google
-    description: "Read / search / send mail through the user's Google account."
-    recipes: [gmail-unread-count]
-
   - id: gcal
     label: "Google Calendar"
     icon: CalendarBlank

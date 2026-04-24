@@ -2,7 +2,7 @@
  * Recipe library — pre-authored PanelSpec templates with parameter slots.
  *
  * Recipes exist for two reasons:
- *   1. Grounding: AI's first move when asked "add a Gmail panel" is to pick a
+ *   1. Grounding: AI's first move when asked "add a Slack panel" is to pick a
  *      recipe, not hand-roll a source spec. Catches 80% of real-world asks.
  *   2. UX: shows up in the "+ 패널" picker as a named, icon'd option so
  *      non-technical users can install without chatting.
@@ -15,18 +15,18 @@
  *     forking the repo).
  *
  * Recipe schema (YAML):
- *   id: gmail-unread-count
- *   label: "Gmail 미확인"
- *   icon: EnvelopeSimple              # Phosphor icon name
+ *   id: slack-recent
+ *   label: "Slack 최근 메시지"
+ *   icon: ChatCircleText              # Phosphor icon name
  *   category: email | calendar | messaging | code | sales | data | weather
  *   requires:                          # optional gate — hide if unmet
- *     mcp_server: gmail                # OR
+ *     mcp_server: slack                # OR
  *     auth_ref: openweather            # (api_key kind)
  *   panel:                             # literal PanelSpec template
  *     type: kpi
  *     title: "{{label}}"
  *     binding:
- *       source: {kind: mcp, config: {server: gmail, tool: count_unread, args: {}}}
+ *       source: {kind: mcp, config: {server: slack, tool: list_messages, args: {}}}
  *       map:    {aggregate: first, value: "$.count"}
  *       refresh_seconds: 300
  *   params:                            # optional user-fillable slots
