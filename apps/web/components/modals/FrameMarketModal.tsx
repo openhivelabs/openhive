@@ -32,6 +32,13 @@ interface Props {
   /** Preselected target team for agent installs. Only honoured if the team
    *  actually belongs to the preselected company. */
   defaultTeamId?: string | null
+  /** Restrict visible tabs. Defaults to all three (company/team/agent).
+   *  When passed, the initial tab is the first entry in this list. */
+  allowedTabs?: MarketType[]
+  /** Hide the "Install into" target picker. Install target is fixed to
+   *  defaultCompanyId / defaultTeamId. Use when the invoking flow already
+   *  implies a target (e.g. "New team" inside a specific company). */
+  lockTarget?: boolean
 }
 
 const TAB_DEFS: { type: MarketType; label: string; icon: typeof UsersIcon }[] = [
@@ -45,10 +52,21 @@ export function FrameMarketModal({
   onClose,
   defaultCompanyId,
   defaultTeamId,
+  allowedTabs,
+  lockTarget,
 }: Props) {
   const companies = useAppStore((s) => s.companies)
   const addTeam = useAppStore((s) => s.addTeam)
-  const [tab, setTab] = useState<MarketType>('team')
+  const visibleTabs = useMemo(
+    () => TAB_DEFS.filter((d) => !allowedTabs || allowedTabs.includes(d.type)),
+    [allowedTabs],
+  )
+  const [tab, setTab] = useState<MarketType>(allowedTabs?.[0] ?? 'team')
+  useEffect(() => {
+    if (allowedTabs && !allowedTabs.includes(tab)) {
+      setTab(allowedTabs[0] ?? 'team')
+    }
+  }, [allowedTabs, tab])
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState<MarketIndex | null>(null)
   const [loading, setLoading] = useState(false)
@@ -200,8 +218,9 @@ export function FrameMarketModal({
         {/* Tabs + search + target picker */}
         <div className="px-5 pt-3 pb-3 border-b border-neutral-100 dark:border-neutral-800 space-y-3">
           <div className="flex items-center gap-3">
+            {visibleTabs.length > 1 && (
             <div className="inline-flex rounded border border-neutral-200 dark:border-neutral-700 p-0.5 text-[14px]">
-              {TAB_DEFS.map(({ type, label, icon: Icon }) => {
+              {visibleTabs.map(({ type, label, icon: Icon }) => {
                 const active = tab === type
                 const count = index
                   ? type === 'company'
@@ -238,6 +257,7 @@ export function FrameMarketModal({
                 )
               })}
             </div>
+            )}
 
             <div className="flex-1 relative">
               <MagnifyingGlass className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
@@ -251,7 +271,7 @@ export function FrameMarketModal({
           </div>
 
           {/* Install target pickers — only for team/agent */}
-          {tab !== 'company' && (
+          {tab !== 'company' && !lockTarget && (
             <div className="flex items-center gap-3 text-[13px] text-neutral-600 dark:text-neutral-300">
               <span className="text-neutral-500">Install into</span>
               <select
