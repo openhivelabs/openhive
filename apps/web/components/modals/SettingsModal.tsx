@@ -200,13 +200,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             {t('settings.providers')}
           </div>
 
-          {loading && !providers && (
-            <div className="flex items-center gap-2 text-[15px] text-neutral-500">
-              <CircleNotch className="w-4 h-4 animate-spin" />
-              Loading providers…
-            </div>
-          )}
-
           {flowError && (
             <div className="rounded bg-red-50 border border-red-200 text-red-700 text-[15px] px-3 py-2">
               {flowError}

@@ -73,9 +73,6 @@ export function CredentialsSection() {
       </header>
 
       <div className="rounded-md border border-neutral-200 dark:border-neutral-800 divide-y divide-neutral-100 dark:divide-neutral-800 bg-white dark:bg-neutral-900">
-        {rows === null && (
-          <div className="p-4 text-[13px] text-neutral-400">Loading…</div>
-        )}
         {rows && rows.length === 0 && (
           <div className="p-6 flex flex-col items-center text-center">
             <Key className="w-6 h-6 text-neutral-400 mb-2" />

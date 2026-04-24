@@ -79,7 +79,7 @@ export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string 
   const body = (() => {
     if (data == null) {
       if (error) return null
-      return <div className="p-4 text-[13px] text-neutral-400">Loading…</div>
+      return null
     }
     return (
       <PanelShape

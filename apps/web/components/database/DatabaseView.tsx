@@ -453,11 +453,7 @@ export function DatabaseView() {
                     )}
                   </tbody>
                 </table>
-              ) : (
-                <div className="p-6 text-[13px] text-neutral-400">
-                  {t('records.db.loadingData')}
-                </div>
-              )}
+              ) : null}
             </div>
             {(() => {
               const totalPages = Math.max(1, Math.ceil(rows.total / PAGE_SIZE))
@@ -502,7 +498,7 @@ export function DatabaseView() {
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center text-[13px] text-neutral-400">
-              {loading ? t('records.db.loading') : t('records.db.selectTable')}
+              {loading ? '' : t('records.db.selectTable')}
             </div>
           )}
         </div>

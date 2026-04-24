@@ -67,9 +67,6 @@ export function HistoryModal({
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
-          {backups === null && (
-            <div className="p-4 text-[13px] text-neutral-400">Loading…</div>
-          )}
           {backups && backups.length === 0 && (
             <div className="p-4 text-[13px] text-neutral-400">{t('history.empty')}</div>
           )}

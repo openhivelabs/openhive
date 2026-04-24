@@ -151,11 +151,7 @@ function TemplateGallery({
   }, [templates])
 
   if (templates.length === 0) {
-    return (
-      <div className="px-5 py-8 text-center text-[13px] text-neutral-400">
-        Loading templates…
-      </div>
-    )
+    return null
   }
 
   return (

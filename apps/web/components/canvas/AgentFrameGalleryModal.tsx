@@ -236,12 +236,6 @@ export function AgentFrameGalleryModal({
                 {loadError}
               </div>
             )}
-            {entries === null && !loadError && (
-              <div className="flex items-center gap-2 text-[14px] text-neutral-500 py-6 justify-center">
-                <CircleNotch className="w-4 h-4 animate-spin" />
-                {t('canvas.frameGalleryLoading')}
-              </div>
-            )}
             {entries && entries.length === 0 && (
               <div className="text-[13px] text-neutral-500 py-4 text-center leading-relaxed">
                 {t('canvas.frameGalleryEmpty')}

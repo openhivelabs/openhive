@@ -93,7 +93,7 @@ export function GeneralSection() {
             className="min-w-[200px]"
           >
             <option value="">
-              {loadingModels ? t('settings.general.modelLoading') : t('settings.general.modelPlaceholder')}
+              {loadingModels ? '' : t('settings.general.modelPlaceholder')}
             </option>
             {(models ?? []).map((m) => (
               <option key={m.id} value={m.id}>

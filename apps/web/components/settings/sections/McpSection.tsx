@@ -99,9 +99,7 @@ export function McpSection() {
             Connected
           </h2>
         </div>
-        {loading ? (
-          <div className="text-[14px] text-neutral-400">Loading…</div>
-        ) : servers.length === 0 ? (
+        {loading ? null : servers.length === 0 ? (
           <div className="text-[14px] text-neutral-400 border border-dashed border-neutral-300 rounded-md py-6 text-center">
             Nothing connected yet. Pick a service below to get started.
           </div>
@@ -310,9 +308,7 @@ function UserMcpReviewModal({
           </button>
         </div>
         <div className="overflow-y-auto p-4 space-y-4">
-          {!rec ? (
-            <div className="text-[13px] text-neutral-400">Loading…</div>
-          ) : (
+          {!rec ? null : (
             <>
               <div>
                 <div className="text-[11.5px] uppercase tracking-wider text-neutral-400">

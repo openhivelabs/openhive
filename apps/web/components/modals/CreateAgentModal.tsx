@@ -365,12 +365,7 @@ export function CreateAgentModal({ open, onClose }: CreateAgentModalProps) {
               </option>
             ))}
           </select>
-          {loadingModels ? (
-            <div className="input !w-44 !py-1 flex items-center gap-2 text-[13px] text-neutral-500">
-              <CircleNotch className="w-3.5 h-3.5 animate-spin" />
-              {t('canvas.createAgentLoadingModels')}
-            </div>
-          ) : modelsError || models.length === 0 ? (
+          {loadingModels ? null : modelsError || models.length === 0 ? (
             <input
               value={model}
               onChange={(e) => setModel(e.target.value)}

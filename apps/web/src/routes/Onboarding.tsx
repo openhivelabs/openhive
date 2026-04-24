@@ -434,12 +434,6 @@ function StepProvider({
         </div>
       )}
 
-      {!providers && (
-        <div className="mt-6 text-[13px] text-neutral-400 py-4">
-          {t('onboarding.provider.empty')}
-        </div>
-      )}
-
       {oauthProviders && oauthProviders.length > 0 && (
         <div className="mt-6">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-2">
@@ -766,11 +760,6 @@ function FrameGalleryModal({
       {loadError && (
         <div className="text-[13px] text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
           {loadError}
-        </div>
-      )}
-      {!entries && !loadError && (
-        <div className="text-[13px] text-neutral-500 py-6 text-center">
-          {t('onboarding.template.gallery.loading')}
         </div>
       )}
       {entries && entries.length === 0 && (

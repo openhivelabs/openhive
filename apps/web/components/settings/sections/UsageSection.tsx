@@ -230,9 +230,7 @@ function Breakdown({
         {title}
       </div>
       <div className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 divide-y divide-neutral-100 dark:divide-neutral-800">
-        {loading ? (
-          <div className="px-3 py-6 text-[14px] text-neutral-400 text-center">{loadingLabel}</div>
-        ) : rows.length === 0 ? (
+        {loading ? null : rows.length === 0 ? (
           <div className="px-3 py-8 text-[14px] text-neutral-400 text-center leading-relaxed">
             {emptyLabel}
           </div>

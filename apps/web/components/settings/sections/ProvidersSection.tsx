@@ -141,13 +141,6 @@ export function ProvidersSection() {
         desc={t('settings.providers.headerDesc')}
       />
 
-      {loading && !providers && (
-        <div className="flex items-center gap-2 text-[15px] text-neutral-500 py-4">
-          <CircleNotch className="w-4 h-4 animate-spin" />
-          {t('settings.providers.loading')}
-        </div>
-      )}
-
       {flowError && (
         <div className="rounded-sm bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 text-red-700 dark:text-red-300 text-[15px] px-3 py-2 mb-3">
           {flowError}

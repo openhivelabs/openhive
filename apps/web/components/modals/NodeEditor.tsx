@@ -416,12 +416,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
             </label>
             <label className="flex flex-col gap-1">
               <span className="font-medium uppercase tracking-wide">Model</span>
-              {loadingModels ? (
-                <div className="input !w-56 !py-1 flex items-center gap-2 text-[13px] text-neutral-500">
-                  <CircleNotch className="w-3.5 h-3.5 animate-spin" />
-                  Loading…
-                </div>
-              ) : modelsError ? (
+              {loadingModels ? null : modelsError ? (
                 <input
                   value={draft.model}
                   onChange={(e) => setDraft({ ...draft, model: e.target.value })}
@@ -514,12 +509,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
               )}
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto py-1">
-              {loadingFiles ? (
-                <div className="flex items-center gap-2 text-[12px] text-neutral-500 px-3 py-2">
-                  <CircleNotch className="w-3.5 h-3.5 animate-spin" />
-                  {t('nodeEditor.referenceLoading')}
-                </div>
-              ) : fileCount === 0 && !personaPath ? (
+              {loadingFiles ? null : fileCount === 0 && !personaPath ? (
                 <div className="px-3 py-6 text-[12px] text-neutral-400 text-center leading-relaxed">
                   No persona attached.
                 </div>

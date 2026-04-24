@@ -24,9 +24,5 @@ export function Home() {
     }
   }, [hydrated, currentCompanyId, currentTeamId, companies, navigate])
 
-  return (
-    <div className="h-screen flex items-center justify-center text-[15px] text-neutral-400">
-      Loading…
-    </div>
-  )
+  return null
 }
