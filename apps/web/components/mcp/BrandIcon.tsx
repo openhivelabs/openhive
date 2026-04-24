@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react'
 import type { IconBaseProps } from 'react-icons'
-import { SiGmail, SiHubspot, SiNotion, SiSlack, SiSupabase } from 'react-icons/si'
+import { SiHubspot, SiNotion, SiSlack, SiSupabase } from 'react-icons/si'
 
 /** Map of preset brand id → simple-icons React component.
  *
@@ -12,7 +12,6 @@ const BRANDS: Record<string, ComponentType<IconBaseProps>> = {
   supabase: SiSupabase,
   slack: SiSlack,
   hubspot: SiHubspot,
-  gmail: SiGmail,
 }
 
 /** Inherits color from currentColor by default; pass `color` for the official
@@ -43,5 +42,4 @@ export const BRAND_COLORS: Record<string, string> = {
   supabase: '#3FCF8E',
   slack: '#4A154B',
   hubspot: '#FF7A59',
-  gmail: '#EA4335',
 }

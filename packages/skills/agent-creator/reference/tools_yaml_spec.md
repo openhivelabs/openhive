@@ -13,7 +13,7 @@ skills:                  # list of skill names
 
 mcp:                     # list of MCP server names
   - notion
-  - gmail
+  - slack
 
 team_data:
   read: true             # default true

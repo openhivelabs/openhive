@@ -1,3 +1,5 @@
+import { Plus, Storefront, UploadSimple } from '@phosphor-icons/react'
+import { FrameMarketModal } from '@/components/modals/FrameMarketModal'
 import { Button } from '@/components/ui/Button'
 import { saveCompany } from '@/lib/api/companies'
 import {
@@ -11,6 +13,7 @@ import {
   type FlowStatus,
   type ProviderStatus,
   type StartResponse,
+  connectWithApiKey,
   getConnectStatus,
   listProviders,
   startConnect,
@@ -41,7 +44,7 @@ export function Onboarding() {
   } | null>(null)
   const popupRef = useRef<Window | null>(null)
   const [companyName, setCompanyName] = useState('')
-  const [template, setTemplate] = useState<TemplateChoice>('empty')
+  const [template, setTemplate] = useState<TemplateChoice | null>(null)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [frameModal, setFrameModal] = useState<null | 'gallery' | 'import'>(null)
@@ -118,6 +121,22 @@ export function Onboarding() {
 
   const anyConnected = useMemo(() => (providers ?? []).some((p) => p.connected), [providers])
 
+  const handleConnectApiKey = useCallback(
+    async (p: ProviderStatus, apiKey: string) => {
+      setError(null)
+      const trimmed = apiKey.trim()
+      if (!trimmed) return
+      try {
+        await connectWithApiKey(p.id, trimmed)
+        const fresh = await listProviders()
+        setProviders(fresh)
+      } catch (err) {
+        setError(String(err))
+      }
+    },
+    [],
+  )
+
   const handleConnect = useCallback(async (p: ProviderStatus) => {
     setError(null)
     try {
@@ -153,7 +172,7 @@ export function Onboarding() {
       }
       const company = buildCompanySpec(
         companyName.trim() || 'My company',
-        template,
+        template ?? 'empty',
         firstConnected.id,
       )
       await saveCompany(company)
@@ -201,93 +220,131 @@ export function Onboarding() {
     [companyName, hydrate, navigate, t],
   )
 
-  return (
-    <div className="min-h-screen bg-neutral-50 flex items-center justify-center p-6">
-      <div className="w-full max-w-[520px] bg-white rounded-lg border border-neutral-200 shadow-sm p-8">
-        {step > 0 && (
-          <div className="text-[12px] text-neutral-400 mb-6 flex items-center justify-between">
-            <span>{t('onboarding.step', { n: step, total: 3 })}</span>
-            <div className="flex gap-1">
-              {[1, 2, 3].map((i) => (
-                <span
-                  key={i}
-                  className={`h-1 w-8 rounded-full ${i <= step ? 'bg-amber-400' : 'bg-neutral-200'}`}
-                />
-              ))}
-            </div>
-          </div>
-        )}
+  const handleProviderNext = useCallback(async () => {
+    setError(null)
+    try {
+      const fresh = await listProviders()
+      setProviders(fresh)
+      if (!fresh.some((p) => p.connected)) {
+        setError(t('onboarding.provider.required'))
+        return
+      }
+    } catch (err) {
+      setError(String(err))
+      return
+    }
+    setStep(2)
+  }, [t])
 
-        {step === 0 && <StepWelcome onNext={() => setStep(1)} />}
-        {step === 1 && (
-          <StepProvider
-            providers={providers}
-            pendingFlow={pendingFlow}
-            error={error}
-            onConnect={handleConnect}
-            onBack={() => setStep(0)}
-            onNext={async () => {
-              setError(null)
-              try {
-                const fresh = await listProviders()
-                setProviders(fresh)
-                if (!fresh.some((p) => p.connected)) {
-                  setError(t('onboarding.provider.required'))
-                  return
-                }
-              } catch (err) {
-                setError(String(err))
-                return
-              }
-              setStep(2)
-            }}
-            anyConnected={anyConnected}
-          />
-        )}
-        {step === 2 && (
-          <StepCompany
-            name={companyName}
-            setName={setCompanyName}
-            error={error}
-            onBack={() => setStep(1)}
-            onNext={() => {
-              const trimmed = companyName.trim()
-              if (!trimmed || trimmed.length > 50) {
-                setError(t('onboarding.company.invalid'))
-                return
-              }
-              setError(null)
-              setStep(3)
-            }}
-          />
-        )}
-        {step === 3 && (
-          <StepTemplate
-            template={template}
-            setTemplate={setTemplate}
-            creating={creating}
-            error={error}
-            onBack={() => setStep(2)}
-            onFinish={finish}
-            onOpenGallery={() => setFrameModal('gallery')}
-            onOpenImport={() => setFrameModal('import')}
-          />
-        )}
+  const handleCompanyNext = useCallback(() => {
+    const trimmed = companyName.trim()
+    if (!trimmed || trimmed.length > 50) {
+      setError(t('onboarding.company.invalid'))
+      return
+    }
+    setError(null)
+    setStep(3)
+  }, [companyName, t])
+
+  return (
+    <div className="h-screen overflow-hidden bg-neutral-50 flex items-center justify-center p-6">
+      <div className="w-full max-w-[520px] max-h-full bg-white rounded-lg border border-neutral-200 shadow-sm flex flex-col">
+        <div className="flex-1 min-h-0 overflow-y-auto px-8 pt-8 pb-4">
+          {step > 0 && (
+            <div className="text-[12px] text-neutral-400 mb-6 flex items-center justify-between">
+              <span>{t('onboarding.step', { n: step, total: 3 })}</span>
+              <div className="flex gap-1">
+                {[1, 2, 3].map((i) => (
+                  <span
+                    key={i}
+                    className={`h-1 w-8 rounded-full ${i <= step ? 'bg-amber-400' : 'bg-neutral-200'}`}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {step === 0 && <StepWelcome />}
+          {step === 1 && (
+            <StepProvider
+              providers={providers}
+              pendingFlow={pendingFlow}
+              error={error}
+              onConnect={handleConnect}
+              onConnectApiKey={handleConnectApiKey}
+            />
+          )}
+          {step === 2 && (
+            <StepCompany
+              name={companyName}
+              setName={setCompanyName}
+              error={error}
+              onSubmit={handleCompanyNext}
+            />
+          )}
+          {step === 3 && (
+            <StepTemplate
+              template={template}
+              setTemplate={setTemplate}
+              creating={creating}
+              error={error}
+              onOpenGallery={() => setFrameModal('gallery')}
+              onOpenImport={() => setFrameModal('import')}
+            />
+          )}
+        </div>
+
+        <div className="shrink-0 px-8 py-4 border-t border-neutral-100 flex items-center justify-between bg-white rounded-b-lg">
+          {step === 0 ? (
+            <>
+              <span />
+              <Button variant="primary" onClick={() => setStep(1)}>
+                {t('onboarding.welcome.start')} →
+              </Button>
+            </>
+          ) : step === 1 ? (
+            <>
+              <Button variant="ghost" onClick={() => setStep(0)}>
+                ← {t('onboarding.back')}
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => void handleProviderNext()}
+                title={anyConnected ? undefined : t('onboarding.provider.required')}
+              >
+                {t('onboarding.next')} →
+              </Button>
+            </>
+          ) : step === 2 ? (
+            <>
+              <Button variant="ghost" onClick={() => setStep(1)}>
+                ← {t('onboarding.back')}
+              </Button>
+              <Button variant="primary" onClick={handleCompanyNext}>
+                {t('onboarding.next')} →
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" onClick={() => setStep(2)} disabled={creating}>
+                ← {t('onboarding.back')}
+              </Button>
+              <Button variant="primary" onClick={finish} disabled={creating}>
+                {creating ? t('onboarding.creating') : t('onboarding.finish')}
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
-      {frameModal === 'gallery' && (
-        <FrameGalleryModal
-          creating={creating}
-          onClose={() => setFrameModal(null)}
-          onSelect={async (entry) => {
-            try {
-              await finishWithFrame(entry.frame)
-            } catch {
-              /* error surfaced via page-level error state */
-            }
-          }}
-        />
-      )}
+      <FrameMarketModal
+        open={frameModal === 'gallery'}
+        onClose={() => setFrameModal(null)}
+        defaultCompanyId={null}
+        defaultTeamId={null}
+        disabledTabs={['team', 'agent']}
+        hideTabs
+      />
       {frameModal === 'import' && (
         <FrameImportModal
           creating={creating}
@@ -305,21 +362,13 @@ export function Onboarding() {
   )
 }
 
-function StepWelcome({ onNext }: { onNext: () => void }) {
+function StepWelcome() {
   const t = useT()
   return (
     <>
       <h1 className="text-[26px] font-semibold text-neutral-900 leading-tight">
         {t('onboarding.welcome.title')}
       </h1>
-      <p className="mt-3 text-[14px] text-neutral-600 leading-relaxed">
-        {t('onboarding.welcome.subtitle')}
-      </p>
-      <div className="mt-8 flex justify-end">
-        <Button variant="primary" onClick={onNext}>
-          {t('onboarding.welcome.start')} →
-        </Button>
-      </div>
     </>
   )
 }
@@ -329,9 +378,7 @@ function StepProvider({
   pendingFlow,
   error,
   onConnect,
-  onBack,
-  onNext,
-  anyConnected,
+  onConnectApiKey,
 }: {
   providers: ProviderStatus[] | null
   pendingFlow: {
@@ -342,19 +389,16 @@ function StepProvider({
   } | null
   error: string | null
   onConnect: (p: ProviderStatus) => void
-  onBack: () => void
-  onNext: () => void | Promise<void>
-  anyConnected: boolean
+  onConnectApiKey: (p: ProviderStatus, apiKey: string) => void | Promise<void>
 }) {
   const t = useT()
+  const oauthProviders = providers?.filter((p) => p.kind !== 'api_key') ?? null
+  const apiKeyProviders = providers?.filter((p) => p.kind === 'api_key') ?? null
   return (
     <>
       <h1 className="text-[22px] font-semibold text-neutral-900">
         {t('onboarding.provider.title')}
       </h1>
-      <p className="mt-2 text-[13.5px] text-neutral-600 leading-relaxed">
-        {t('onboarding.provider.subtitle')}
-      </p>
 
       {pendingFlow?.deviceCode && (
         <div className="mt-5 rounded border border-amber-300 bg-amber-50 px-4 py-3">
@@ -391,65 +435,164 @@ function StepProvider({
         </div>
       )}
 
-      <div className="mt-6 space-y-2">
-        {!providers && (
-          <div className="text-[13px] text-neutral-400 py-4">{t('onboarding.provider.empty')}</div>
-        )}
-        {providers?.map((p) => {
-          const isPending = pendingFlow?.providerId === p.id
-          return (
-            <div
-              key={p.id}
-              className="flex items-center justify-between gap-3 px-3 py-2.5 rounded border border-neutral-200 bg-white"
-            >
-              <div className="min-w-0">
-                <div className="text-[14px] font-medium text-neutral-800">{p.label}</div>
-                <div className="text-[12px] text-neutral-500 truncate">
-                  {p.connected
-                    ? `${t('onboarding.provider.connected')}${
-                        p.account_label ? ` · ${p.account_label}` : ''
-                      }`
-                    : p.description}
-                </div>
-              </div>
-              {p.connected ? (
-                <span className="text-[12px] text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-sm">
-                  ✓ {t('onboarding.provider.connected')}
-                </span>
-              ) : (
-                <Button
-                  size="sm"
-                  variant={isPending ? 'outline' : 'primary'}
-                  disabled={isPending}
-                  onClick={() => onConnect(p)}
+      {!providers && (
+        <div className="mt-6 text-[13px] text-neutral-400 py-4">
+          {t('onboarding.provider.empty')}
+        </div>
+      )}
+
+      {oauthProviders && oauthProviders.length > 0 && (
+        <div className="mt-6">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-2">
+            {t('onboarding.provider.oauthGroup')}
+          </div>
+          <div className="space-y-2">
+            {oauthProviders.map((p) => {
+              const isPending = pendingFlow?.providerId === p.id
+              return (
+                <div
+                  key={p.id}
+                  className="flex items-center justify-between gap-3 px-3 py-2.5 rounded border border-neutral-200 bg-white"
                 >
-                  {isPending ? t('onboarding.provider.waiting') : t('onboarding.provider.connect')}
-                </Button>
-              )}
-            </div>
-          )
-        })}
-      </div>
+                  <div className="min-w-0">
+                    <div className="text-[14px] font-medium text-neutral-800">{p.label}</div>
+                  </div>
+                  {p.connected ? (
+                    <span className="text-[12px] text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-sm">
+                      ✓ {t('onboarding.provider.connected')}
+                    </span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant={isPending ? 'outline' : 'primary'}
+                      disabled={isPending}
+                      onClick={() => onConnect(p)}
+                    >
+                      {isPending
+                        ? t('onboarding.provider.waiting')
+                        : t('onboarding.provider.connect')}
+                    </Button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {apiKeyProviders && apiKeyProviders.length > 0 && (
+        <div className="mt-6 pt-5 border-t border-dashed border-neutral-200">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
+            {t('onboarding.provider.apiKeyGroup')}
+          </div>
+          <div className="mt-3 space-y-3">
+            {apiKeyProviders.map((p) => (
+              <ApiKeyRow
+                key={p.id}
+                provider={p}
+                onSubmit={(key) => onConnectApiKey(p, key)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="mt-4 text-[12.5px] text-red-600 bg-red-50 border border-red-200 px-3 py-2 rounded">
           {error}
         </div>
       )}
-
-      <div className="mt-8 flex items-center justify-between">
-        <Button variant="ghost" onClick={onBack}>
-          ← {t('onboarding.back')}
-        </Button>
-        <Button
-          variant="primary"
-          onClick={() => void onNext()}
-          title={anyConnected ? undefined : t('onboarding.provider.required')}
-        >
-          {t('onboarding.next')} →
-        </Button>
-      </div>
     </>
+  )
+}
+
+function ApiKeyRow({
+  provider,
+  onSubmit,
+}: {
+  provider: ProviderStatus
+  onSubmit: (apiKey: string) => void | Promise<void>
+}) {
+  const t = useT()
+  const [value, setValue] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [open, setOpen] = useState(false)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    if (open) inputRef.current?.focus()
+  }, [open])
+
+  async function handleSave() {
+    const trimmed = value.trim()
+    if (!trimmed || saving) return
+    setSaving(true)
+    try {
+      await onSubmit(trimmed)
+      setValue('')
+      setOpen(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="rounded border border-neutral-200 bg-white px-3 py-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[14px] font-medium text-neutral-800">{provider.label}</div>
+        </div>
+        {provider.connected ? (
+          <span className="text-[12px] text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-sm shrink-0">
+            ✓ {t('onboarding.provider.connected')}
+          </span>
+        ) : !open ? (
+          <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+            {t('onboarding.provider.register')}
+          </Button>
+        ) : null}
+      </div>
+      {!provider.connected && open && (
+        <div className="mt-2 flex items-center gap-2">
+          <input
+            ref={inputRef}
+            type="password"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void handleSave()
+              if (e.key === 'Escape') {
+                setValue('')
+                setOpen(false)
+              }
+            }}
+            placeholder={t('onboarding.provider.apiKeyPlaceholder')}
+            autoComplete="off"
+            spellCheck={false}
+            className="flex-1 min-w-0 px-2.5 py-1.5 rounded border border-neutral-300 text-[13px] font-mono focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setValue('')
+              setOpen(false)
+            }}
+            disabled={saving}
+          >
+            {t('onboarding.provider.cancel')}
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={saving || !value.trim()}
+            onClick={() => void handleSave()}
+          >
+            {saving ? t('onboarding.provider.saving') : t('onboarding.provider.save')}
+          </Button>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -457,14 +600,12 @@ function StepCompany({
   name,
   setName,
   error,
-  onBack,
-  onNext,
+  onSubmit,
 }: {
   name: string
   setName: (v: string) => void
   error: string | null
-  onBack: () => void
-  onNext: () => void
+  onSubmit: () => void
 }) {
   const t = useT()
   return (
@@ -472,16 +613,13 @@ function StepCompany({
       <h1 className="text-[22px] font-semibold text-neutral-900">
         {t('onboarding.company.title')}
       </h1>
-      <p className="mt-2 text-[13.5px] text-neutral-600 leading-relaxed">
-        {t('onboarding.company.subtitle')}
-      </p>
 
       <input
         type="text"
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') onNext()
+          if (e.key === 'Enter') onSubmit()
         }}
         placeholder={t('onboarding.company.placeholder')}
         className="mt-6 w-full px-3 py-2.5 rounded border border-neutral-300 text-[15px] focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
@@ -489,15 +627,6 @@ function StepCompany({
       />
 
       {error && <div className="mt-3 text-[12.5px] text-red-600">{error}</div>}
-
-      <div className="mt-8 flex items-center justify-between">
-        <Button variant="ghost" onClick={onBack}>
-          ← {t('onboarding.back')}
-        </Button>
-        <Button variant="primary" onClick={onNext}>
-          {t('onboarding.next')} →
-        </Button>
-      </div>
     </>
   )
 }
@@ -507,17 +636,13 @@ function StepTemplate({
   setTemplate,
   creating,
   error,
-  onBack,
-  onFinish,
   onOpenGallery,
   onOpenImport,
 }: {
-  template: TemplateChoice
-  setTemplate: (t: TemplateChoice) => void
+  template: TemplateChoice | null
+  setTemplate: (t: TemplateChoice | null) => void
   creating: boolean
   error: string | null
-  onBack: () => void
-  onFinish: () => void
   onOpenGallery: () => void
   onOpenImport: () => void
 }) {
@@ -527,26 +652,27 @@ function StepTemplate({
       <h1 className="text-[22px] font-semibold text-neutral-900">
         {t('onboarding.template.title')}
       </h1>
-      <p className="mt-2 text-[13.5px] text-neutral-600 leading-relaxed">
-        {t('onboarding.template.subtitle')}
-      </p>
 
       <div className="mt-6 space-y-2">
         <button
           type="button"
           disabled={creating}
           onClick={() => setTemplate('empty')}
-          className={`w-full text-left px-3 py-3 rounded border transition-colors ${
+          className={`w-full text-left px-3 py-3 rounded border transition-colors flex items-start gap-3 ${
             template === 'empty'
-              ? 'border-amber-400 bg-amber-50'
+              ? 'border-neutral-500 bg-neutral-100'
               : 'border-neutral-200 bg-white hover:border-neutral-400'
           }`}
         >
-          <div className="text-[14px] font-medium text-neutral-800">
-            {t('onboarding.template.empty.title')}
-          </div>
-          <div className="text-[12.5px] text-neutral-500 mt-0.5">
-            {t('onboarding.template.empty.desc')}
+          <Plus
+            size={20}
+            weight="regular"
+            className="shrink-0 mt-0.5 text-neutral-500"
+          />
+          <div className="min-w-0">
+            <div className="text-[14px] font-medium text-neutral-800">
+              {t('onboarding.template.empty.title')}
+            </div>
           </div>
         </button>
 
@@ -554,13 +680,17 @@ function StepTemplate({
           type="button"
           disabled={creating}
           onClick={onOpenGallery}
-          className="w-full text-left px-3 py-3 rounded border border-neutral-200 bg-white hover:border-neutral-400 transition-colors"
+          className="w-full text-left px-3 py-3 rounded border border-neutral-200 bg-white hover:border-neutral-400 transition-colors flex items-start gap-3"
         >
-          <div className="text-[14px] font-medium text-neutral-800">
-            {t('onboarding.template.gallery.title')}
-          </div>
-          <div className="text-[12.5px] text-neutral-500 mt-0.5">
-            {t('onboarding.template.gallery.desc')}
+          <Storefront
+            size={20}
+            weight="regular"
+            className="shrink-0 mt-0.5 text-neutral-500"
+          />
+          <div className="min-w-0">
+            <div className="text-[14px] font-medium text-neutral-800">
+              {t('onboarding.template.gallery.title')}
+            </div>
           </div>
         </button>
 
@@ -568,13 +698,17 @@ function StepTemplate({
           type="button"
           disabled={creating}
           onClick={onOpenImport}
-          className="w-full text-left px-3 py-3 rounded border border-neutral-200 bg-white hover:border-neutral-400 transition-colors"
+          className="w-full text-left px-3 py-3 rounded border border-neutral-200 bg-white hover:border-neutral-400 transition-colors flex items-start gap-3"
         >
-          <div className="text-[14px] font-medium text-neutral-800">
-            {t('onboarding.template.frame.title')}
-          </div>
-          <div className="text-[12.5px] text-neutral-500 mt-0.5">
-            {t('onboarding.template.frame.desc')}
+          <UploadSimple
+            size={20}
+            weight="regular"
+            className="shrink-0 mt-0.5 text-neutral-500"
+          />
+          <div className="min-w-0">
+            <div className="text-[14px] font-medium text-neutral-800">
+              {t('onboarding.template.frame.title')}
+            </div>
           </div>
         </button>
       </div>
@@ -584,15 +718,6 @@ function StepTemplate({
           {error}
         </div>
       )}
-
-      <div className="mt-8 flex items-center justify-between">
-        <Button variant="ghost" onClick={onBack} disabled={creating}>
-          ← {t('onboarding.back')}
-        </Button>
-        <Button variant="primary" onClick={onFinish} disabled={creating}>
-          {creating ? t('onboarding.creating') : t('onboarding.finish')}
-        </Button>
-      </div>
     </>
   )
 }

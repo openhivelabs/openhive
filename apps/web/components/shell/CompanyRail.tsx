@@ -1,4 +1,4 @@
-import { GearSix, Package, Plus } from '@phosphor-icons/react'
+import { GearSix, Plus, Storefront } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
@@ -131,7 +131,7 @@ export function CompanyRail() {
           title="Frame Market"
           className="mt-6 w-9 h-9 rounded-md flex items-center justify-center text-neutral-500 hover:text-neutral-900 hover:bg-neutral-200/60 dark:hover:bg-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100 cursor-pointer"
         >
-          <Package className="w-5 h-5" />
+          <Storefront className="w-5 h-5" />
         </button>
       </div>
       <Link
