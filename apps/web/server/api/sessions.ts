@@ -367,11 +367,10 @@ sessions.get('/:sessionId', (c) => {
     return c.json({ detail: 'session not found' }, 404)
   }
   const dir = sessionDir(sessionId)
-  const transcriptPath = path.join(dir, 'transcript.jsonl')
   const eventsPath = path.join(dir, 'events.jsonl')
-  const readJsonl = (p: string): Record<string, unknown>[] => {
-    if (!fs.existsSync(p)) return []
-    const txt = fs.readFileSync(p, 'utf8')
+  const events: Record<string, unknown>[] = (() => {
+    if (!fs.existsSync(eventsPath)) return []
+    const txt = fs.readFileSync(eventsPath, 'utf8')
     const out: Record<string, unknown>[] = []
     for (const line of txt.split('\n')) {
       const trimmed = line.trim()
@@ -383,8 +382,7 @@ sessions.get('/:sessionId', (c) => {
       }
     }
     return out
-  }
-  const events = readJsonl(eventsPath)
+  })()
   const artifacts = listArtifactsForSession(sessionId).map((a) => ({
     id: a.id,
     filename: a.filename,
@@ -395,9 +393,16 @@ sessions.get('/:sessionId', (c) => {
   const usage = usageForSession(sessionId)
   const pendingAsk =
     meta.status === 'error' ? null : pendingAskFromEvents(events as unknown as EventRow[])
-  const transcript = fs.existsSync(transcriptPath)
-    ? readJsonl(transcriptPath)
-    : buildTranscript(meta.goal, meta.started_at, eventsForSession(sessionId))
+  // Always rebuild transcript from events. transcript.jsonl is written once
+  // at `finalizeSession` (guarded by `finalized_at` idempotency) and then
+  // never updated — so follow-up turns in a resumable chat session would
+  // never surface in the UI if we preferred the file. events.jsonl IS the
+  // source of truth; the file on disk is only kept for historical archival.
+  const transcript = buildTranscript(
+    meta.goal,
+    meta.started_at,
+    eventsForSession(sessionId),
+  )
   return c.json({
     ...meta,
     transcript,

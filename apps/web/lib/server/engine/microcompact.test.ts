@@ -47,7 +47,7 @@ const LONG_BODY = 'x'.repeat(5_000)
 
 describe('isCompactable', () => {
   it('clears built-ins', () => {
-    expect(isCompactable('web_fetch')).toBe(true)
+    expect(isCompactable('web-fetch')).toBe(true)
     expect(isCompactable('sql_query')).toBe(true)
     expect(isCompactable('read_skill_file')).toBe(true)
     expect(isCompactable('run_skill_script')).toBe(true)
@@ -74,7 +74,7 @@ describe('maybeMicrocompact', () => {
   it('A: clears stale web_fetch result with placeholder', () => {
     const now = 10_000_000
     const history = mkPair({
-      toolName: 'web_fetch',
+      toolName: 'web-fetch',
       toolCallId: 'c1',
       result: LONG_BODY,
       assistantTs: now - (STALE_AFTER_MS + 60_000), // 6 min ago
@@ -83,14 +83,14 @@ describe('maybeMicrocompact', () => {
     expect(res.applied).toBe(1)
     expect(res.charsSaved).toBeGreaterThan(0)
     expect(history[1].content).toContain('[Old tool result cleared')
-    expect(history[1].content).toContain('Tool: web_fetch')
+    expect(history[1].content).toContain('Tool: web-fetch')
   })
 
   // -------- Case B: hot cache — no-op --------
   it('B: within STALE_AFTER_MS — no-op', () => {
     const now = 10_000_000
     const history = mkPair({
-      toolName: 'web_fetch',
+      toolName: 'web-fetch',
       toolCallId: 'c1',
       result: LONG_BODY,
       assistantTs: now - 60_000, // 1 min ago
@@ -166,7 +166,7 @@ describe('maybeMicrocompact', () => {
       const mod = await import('./microcompact')
       const now = 10_000_000
       const history = mkPair({
-        toolName: 'web_fetch',
+        toolName: 'web-fetch',
         toolCallId: 'c1',
         result: LONG_BODY,
         assistantTs: now - (mod.STALE_AFTER_MS + 60_000),
@@ -185,7 +185,7 @@ describe('maybeMicrocompact', () => {
   it('G: second pass is a no-op (already cleared)', () => {
     const now = 10_000_000
     const history = mkPair({
-      toolName: 'web_fetch',
+      toolName: 'web-fetch',
       toolCallId: 'c1',
       result: LONG_BODY,
       assistantTs: now - (STALE_AFTER_MS + 60_000),
@@ -207,7 +207,7 @@ describe('maybeMicrocompact', () => {
           {
             id: 'c1',
             type: 'function',
-            function: { name: 'web_fetch', arguments: '{}' },
+            function: { name: 'web-fetch', arguments: '{}' },
           },
           {
             id: 'c2',
@@ -260,7 +260,7 @@ describe('maybeMicrocompact', () => {
   it('skips short content below MICROCOMPACT_MIN_CHARS', () => {
     const now = 10_000_000
     const history = mkPair({
-      toolName: 'web_fetch',
+      toolName: 'web-fetch',
       toolCallId: 'c1',
       result: 'tiny',
       assistantTs: now - (STALE_AFTER_MS + 60_000),
@@ -291,7 +291,7 @@ describe('maybeMicrocompact', () => {
       ],
     })
     const history = mkPair({
-      toolName: 'web_fetch',
+      toolName: 'web-fetch',
       toolCallId: 'c1',
       result: envelope,
       assistantTs: now - (STALE_AFTER_MS + 60_000),
@@ -310,7 +310,7 @@ describe('maybeMicrocompact', () => {
   it('M: web_fetch with no files envelope keeps short stub', () => {
     const now = 10_000_000
     const history = mkPair({
-      toolName: 'web_fetch',
+      toolName: 'web-fetch',
       toolCallId: 'c1',
       result: LONG_BODY, // plain string — not a JSON envelope
       assistantTs: now - (STALE_AFTER_MS + 60_000),
@@ -318,7 +318,7 @@ describe('maybeMicrocompact', () => {
     const res = maybeMicrocompact(history, SESSION, now)
     expect(res.applied).toBe(1)
     const content = history[1].content as string
-    expect(content).toContain('[Old tool result cleared. Tool: web_fetch.')
+    expect(content).toContain('[Old tool result cleared. Tool: web-fetch.')
     expect(content).not.toContain('Artifacts:')
   })
 
@@ -362,7 +362,7 @@ describe('maybeMicrocompact', () => {
       files: [{ name: 'a.txt', path: `/tmp/${SESSION}/artifacts/a.txt` }],
     })
     const history = mkPair({
-      toolName: 'web_fetch',
+      toolName: 'web-fetch',
       toolCallId: 'c1',
       result: envelope,
       assistantTs: now - (STALE_AFTER_MS + 60_000),

@@ -18,8 +18,8 @@ import type {
 
 export type { StreamDelta, ChatMessage, ToolSpec } from '../providers/types'
 
-/** Extra knobs understood by the claude-code branch only (fork pattern, S3).
- *  Other providers ignore these fields. */
+/** Extra knobs the engine threads through to provider adapters. Each
+ *  provider picks up only the fields it cares about. */
 export interface StreamOpts {
   /** Tell caching strategy not to reorder tools — fork children require
    *  byte-identical prefix for Anthropic prompt-cache hit. */
@@ -31,6 +31,10 @@ export interface StreamOpts {
    *  Engine passes 0.3 for depth-0 Lead turns; 0.7 default otherwise.
    *  Currently wired for copilot only. */
   temperature?: number
+  /** Session this turn belongs to. Codex uses it to key the
+   *  `previous_response_id` chaining store so concurrent sessions don't
+   *  clobber each other's state. */
+  sessionId?: string
 }
 
 export async function* stream(
@@ -49,7 +53,7 @@ export async function* stream(
     return
   }
   if (providerId === 'codex') {
-    yield* streamCodex(model, messages, tools)
+    yield* streamCodex(model, messages, tools, opts?.sessionId)
     return
   }
   throw new Error(
@@ -236,15 +240,20 @@ async function* streamCodex(
   model: string,
   messages: ChatMessage[],
   tools: ToolSpec[] | undefined,
+  sessionId: string | undefined,
 ): AsyncIterable<StreamDelta> {
   const toolOrd = new Map<string, number>()
   let nextToolIdx = 0
+  let textStreamed = false
 
-  for await (const ev of codex.streamResponses({ model, messages, tools })) {
+  for await (const ev of codex.streamResponses({ model, messages, tools, sessionId })) {
     const t = (ev as { type?: string }).type
     if (t === 'response.output_text.delta') {
       const text = (ev as { delta?: unknown }).delta
-      if (typeof text === 'string' && text) yield { kind: 'text', text }
+      if (typeof text === 'string' && text) {
+        textStreamed = true
+        yield { kind: 'text', text }
+      }
     } else if (t === 'response.output_item.added') {
       const item = ((ev as { item?: Record<string, unknown> }).item ?? {}) as Record<string, unknown>
       if (item.type === 'function_call') {
@@ -286,8 +295,27 @@ async function* streamCodex(
           cache_read_tokens: Number(inputDetails.cached_tokens ?? 0),
         }
       }
+      // `sawTool` must reflect whether THIS stream carried any function_call
+      // item — tracked via the toolOrd map we populated from `output_item.added`.
+      // Previously we scanned `response.output` on the completion envelope, but
+      // that field is empty in streaming mode (items are delivered out-of-band),
+      // so tool-calling responses were silently classified as `stop_reason=stop`
+      // and the engine's round loop never continued. This is the root cause
+      // of the "session silently finalises with empty output" bug.
+      const sawTool = toolOrd.size > 0
       const outs = (response.output as Record<string, unknown>[] | undefined) ?? []
-      const sawTool = outs.some((i) => i.type === 'function_call')
+      // Fallback: some Responses-API shapes deliver the final message
+      // only inside the `response.completed` payload (no streaming text
+      // deltas) — walk the output array and recover the text so the
+      // engine doesn't emit an empty `node_finished`. Only run when
+      // nothing streamed AND no tool calls, to avoid double-emitting
+      // when streaming worked normally.
+      if (!textStreamed && !sawTool) {
+        const recovered = extractCompletedMessageText(outs)
+        if (recovered) {
+          yield { kind: 'text', text: recovered }
+        }
+      }
       yield { kind: 'stop', reason: sawTool ? 'tool_calls' : 'stop' }
       return
     } else if (t === 'response.error' || t === 'error') {
@@ -295,4 +323,29 @@ async function* streamCodex(
       throw new Error(`Codex stream error: ${JSON.stringify(err)}`)
     }
   }
+}
+
+/** Walk the `response.output` array from a Responses-API `response.completed`
+ *  event and pull out any `output_text` the model emitted as message items.
+ *  Shape reference: message items look like
+ *    { type: 'message', role: 'assistant',
+ *      content: [{ type: 'output_text', text: '...' }, ...] }
+ *  — possibly multiple text chunks, possibly interleaved with reasoning
+ *  items at sibling level (reasoning items are ignored here; they don't
+ *  belong in the user-facing transcript). */
+function extractCompletedMessageText(
+  outs: Record<string, unknown>[],
+): string {
+  const parts: string[] = []
+  for (const item of outs) {
+    if (item.type !== 'message') continue
+    const content = item.content as Record<string, unknown>[] | undefined
+    if (!Array.isArray(content)) continue
+    for (const c of content) {
+      if (c.type === 'output_text' && typeof c.text === 'string' && c.text) {
+        parts.push(c.text)
+      }
+    }
+  }
+  return parts.join('')
 }

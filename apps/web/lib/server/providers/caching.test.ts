@@ -129,41 +129,27 @@ describe('CodexCachingStrategy', () => {
     instructions: 'be helpful',
   }
 
-  it('attaches previous_response_id and flips store:true when chaining', () => {
-    const payload = strategy.applyToRequest({
-      ...baseReq,
-      previousResponseId: 'resp_abc123',
-    })
-    expect(payload.previous_response_id).toBe('resp_abc123')
-    expect(payload.store).toBe(true)
-  })
-
-  it('omits previous_response_id and keeps store:false when not chaining', () => {
-    const payload = strategy.applyToRequest({
-      ...baseReq,
-      previousResponseId: null,
-    })
-    expect(payload.previous_response_id).toBeUndefined()
+  it('always sets store:false (attach_item_ids replaces previous_response_id chaining)', () => {
+    const payload = strategy.applyToRequest(baseReq)
     expect(payload.store).toBe(false)
+    // `previous_response_id` is not a field on the payload type any more.
+    expect((payload as Record<string, unknown>).previous_response_id).toBeUndefined()
   })
 
-  it('extracts response id from response.created envelope', () => {
-    const id = strategy.extractResponseId({
-      type: 'response.created',
-      response: { id: 'resp_xyz', status: 'in_progress' },
-    })
-    expect(id).toBe('resp_xyz')
+  it('includes parallel_tool_calls, reasoning, and include flags', () => {
+    const payload = strategy.applyToRequest(baseReq)
+    expect(payload.parallel_tool_calls).toBe(true)
+    expect(payload.reasoning).toEqual({ effort: 'low', summary: 'auto' })
+    expect(payload.include).toEqual(['reasoning.encrypted_content'])
   })
 
-  it('extracts response id from top-level id field', () => {
-    const id = strategy.extractResponseId({ id: 'resp_flat', type: 'response.completed' })
-    expect(id).toBe('resp_flat')
-  })
-
-  it('returns null on unrelated envelopes', () => {
-    expect(strategy.extractResponseId({ type: 'response.output_text.delta' })).toBeNull()
-    expect(strategy.extractResponseId(null)).toBeNull()
-    expect(strategy.extractResponseId('nope')).toBeNull()
+  it('attaches tools + tool_choice only when tools provided', () => {
+    const noTools = strategy.applyToRequest(baseReq)
+    expect(noTools.tools).toBeUndefined()
+    expect(noTools.tool_choice).toBeUndefined()
+    const withTools = strategy.applyToRequest({ ...baseReq, tools: [{ type: 'function' }] })
+    expect(withTools.tools).toHaveLength(1)
+    expect(withTools.tool_choice).toBe('auto')
   })
 })
 

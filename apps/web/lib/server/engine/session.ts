@@ -40,7 +40,6 @@ import { type SkillDef, getSkill, listSkills, matchSkillHints } from '../skills/
 import { readSkillFile, runSkill, runSkillScript } from '../skills/runner'
 import { type Tool, toolsToOpenAI } from '../tools/base'
 import { teamDataTools } from '../tools/team-data-tool'
-import { webFetchTool } from '../tools/webfetch'
 import { effectiveWindow as computeEffectiveWindow } from '../usage/contextWindow'
 import {
   estimateMessagesTokens,
@@ -65,7 +64,12 @@ import {
 } from './result-cap'
 import type { AgentSpec, TeamSpec } from './team'
 import { entryAgent, subordinates as teamSubordinates } from './team'
-import { TRAJECTORY_TOOLS, type ToolRun, partitionRuns } from './tool-partition'
+import {
+  PARALLEL_TRAJECTORY_TOOLS,
+  TRAJECTORY_TOOLS,
+  type ToolRun,
+  partitionRuns,
+} from './tool-partition'
 import {
   appendArtifactBlock,
   getRealArtifactUriSet,
@@ -80,10 +84,12 @@ import {
 } from './delegation-guidance'
 import { stripFakeArtifactLinks, stripMetaLabels } from './post-process'
 
-// Guard defaults + hard ceilings.
+// Guard defaults + hard ceilings. The per-turn caps below are fallbacks for
+// sessions that predate `team.limits` (serialized snapshots from older runs)
+// — new sessions always pull the resolved value from the team snapshot.
 export const MAX_TOOL_ROUNDS = 8
 export const MAX_DEPTH = 4
-export const MAX_ASK_USER_PER_RUN = 3
+export const MAX_ASK_USER_PER_TURN_FALLBACK = 4
 export const HARD_MAX_TOOL_ROUNDS = 30
 export const HARD_MAX_DEPTH = 8
 
@@ -91,10 +97,16 @@ export const HARD_MAX_DEPTH = 8
  *  counter, todos) — these must execute serially. Every other tool (MCP,
  *  skill helpers, custom handlers) is parallel-safe in a single turn.
  *
- *  Back-compat alias for the v2 taxonomy's `TRAJECTORY_TOOLS`. New code
- *  should import from `./tool-partition`; this export stays for the
- *  legacy `splitToolRuns` path and for tests. */
-export const SERIAL_TOOL_NAMES = TRAJECTORY_TOOLS
+ *  Back-compat set used by the legacy `splitToolRuns` partitioner (active
+ *  only when `OPENHIVE_TOOL_PARTITION_V2=0`). This union preserves the
+ *  PRE-split "delegate_to is serial" behaviour so the env rollback is a
+ *  faithful bisect to pre-parallel-delegate code. The v2 path has moved
+ *  `delegate_to` into `PARALLEL_TRAJECTORY_TOOLS` for cross-subordinate
+ *  fan-out. */
+export const SERIAL_TOOL_NAMES = new Set<string>([
+  ...TRAJECTORY_TOOLS,
+  ...PARALLEL_TRAJECTORY_TOOLS,
+])
 
 /** Partition tool_calls into consecutive serial/parallel runs. Adjacent
  *  same-kind calls collapse into one run; the order inside each run is
@@ -122,10 +134,22 @@ function toolPartitionV2Enabled(): boolean {
   return process.env.OPENHIVE_TOOL_PARTITION_V2 !== '0'
 }
 
-/** Env: per-parallel-bucket concurrency cap. Default 10. */
+/** Env: per-parallel-bucket concurrency cap for safe_parallel tools
+ *  (web_fetch / sql_query / read_skill_file / MCP reads). Default 10. */
 function toolParallelMax(): number {
   const raw = Number(process.env.OPENHIVE_TOOL_PARALLEL_MAX)
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 10
+}
+
+/** Env: concurrency cap for parallel_trajectory buckets (currently just
+ *  `delegate_to` fan-out across different subordinates in one assistant
+ *  turn). Default 4. Kept smaller than toolParallelMax because each slot
+ *  fires an LLM stream — overshooting blows provider rate limits and
+ *  token budget, unlike cheap I/O in safe_parallel. Set to 1 to force
+ *  legacy serial behaviour (useful as a regression bisect). */
+function parallelDelegationMax(): number {
+  const raw = Number(process.env.OPENHIVE_PARALLEL_DELEGATION_MAX)
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 4
 }
 
 // session_id → counters kept on globalThis so HMR doesn't drop in-flight runs.
@@ -144,6 +168,9 @@ interface RunState {
   readSkillFileTotal: Map<string, number>
   // sessionId → set of `{skill}:{path}` already read. Phase C3 dedupe.
   readSkillFileSeen: Map<string, Set<string>>
+  // sessionId → count of `web-search` calls this turn. Prevents runaway
+  // search loops (LLM re-queries 20+ times when results aren't perfect).
+  webSearch: Map<string, number>
   // sessionId → ordered todo list maintained by the Lead via native tools.
   todos: Map<string, TodoItem[]>
   // S3 fork: sessionId → last-turn snapshot captured at streamTurn entry.
@@ -156,15 +183,24 @@ interface RunState {
   forkSystemCache: Map<string, string>
 }
 
-// Phase C1: Cap per-(parent→child) delegations within a run. A parent re-
-// delegating the same sub-agent 3+ times almost always means "REVISED TASK"
-// spam — the parent should accept the result or fix it itself.
-export const MAX_DELEGATIONS_PER_PAIR = 2
+// Phase C1: Cap per-(parent→child) delegations within a TURN. A parent re-
+// delegating the same sub-agent 5+ times in one burst almost always means
+// "REVISED TASK" spam. Fallback only — resolved value comes from
+// team.limits.max_delegations_per_pair_per_turn.
+export const MAX_DELEGATIONS_PER_PAIR_FALLBACK = 4
 
 // Phase C3: Cap read_skill_file. Once a skill is activated the LLM tends to
 // spelunk its entire tree looking for answers it already has. Same-file reads
-// are always redundant; total cap stops fan-out sprees mid-turn.
-export const MAX_READ_SKILL_FILE_PER_RUN = 8
+// are always redundant; total cap stops fan-out sprees mid-turn. Fallback
+// only — resolved from team.limits.max_read_skill_file_per_turn.
+export const MAX_READ_SKILL_FILE_PER_TURN_FALLBACK = 8
+
+// Phase C4: Cap `web-search` calls per turn. Claude Code hardcaps at 8; we
+// scale down to 5 because our multi-agent fan-out (Lead + researcher siblings)
+// multiplies query volume. Without this the LLM loops on "just one more
+// search" when results aren't perfect. Fallback only — resolved from
+// team.limits.max_web_search_per_turn.
+export const MAX_WEB_SEARCH_PER_TURN_FALLBACK = 5
 
 const globalForRun = globalThis as unknown as {
   __openhive_engine_run?: RunState
@@ -179,6 +215,7 @@ function state(): RunState {
       delegations: new Map(),
       readSkillFileTotal: new Map(),
       readSkillFileSeen: new Map(),
+      webSearch: new Map(),
       todos: new Map(),
       lastTurnSnapshot: new Map(),
       forkSystemCache: new Map(),
@@ -190,6 +227,7 @@ function state(): RunState {
   if (!s.delegations) s.delegations = new Map()
   if (!s.readSkillFileTotal) s.readSkillFileTotal = new Map()
   if (!s.readSkillFileSeen) s.readSkillFileSeen = new Map()
+  if (!s.webSearch) s.webSearch = new Map()
   if (!s.todos) s.todos = new Map()
   if (!s.lastTurnSnapshot) s.lastTurnSnapshot = new Map()
   if (!s.forkSystemCache) s.forkSystemCache = new Map()
@@ -205,6 +243,32 @@ function newId(prefix: string): string {
  *  sibling, todo) 들은 prefix 형태 유지. */
 function newSessionId(): string {
   return crypto.randomUUID()
+}
+
+/** Give a delegation slot back to the per-turn counter. Called when a sub
+ *  delegation ended up being a no-op (no tool calls, just a clarifying-
+ *  question bounce) or crashed before doing any work — in both cases the
+ *  parent legitimately needs another slot to retry or fix the task itself. */
+function refundDelegationSlot(pairKey: string): void {
+  const cur = state().delegations.get(pairKey) ?? 0
+  if (cur > 0) state().delegations.set(pairKey, cur - 1)
+}
+
+/** Drop per-turn cap counters for `sessionId` so the next user turn starts
+ *  with a fresh budget. Call when `inbox.pop()` yields a new user message —
+ *  the previous turn is done, a re-delegation or re-ask in the new turn is
+ *  a legitimate follow-up, not loop spam. Only touches keys scoped to this
+ *  session; other in-flight sessions keep their counters. */
+function resetPerTurnCaps(sessionId: string): void {
+  const s = state()
+  for (const k of s.delegations.keys()) {
+    if (k.startsWith(`${sessionId}:`)) s.delegations.delete(k)
+  }
+  s.askUser.set(sessionId, 0)
+  s.readSkillFileTotal.delete(sessionId)
+  const seen = s.readSkillFileSeen.get(sessionId)
+  if (seen) seen.clear()
+  s.webSearch.delete(sessionId)
 }
 
 // -------- history compaction helpers (Phase B token savings) --------
@@ -497,6 +561,7 @@ export async function* runTeam(
     }
     state().readSkillFileTotal.delete(sessionId)
     state().readSkillFileSeen.delete(sessionId)
+    state().webSearch.delete(sessionId)
     state().todos.delete(sessionId)
     // S3 fork: release snapshot history ref so parent history GC can proceed.
     state().lastTurnSnapshot.delete(sessionId)
@@ -598,6 +663,17 @@ async function* runTeamBody(
       // null = session being torn down.
       if (next === null) break
       await permit?.acquire()
+      // Per-turn reset of engine caps. The C-series caps (delegation /
+      // ask_user / read_skill_file) guard against in-turn loops — e.g. a
+      // Lead re-delegating a "REVISED TASK" to the same sub three times in
+      // one burst. A chat session, though, is one engine "run" that spans
+      // many user turns, so sessionwide accounting turns legitimate follow-
+      // ups ("I've answered your clarifying question, now try again") into
+      // hard dead-ends. The user message is the natural boundary: once they
+      // respond, the context is new and the parent deserves a fresh budget.
+      // Only wipes this session's keys — other live sessions keep their
+      // in-flight counters.
+      resetPerTurnCaps(sessionId)
       yield makeEvent('user_message', sessionId, { text: next })
       currentTask = next
     }
@@ -774,7 +850,6 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   if (teamSlugs) {
     tools.push(...teamDataTools(teamSlugs, persona.tools))
   }
-  tools.push(webFetchTool())
   // A3: artifact rehydration — Lead + sub-agent both need to re-read files
   // produced earlier in the session (microcompact may have cleared the
   // envelope bodies that first carried them).
@@ -821,7 +896,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   if (agentSkills.length > 0) {
     tools.push(skillActivateTool(agentSkills))
     tools.push(skillListFilesTool(agentSkills))
-    tools.push(skillReadTool(agentSkills, sessionId))
+    tools.push(skillReadTool(agentSkills, sessionId, team))
     tools.push(skillRunTool(agentSkills, skillCtx))
   }
 
@@ -851,7 +926,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   const personaBody = composePersonaBody(persona)
   const teamSection = describeTeamForAgent(team, node.id)
   const hasSubs = subs.length > 0
-  const relaySection = buildRelaySection(depth, hasSubs)
+  const relaySection = buildRelaySection(depth, hasSubs, team)
   const staticTeamBlock = teamSection + (relaySection ? '\n' + relaySection : '')
   // Skill auto-hint: match the incoming task once against frontmatter triggers
   // so the first turn's system prompt nudges the LLM toward relevant skills.
@@ -944,6 +1019,15 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
       depth === 0 && rounds === 1 && injectedSystemSuffix
         ? `${baseSystem}\n\n---\n\n[Injected by SessionStart hook]\n${injectedSystemSuffix}`
         : baseSystem
+    // Round-level observability: lets us diagnose "session silently stopped"
+    // bugs (empty round-2 output, protocol regressions) straight from the
+    // event log without having to reconstruct from node_finished shapes.
+    yield makeEvent(
+      'round_started',
+      sessionId,
+      { round: rounds },
+      { depth, node_id: node.id },
+    )
     for await (const ev of streamTurn({
       sessionId,
       team,
@@ -955,9 +1039,48 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     })) {
       if (ev.kind === 'node_finished' && ev.data._turn_marker === true) {
         const stopReason = ev.data.stop_reason as string | undefined
+        const output = typeof ev.data.output === 'string' ? ev.data.output : ''
+        yield makeEvent(
+          'round_finished',
+          sessionId,
+          {
+            round: rounds,
+            stop_reason: stopReason ?? 'stop',
+            text_len: output.length,
+            had_tool_calls: stopReason === 'tool_calls',
+          },
+          { depth, node_id: node.id },
+        )
         if (stopReason === 'tool_calls') {
           turnDone = true
           break
+        }
+        // Empty-round defence: on any round AFTER round 1, if the provider
+        // returned both zero text and no tool calls, the turn would finalise
+        // with output="" — the exact silent-death failure mode we hit before
+        // attach_item_ids was wired up. Log telemetry and synthesize a
+        // minimal fallback so the user sees something useful instead of a
+        // dead session. Round 1 emptiness is a legitimate "nothing to say"
+        // case (rare, e.g. greeting turn) and is passed through unchanged.
+        if (rounds > 1 && stopReason !== 'tool_calls' && output.trim() === '') {
+          yield makeEvent(
+            'provider.empty_round',
+            sessionId,
+            {
+              provider: node.provider_id,
+              model: node.model,
+              round: rounds,
+            },
+            { depth, node_id: node.id },
+          )
+          const fallback = buildEmptyRoundFallback(history, errors.currentLocale())
+          yield makeEvent(
+            'node_finished',
+            sessionId,
+            { output: fallback },
+            { depth, node_id: node.id },
+          )
+          return
         }
         yield makeEvent(
           'node_finished',
@@ -971,6 +1094,31 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     }
     if (!turnDone) break
   }
+}
+
+/** Last-ditch assistant reply when the provider returns an empty round
+ *  after tool execution. Concatenates whatever the most recent tool
+ *  results contained into a short summary so the user at least sees the
+ *  work product instead of a blank bubble. Locale-aware prefix. */
+function buildEmptyRoundFallback(
+  history: ChatMessage[],
+  locale: 'ko' | 'en',
+): string {
+  const toolOutputs: string[] = []
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i]!
+    if (m.role !== 'tool') break
+    const c = typeof m.content === 'string' ? m.content : ''
+    if (c) toolOutputs.unshift(c)
+  }
+  const prefix =
+    locale === 'ko'
+      ? '정리 도중 응답이 비어 중단됐습니다. 아래는 지금까지 수집된 원본 결과입니다 — 다시 시도해 주세요.'
+      : 'The model returned an empty follow-up response. Here is the raw tool output gathered so far — please retry.'
+  if (toolOutputs.length === 0) return prefix
+  const joined = toolOutputs.join('\n\n---\n\n')
+  const capped = joined.length > 4000 ? `${joined.slice(0, 4000)}\n\n…(truncated)` : joined
+  return `${prefix}\n\n${capped}`
 }
 
 // -------- provider turn --------
@@ -1107,14 +1255,15 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
   // invent section structure on simple turns. 0.3 keeps them focused on the
   // answer without zeroing out creativity. Sub-agents keep the default 0.7.
   const leadTemperature = depth === 0 ? 0.3 : undefined
-  const streamOpts =
-    opts.systemPromptOverride !== undefined || opts.useExactTools || leadTemperature !== undefined
-      ? {
-          useExactTools: opts.useExactTools,
-          overrideSystem: opts.systemPromptOverride,
-          temperature: leadTemperature,
-        }
-      : undefined
+  // Always pass sessionId through so the Codex adapter can key its
+  // `previous_response_id` chaining Map per-session (concurrent sessions
+  // otherwise stomp on each other's chain head via the globalThis slot).
+  const streamOpts = {
+    useExactTools: opts.useExactTools,
+    overrideSystem: opts.systemPromptOverride,
+    temperature: leadTemperature,
+    sessionId,
+  }
   // Meta-label stripper buffer — only applied to Lead (depth 0) turns where
   // small-model slop is the concern. Sub-agent output goes through un-stripped
   // (their text is for parent synthesis, not UI display).
@@ -1251,19 +1400,25 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       _ts: Date.now(),
     })
 
-    // Split tool_calls into serial-vs-parallel runs. Tools that mutate
-    // run-scoped state (delegation, ask_user, todo, activate_skill) stay
+    // Split tool_calls into serial-vs-parallel runs. Control-flow
+    // mutation (ask_user, todo, activate_skill, delegate_parallel) stays
     // serial; writes (sql_exec, run_skill_script) are serialized to avoid
-    // intra-turn races; reads (MCP, sql_query, web_fetch, …) fan out under
-    // a concurrency cap. History is always pushed in original tool_call
-    // order so provider payloads stay deterministic.
+    // intra-turn races; reads (MCP, sql_query, web_fetch, …) fan out
+    // under `toolParallelMax`; adjacent `delegate_to` to DIFFERENT subs
+    // fan out under the smaller `parallelDelegationMax` (each fires an
+    // LLM stream, so the budget cap is lower). History is always pushed
+    // in original tool_call order so provider payloads stay deterministic.
     type ExecResult = { content: string; isError: boolean }
     type TC = (typeof toolCallsForHistory)[number]
-    const cap = toolParallelMax()
+    const safeParallelCap = toolParallelMax()
+    const parallelTrajCap = parallelDelegationMax()
     const v2 = toolPartitionV2Enabled()
     let runs: ToolRun<TC>[]
     if (v2) {
-      const partitioned = partitionRuns<TC>(toolCallsForHistory, cap)
+      const partitioned = partitionRuns<TC>(toolCallsForHistory, {
+        safe_parallel: safeParallelCap,
+        parallel_trajectory: parallelTrajCap,
+      })
       runs = partitioned.runs
       if (toolCallsForHistory.length > 0) {
         yield makeEvent(
@@ -1391,6 +1546,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
           } else if (tc.function.name === 'ask_user') {
             for await (const subEv of runAskUser({
               sessionId,
+              team,
               node,
               args: parsedArgs,
               toolCallId: tc.id,
@@ -1494,12 +1650,19 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
           applyResult(tc, step.value)
         }
       } else {
-        // Parallel: kick off every tc under a pLimit(cap) semaphore;
-        // interleave their events via AsyncQueue so the caller sees them
-        // as they arrive. Results land in a slot array so history.push
-        // remains in index order — provider chat history requires
-        // tool_result ordering to match tool_call ordering.
-        const limit = pLimit(cap)
+        // Parallel: kick off every tc under a pLimit semaphore sized to
+        // this run's class (safe_parallel → toolParallelMax, e.g. 10 for
+        // cheap I/O; parallel_trajectory → parallelDelegationMax, e.g. 4
+        // for LLM-stream fan-out). partitionRuns already split oversize
+        // buckets to ≤ cap, so this limit is effectively a no-op for the
+        // common case and defence-in-depth for future regressions.
+        // Events interleave via AsyncQueue so callers see them as they
+        // arrive. Results land in a slot array so history.push remains
+        // in index order — provider chat history requires tool_result
+        // ordering to match tool_call ordering.
+        const runCap =
+          run.cls === 'parallel_trajectory' ? parallelTrajCap : safeParallelCap
+        const limit = pLimit(runCap)
         const n = run.items.length
         type Item =
           | { kind: 'event'; event: Event }
@@ -1882,8 +2045,11 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
   }
 
   const pairKey = `${sessionId}:${fromNode.id}->${target.id}`
+  const delegationCap =
+    team.limits.max_delegations_per_pair_per_turn ??
+    MAX_DELEGATIONS_PER_PAIR_FALLBACK
   const prior = state().delegations.get(pairKey) ?? 0
-  if (prior >= MAX_DELEGATIONS_PER_PAIR) {
+  if (prior >= delegationCap) {
     yield makeEvent(
       'delegation_closed',
       sessionId,
@@ -1892,15 +2058,18 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
         assignee_role: target.role,
         error: true,
         result:
-          `ERROR: delegation cap reached (${MAX_DELEGATIONS_PER_PAIR} calls to ${target.role} ` +
-          `from this agent in this run). Do NOT re-delegate the same subtask. Accept the ` +
-          `prior result or fix remaining issues yourself, then end your turn.`,
+          `NOTE: delegation cap reached — you've already called delegate_to(${target.role}) ` +
+          `${delegationCap} times this turn (cap resets when the user sends the ` +
+          `next message). The cap exists to stop "REVISED TASK" spam, not to end the turn. ` +
+          `Do one of: (a) consolidate the ${target.role} results you already have into your ` +
+          `own answer, (b) hand off a CLEARLY different subtask to a different subordinate, ` +
+          `or (c) tell the user plainly what's blocking and ask for guidance — do NOT ` +
+          `silently close the turn with a vague "system limit" message.`,
       },
       { depth, node_id: fromNode.id, tool_call_id: toolCallId },
     )
     return
   }
-  state().delegations.set(pairKey, prior + 1)
 
   if (errors.isAgentExcluded(sessionId, target.id)) {
     const msg = errors.renderError(
@@ -1926,6 +2095,13 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
     return
   }
 
+  // Commit the cap slot only now that we know we'll actually launch the sub
+  // (agent_excluded above would charge for a no-launch otherwise). We'll
+  // refund it below if the sub-agent ends up making zero tool calls — that's
+  // a "just asked a clarifying question, no work done" no-op delegation and
+  // shouldn't eat into the parent's per-turn budget.
+  state().delegations.set(pairKey, prior + 1)
+
   yield makeEvent(
     'delegation_opened',
     sessionId,
@@ -1938,6 +2114,7 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
   )
 
   let subOutput = ''
+  let subToolCallCount = 0
   try {
     for await (const ev of runNode({
       sessionId,
@@ -1947,6 +2124,13 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
       depth: depth + 1,
       visibility: childVisibility,
     })) {
+      if (
+        ev.kind === 'tool_called' &&
+        ev.depth === depth + 1 &&
+        ev.node_id === target.id
+      ) {
+        subToolCallCount += 1
+      }
       if (ev.kind === 'node_finished' && ev.depth === depth + 1 && ev.node_id === target.id) {
         subOutput = (ev.data.output as string | undefined) ?? ''
       }
@@ -1961,6 +2145,9 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
       provider: target.provider_id,
       model: target.model,
     })
+    // Crashed sub-agents (provider error, transient failure) shouldn't count
+    // against the per-turn cap — the parent deserves to retry.
+    refundDelegationSlot(pairKey)
     // S4: record errored sub-agent run to the work ledger.
     {
       const slugs = state().teamSlugs.get(sessionId) ?? null
@@ -1988,6 +2175,15 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
       { depth, node_id: fromNode.id, tool_call_id: toolCallId },
     )
     return
+  }
+
+  // Refund the cap slot if the sub-agent finished without calling any tool —
+  // that means it only produced text (typically a clarifying question to
+  // bounce back up), which is effectively a no-op delegation. Without this
+  // refund the parent can burn the whole per-turn budget in a single round of
+  // clarifications and hit "cap reached" when retrying with the answer.
+  if (subToolCallCount === 0) {
+    refundDelegationSlot(pairKey)
   }
 
   // S4: record completed sub-agent run to the work ledger (raw subOutput
@@ -2370,6 +2566,7 @@ function askUserTool(): Tool {
 
 interface AskUserOpts {
   sessionId: string
+  team: TeamSpec
   node: AgentSpec
   args: Record<string, unknown>
   toolCallId: string
@@ -2377,17 +2574,19 @@ interface AskUserOpts {
 }
 
 async function* runAskUser(opts: AskUserOpts): AsyncGenerator<Event> {
-  const { sessionId, node, args, toolCallId, depth } = opts
+  const { sessionId, team, node, args, toolCallId, depth } = opts
   const questions = Array.isArray(args.questions) ? args.questions : []
 
+  const askUserCap =
+    team.limits.max_ask_user_per_turn ?? MAX_ASK_USER_PER_TURN_FALLBACK
   const count = state().askUser.get(sessionId) ?? 0
-  if (count >= MAX_ASK_USER_PER_RUN) {
+  if (count >= askUserCap) {
     yield makeEvent(
       'user_answered',
       sessionId,
       {
         error: true,
-        result: `ERROR: ask_user cap reached (${MAX_ASK_USER_PER_RUN} per run). Proceed with best-effort assumptions.`,
+        result: `NOTE: ask_user cap reached (${askUserCap} per turn, resets when the user sends the next message). Proceed with best-effort assumptions and surface remaining uncertainties in your final answer instead of silently ending the turn.`,
       },
       { depth, node_id: node.id, tool_call_id: toolCallId },
     )
@@ -2528,21 +2727,37 @@ async function* runSkillInvocation(opts: SkillInvocationOpts): AsyncGenerator<Ev
 // Lead verifies assumptions, corrects silently, and only calls ask_user as a
 // genuine last resort (see askUserGuidance()).
 
-function buildRelaySection(depth: number, hasSubs: boolean): string {
+function buildRelaySection(
+  depth: number,
+  hasSubs: boolean,
+  team: TeamSpec,
+): string {
   if (depth === 0) {
     // Lead-specific engine rules. Behavioural playbook (register, ask_user
     // policy, artifact citation, meta-label ban, trivial-vs-substantive
     // response shape) lives in DEFAULT_LEAD_SYSTEM_PROMPT — not duplicated
     // here.
+    const delegationCap =
+      team.limits.max_delegations_per_pair_per_turn ??
+      MAX_DELEGATIONS_PER_PAIR_FALLBACK
     return (
       '# User gateway\n' +
       'Only you can address the user. Never end a turn with plain text ' +
       'requesting input ("링크 주세요" etc.) — that finalises the run. Use ' +
       '`ask_user` per its description for genuine stuck-points only.\n' +
-      `\n# One-shot delegation (hard rule)\n` +
-      `You may call \`delegate_to\` on each subordinate at most ${MAX_DELEGATIONS_PER_PAIR} times per run ` +
-      '(engine-enforced). When a delegate returns a usable result, accept it ' +
-      'or edit yourself — do NOT re-delegate "REVISED TASK" / "please polish X".\n'
+      `\n# Delegation budget per turn\n` +
+      `You may call \`delegate_to\` on each subordinate at most ${delegationCap} times ` +
+      `per turn (the budget resets when the user sends the next message). When a delegate ` +
+      `returns a usable result, accept it or edit yourself — do NOT re-delegate ` +
+      `"REVISED TASK" / "please polish X". If you hit the cap mid-turn, consolidate what you ` +
+      `have and report to the user; don't end the turn with a vague "system limit" excuse.\n` +
+      `\n# Parallel fan-out (independent subtasks)\n` +
+      `If two or more subtasks are genuinely independent (no output of one feeds the other), ` +
+      `emit MULTIPLE \`delegate_to\` tool_calls in the SAME assistant response — the engine runs ` +
+      `them concurrently and you'll see each tool_result as it arrives. Do NOT chain them across ` +
+      `turns when they don't need to be sequential. Use this ONLY when the tasks are truly ` +
+      `independent; if one's output shapes the other (research → then write report), keep them ` +
+      `sequential so the second sees the first's result.\n`
     )
   }
   let section =
@@ -2720,7 +2935,11 @@ function skillListFilesTool(agentSkills: SkillDef[]): Tool {
   }
 }
 
-function skillReadTool(agentSkills: SkillDef[], sessionId: string): Tool {
+function skillReadTool(
+  agentSkills: SkillDef[],
+  sessionId: string,
+  team: TeamSpec,
+): Tool {
   const byName = new Map(agentSkills.map((s) => [s.name, s]))
   const names = [...byName.keys()].sort()
   return {
@@ -2771,11 +2990,14 @@ function skillReadTool(agentSkills: SkillDef[], sessionId: string): Tool {
         })
       }
       const total = state().readSkillFileTotal.get(sessionId) ?? 0
-      if (total >= MAX_READ_SKILL_FILE_PER_RUN) {
+      const readCap =
+        team.limits.max_read_skill_file_per_turn ??
+        MAX_READ_SKILL_FILE_PER_TURN_FALLBACK
+      if (total >= readCap) {
         return JSON.stringify({
           ok: false,
           error:
-            `read_skill_file cap reached (${MAX_READ_SKILL_FILE_PER_RUN} per run). ` +
+            `read_skill_file cap reached (${readCap} per turn, resets on next user message). ` +
             `Stop exploring the skill tree — commit to run_skill_script with what you already have ` +
             `or report the blocker upstream.`,
         })
@@ -3056,6 +3278,26 @@ function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
     skill: {
       name: skill.name,
       runWithHooks: async (args, hooks) => {
+        // Per-turn cap on `web-search`. Mirrors the `read_skill_file` cap
+        // pattern: check → increment → short-circuit with a structured error
+        // the LLM can read in the tool_result. Reset happens on every new
+        // user message via `resetPerTurnCaps`.
+        if (skill.name === 'web-search') {
+          const cap =
+            ctx.team.limits.max_web_search_per_turn ??
+            MAX_WEB_SEARCH_PER_TURN_FALLBACK
+          const used = state().webSearch.get(ctx.sessionId) ?? 0
+          if (used >= cap) {
+            return JSON.stringify({
+              ok: false,
+              error:
+                `web-search cap reached (${cap} per turn, resets on next user message). ` +
+                `Consolidate what you have and either web-fetch a promising URL from prior ` +
+                `results, or hand back to your parent with the current findings.`,
+            })
+          }
+          state().webSearch.set(ctx.sessionId, used + 1)
+        }
         const result = await runSkill(skill, args, outputDir, { hooks })
         const registered = registerSkillArtifacts(result.files, {
           sessionId: ctx.sessionId,

@@ -46,6 +46,19 @@ export interface EdgeSpec {
 export interface RunLimits {
   max_tool_rounds_per_turn: number
   max_delegation_depth: number
+  /** Per-turn cap on `delegate_to(sameSubordinate)` calls from one parent.
+   *  Guards against "REVISED TASK" spam loops — not a token budget. Counter
+   *  resets on every user message. */
+  max_delegations_per_pair_per_turn: number
+  /** Per-turn cap on `ask_user` calls. Same resets-on-user-message semantics. */
+  max_ask_user_per_turn: number
+  /** Per-turn cap on `read_skill_file` calls across all agents in a session. */
+  max_read_skill_file_per_turn: number
+  /** Per-turn cap on `web-search` calls across all agents in a session.
+   *  Mirrors Claude Code's WebSearch `max_uses: 8` safety ceiling, scaled
+   *  down since our multi-agent fan-out compounds query volume. Resets on
+   *  every user message. */
+  max_web_search_per_turn: number
 }
 
 export interface TeamSpec {
@@ -142,6 +155,16 @@ export function toTeamSpec(raw: Record<string, unknown>): TeamSpec {
     limits: {
       max_tool_rounds_per_turn: Number(limitsRaw.max_tool_rounds_per_turn ?? 24),
       max_delegation_depth: Number(limitsRaw.max_delegation_depth ?? 4),
+      max_delegations_per_pair_per_turn: Number(
+        limitsRaw.max_delegations_per_pair_per_turn ?? 4,
+      ),
+      max_ask_user_per_turn: Number(limitsRaw.max_ask_user_per_turn ?? 4),
+      max_read_skill_file_per_turn: Number(
+        limitsRaw.max_read_skill_file_per_turn ?? 8,
+      ),
+      max_web_search_per_turn: Number(
+        limitsRaw.max_web_search_per_turn ?? 5,
+      ),
     },
     domain: typeof raw.domain === 'string' ? raw.domain : undefined,
   }

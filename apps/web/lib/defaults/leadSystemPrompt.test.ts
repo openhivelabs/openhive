@@ -10,8 +10,11 @@ describe('DEFAULT_LEAD_SYSTEM_PROMPT', () => {
     // Raised 1200 → 1400 once to accommodate the "# Files" section — runaway
     // aux-file generation (session df76dd49 producing PDF + 5 satellites) was
     // a concrete production bug that the prompt needed to address positively.
-    // Don't grow past 1400 without similarly load-bearing justification.
-    expect(p.length).toBeLessThan(1400)
+    // Raised 1400 → 1600 to add the "# URLs in your answer" section —
+    // observed Lead hallucinating bare-domain / guessed-path citations in
+    // prose "참고 출처" lists (session d5407a19) even when actual fetch URLs
+    // were available. Ceiling grows only with production evidence.
+    expect(p.length).toBeLessThan(1600)
   })
 
   it('persona + delegate intent', () => {

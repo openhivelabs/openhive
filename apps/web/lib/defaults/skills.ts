@@ -17,6 +17,7 @@
  *   - image-gen : HTML → PNG renderer (typed)
  *   - text-file : write UTF-8 text / markdown / CSV (typed)
  *   - web-fetch : fetch URL → cleaned markdown (typed)
+ *   - web-search: search the web → 10 {title, url, snippet} (typed)
  *
  * Users can remove any of these per-agent via the canvas NodeEditor.
  * Teams that want stricter control can set team.allowed_skills to
@@ -29,4 +30,5 @@ export const DEFAULT_AGENT_SKILLS: readonly string[] = [
   'image-gen',
   'text-file',
   'web-fetch',
+  'web-search',
 ]

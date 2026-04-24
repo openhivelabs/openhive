@@ -70,7 +70,14 @@ export const MODEL_PRICING: Record<string, ModelRates> = {
   'claude-haiku-4-5': { input: 1.0, output: 5.0, cached: 0.1, reasoning: 5.0, cache_creation: 1.25 },
 
   // === OpenAI / GPT (developers.openai.com/api/docs/pricing) ===
-  // GPT-5.4 family — current default tier.
+  // GPT-5.5 (2026-04-23, Codex-only via ChatGPT sign-in at launch).
+  // Standard rate card $5 / $30 per 1M in/out; Pro variant $30 / $180.
+  // `cached` rates default to 10% of input per OpenAI's 90% cache discount
+  // (same pattern as the rest of this table); reasoning matches output.
+  'gpt-5.5': { input: 5.0, output: 30.0, cached: 0.5, reasoning: 30.0, cache_creation: 5.0 },
+  'gpt-5.5-pro': { input: 30.0, output: 180.0, cached: 3.0, reasoning: 180.0, cache_creation: 30.0 },
+
+  // GPT-5.4 family — previous default tier.
   'gpt-5.4': { input: 2.5, output: 15.0, cached: 0.25, reasoning: 15.0, cache_creation: 2.5 },
   'gpt-5.4-mini': { input: 0.75, output: 4.5, cached: 0.075, reasoning: 4.5, cache_creation: 0.75 },
   'gpt-5.4-nano': { input: 0.2, output: 1.25, cached: 0.02, reasoning: 1.25, cache_creation: 0.2 },

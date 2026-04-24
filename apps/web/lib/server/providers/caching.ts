@@ -125,7 +125,6 @@ export interface CodexRequest {
   input: unknown[]
   tools: unknown[] | null
   model: string
-  previousResponseId?: string | null
 }
 
 export interface CodexPayload {
@@ -133,38 +132,36 @@ export interface CodexPayload {
   input: unknown[]
   instructions: string
   stream: true
-  store: boolean
-  parallel_tool_calls: false
+  store: false
+  parallel_tool_calls: true
   reasoning: { effort: string; summary: string }
   include: string[]
   tools?: unknown[]
   tool_choice?: string
-  previous_response_id?: string
 }
 
 /**
- * Responses API prefix-chaining. When `previousResponseId` is present,
- * we set it + flip `store: true` so OpenAI retains the conversation
- * prefix server-side and bills subsequent turns against the cached
- * prompt. Otherwise we mirror the pre-refactor payload (store: false,
- * no chaining id).
+ * Responses-API payload builder for Codex. We use the `attach_item_ids`
+ * strategy (see providers/codex.ts) to persist reasoning state across
+ * rounds, NOT `previous_response_id` + `store: true` — that approach does
+ * not restore reasoning items reliably on the chatgpt.com/backend-api
+ * endpoint, causing gpt-5/5.5 to return empty `response.output` on round 2.
  *
- * ToS caveat: `store: true` means OpenAI holds the request body.
- * Caller is expected to log a warning on the first chained turn — see
- * codex.ts.
+ * Consequence: `store` is always `false` and we never set
+ * `previous_response_id`. The caller prepends the buffered reasoning +
+ * function_call anchor items directly into `input`.
  */
 export class CodexCachingStrategy
   implements CachingStrategy<CodexRequest, CodexPayload>
 {
   applyToRequest(req: CodexRequest): CodexPayload {
-    const chain = typeof req.previousResponseId === 'string' && req.previousResponseId.length > 0
     const payload: CodexPayload = {
       model: req.model,
       input: req.input,
       instructions: req.instructions,
       stream: true,
-      store: chain, // only opt into server-side retention when chaining
-      parallel_tool_calls: false,
+      store: false,
+      parallel_tool_calls: true,
       reasoning: { effort: 'low', summary: 'auto' },
       include: ['reasoning.encrypted_content'],
     }
@@ -172,31 +169,7 @@ export class CodexCachingStrategy
       payload.tools = req.tools
       payload.tool_choice = 'auto'
     }
-    if (chain) {
-      payload.previous_response_id = req.previousResponseId!
-    }
     return payload
-  }
-
-  /**
-   * Responses API envelopes arrive as SSE events. We care about two shapes:
-   *
-   *   { type: 'response.created', response: { id: 'resp_…', … } }
-   *   { type: 'response.completed', response: { id: 'resp_…', … } }
-   *
-   * Plus the final non-streaming response body `{ id: 'resp_…', … }` in case
-   * a caller passes it directly. We pull id from whichever is present.
-   */
-  extractResponseId(resp: unknown): string | null {
-    if (!resp || typeof resp !== 'object') return null
-    const obj = resp as Record<string, unknown>
-    if (typeof obj.id === 'string' && obj.id.startsWith('resp')) return obj.id
-    const nested = obj.response
-    if (nested && typeof nested === 'object') {
-      const id = (nested as Record<string, unknown>).id
-      if (typeof id === 'string') return id
-    }
-    return null
   }
 }
 

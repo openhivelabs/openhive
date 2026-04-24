@@ -32,7 +32,7 @@ export function askUserGuidance(): string {
 
 export function delegateToGuidance(): string {
   return [
-    'Delegate to ONE direct subordinate. Call this tool MULTIPLE times in a single turn to fan out in parallel (engine auto-groups independent delegations).',
+    'Delegate to ONE direct subordinate. To fan out across DIFFERENT subordinates in parallel, call `delegate_to` MULTIPLE times in the SAME assistant response — the engine runs them concurrently (adjacent `delegate_to` calls are grouped into one parallel bucket). Do this only when the subtasks are truly independent (no output of one feeds the other); otherwise keep them sequential across turns so the next delegation can reference the prior result.',
     '',
     '## Pick a `mode`',
     '',

@@ -18,17 +18,25 @@ export function buildAuthorizeUrl(
   state: string,
   codeChallenge: string,
 ): string {
-  const params = new URLSearchParams({
-    client_id: CLIENT_ID,
+  // OpenAI's authorize endpoint is strict about space encoding in `scope`:
+  // URLSearchParams encodes ` ` as `+` (application/x-www-form-urlencoded),
+  // which OpenAI rejects for query-string context. Manually assemble with
+  // encodeURIComponent to get `%20` — mirrors the reference 9router impl
+  // in `src/lib/oauth/services/codex.js:20-35`.
+  const params: Record<string, string> = {
     response_type: 'code',
+    client_id: CLIENT_ID,
     redirect_uri: redirectUri,
     scope: SCOPE,
     code_challenge: codeChallenge,
     code_challenge_method: 'S256',
-    state,
     ...EXTRA,
-  })
-  return `${AUTHORIZE_URL}?${params.toString()}`
+    state,
+  }
+  const qs = Object.entries(params)
+    .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+    .join('&')
+  return `${AUTHORIZE_URL}?${qs}`
 }
 
 export async function exchangeCode(

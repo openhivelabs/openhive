@@ -10,6 +10,7 @@
  * All state is in-process and cached on globalThis to survive Next.js HMR.
  */
 
+import { clearCodexChain } from '../providers/codex'
 import * as sessionsStore from '../sessions'
 import { closeUserInbox, runTeam } from './session'
 import { generateTitle } from '../sessions/title'
@@ -329,7 +330,14 @@ async function driveSession(
   } finally {
     handle.finished = true
     for (const q of handle.listeners) q.push(END)
-    if (capturedSessionId) state().active.delete(capturedSessionId)
+    if (capturedSessionId) {
+      state().active.delete(capturedSessionId)
+      // Drop any Codex `previous_response_id` chain head left from the
+      // last turn — this session is done, and letting the map grow
+      // unbounded would leak one string per session across the process
+      // lifetime. Safe to call for sessions that never used Codex.
+      clearCodexChain(capturedSessionId)
+    }
     if (!handle.sessionId) {
       readyErr(new Error('engine exited before emitting any event'))
     }

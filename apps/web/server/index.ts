@@ -5,6 +5,7 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { logger } from 'hono/logger'
 import { migrateAllAgents } from '@/lib/server/agents/scaffold'
+import { callbackHtml, handleCallback } from '@/lib/server/auth/orchestrator'
 import { registerNode } from '../instrumentation-node'
 import { api } from './api'
 
@@ -39,6 +40,31 @@ app.use('*', logger())
 // endpoints aren't intercepted by the static handler.
 app.route('/api', api)
 app.get('/health', (c) => c.json({ ok: true }))
+
+// OAuth callback landing pages. Mounted at the ROOT (not under /api) so the
+// redirect_uri we register with Anthropic (`/callback`) and OpenAI Codex
+// (`/auth/callback`) matches the paths their shared CLI client_ids accept.
+// We used to redirect to `/api/providers/oauth/callback`, but both providers
+// reject that path with a generic error before the user ever sees the login
+// screen. Both handlers delegate to the same `handleCallback` — the only
+// difference is which URL the provider will redirect the browser to.
+for (const callbackPath of ['/callback', '/auth/callback'] as const) {
+  app.get(callbackPath, async (c) => {
+    const params = new URL(c.req.url).searchParams
+    const result = await handleCallback({
+      code: params.get('code'),
+      state: params.get('state'),
+      // Legacy fallback: older flows also passed `flow_id` as a separate
+      // query param. Modern flows embed it inside `state` and this is null.
+      flowId: params.get('flow_id'),
+      error: params.get('error'),
+      errorDescription: params.get('error_description'),
+    })
+    return new Response(callbackHtml(result.ok, result.message), {
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    })
+  })
+}
 
 const isProd = process.env.NODE_ENV === 'production'
 
