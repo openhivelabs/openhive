@@ -1,0 +1,26 @@
+id: kanban-mcp-cards
+name: MCP 카드 칸반
+description: MCP 응답의 항목들을 상태별 칸반 보드로.
+icon: "🗂️"
+category: integrations
+block:
+  type: kanban
+  colSpan: 3
+  rowSpan: 3
+  props: {}
+binding_skeleton:
+  source:
+    kind: mcp
+    config:
+      server: linear
+      tool: list_issues
+      args: {}
+  map:
+    rows: "$[*]"
+    group_by: state
+    title: title
+    value: priority
+  refresh_seconds: 180
+ai_prompts:
+  goal: "MCP 에서 받은 항목들을 group_by (상태/단계/담당자) 기준으로 칸반. title 은 카드 제목, value 는 부가 정보."
+  requires: []

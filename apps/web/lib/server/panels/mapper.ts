@@ -18,6 +18,19 @@ export interface MapSpec {
   filter?: string
   aggregate?: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'first'
   aggregate_field?: string
+  ts?: string
+  kind?: string
+  text?: string
+  cells?: MetricCellSpec[]
+}
+
+export interface MetricCellSpec {
+  label: string
+  aggregate?: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'first'
+  field?: string
+  filter?: string
+  hint?: string
+  delta_field?: string
 }
 
 const FILTER_RE =
@@ -53,6 +66,9 @@ export function apply(
   if (panelType === 'kanban') return shapeKanban(rows, spec)
   if (panelType === 'chart') return shapeChart(rows, spec)
   if (panelType === 'list') return shapeList(rows, spec)
+  if (panelType === 'timeline') return shapeTimeline(rows, spec)
+  if (panelType === 'markdown') return shapeMarkdown(raw, rows, spec)
+  if (panelType === 'metric_grid') return shapeMetricGrid(rows, spec)
   return { rows }
 }
 
@@ -255,4 +271,83 @@ function shapeList(rows: unknown[], spec: MapSpec): Record<string, unknown> {
       raw: r,
     })),
   }
+}
+
+function shapeTimeline(rows: unknown[], spec: MapSpec): Record<string, unknown> {
+  const tsField = spec.ts ?? 'ts'
+  const titleField = spec.title
+  const kindField = spec.kind
+  const events = rows.map((r) => ({
+    ts: tsField ? getPath(r, tsField) : null,
+    title:
+      titleField && r && typeof r === 'object'
+        ? getPath(r, titleField)
+        : r && typeof r === 'object'
+          ? null
+          : r,
+    kind: kindField && r && typeof r === 'object' ? getPath(r, kindField) : null,
+    raw: r,
+  }))
+  return { events }
+}
+
+function shapeMarkdown(
+  raw: unknown,
+  rows: unknown[],
+  spec: MapSpec,
+): Record<string, unknown> {
+  const path = spec.text
+  // 1) explicit path into first row
+  if (path && rows.length > 0) {
+    const v = getPath(rows[0], path)
+    if (typeof v === 'string') return { text: v }
+    if (v != null) return { text: String(v) }
+  }
+  // 2) explicit path into raw root
+  if (path && raw && typeof raw === 'object') {
+    const v = getPath(raw, path)
+    if (typeof v === 'string') return { text: v }
+    if (v != null) return { text: String(v) }
+  }
+  // 3) raw itself a string (e.g., MCP text response)
+  if (typeof raw === 'string') return { text: raw }
+  // 4) fallback: stringify
+  try {
+    return { text: JSON.stringify(raw, null, 2) }
+  } catch {
+    return { text: String(raw ?? '') }
+  }
+}
+
+function shapeMetricGrid(rows: unknown[], spec: MapSpec): Record<string, unknown> {
+  const cells = Array.isArray(spec.cells) ? spec.cells : []
+  const out = cells.slice(0, 6).map((cell) => {
+    const cellRows = cell.filter ? filterRows(rows, cell.filter) : rows
+    const agg = (cell.aggregate ?? 'count').toLowerCase()
+    const field = cell.field
+    const nums: number[] = []
+    if (field) {
+      for (const r of cellRows) {
+        const v = r && typeof r === 'object' ? getPath(r, field) : (r as unknown)
+        const n = Number(v)
+        if (Number.isFinite(n)) nums.push(n)
+      }
+    }
+    let value: unknown
+    if (agg === 'count') value = cellRows.length
+    else if (agg === 'sum') value = nums.length > 0 ? nums.reduce((a, b) => a + b, 0) : 0
+    else if (agg === 'avg')
+      value = nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : 0
+    else if (agg === 'min') value = nums.length > 0 ? Math.min(...nums) : 0
+    else if (agg === 'max') value = nums.length > 0 ? Math.max(...nums) : 0
+    else if (agg === 'first')
+      value = nums[0] ?? (cellRows.length > 0 ? cellRows[0] : null)
+    else value = cellRows.length
+    const delta =
+      cell.delta_field && cellRows[0] && typeof cellRows[0] === 'object'
+        ? getPath(cellRows[0], cell.delta_field)
+        : null
+    return { label: cell.label, value, hint: cell.hint ?? null, delta }
+  })
+  return { cells: out }
 }

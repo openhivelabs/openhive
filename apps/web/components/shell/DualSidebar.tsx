@@ -211,7 +211,7 @@ export function DualSidebar() {
               </button>
             </div>
             <div className="flex-1 overflow-y-auto py-2">
-              <div className="px-3 pb-1 text-[14px] font-semibold uppercase tracking-wider text-neutral-400">
+              <div className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
                 {t('sidebar.teams') ?? 'Teams'}
               </div>
               <div className="px-1 space-y-0.5">

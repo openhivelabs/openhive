@@ -70,6 +70,27 @@ export function mcpConfigPath(): string {
   return path.join(dataDir(), 'mcp.yaml')
 }
 
+/** Root for AI-generated user MCP servers.
+ *  Each subdir holds server.js + manifest.json + package.json + .approved. */
+export function userMcpDir(): string {
+  return path.join(dataDir(), 'mcp-user')
+}
+
+/** Absolute path to the web app's node_modules, where `@modelcontextprotocol/sdk`
+ *  is already installed. We symlink this into `userMcpDir()/node_modules` so
+ *  AI-generated MCP server.user.js can `require('@modelcontextprotocol/sdk')`
+ *  without us running `npm install` per server. */
+export function webAppNodeModules(): string {
+  // paths.ts in dev is executed with cwd = apps/web, so node_modules sits
+  // next to it. In prod standalone, the tree differs — caller should tolerate
+  // a missing path and fall back to NODE_PATH injection.
+  const cwd = process.cwd()
+  const direct = path.join(cwd, 'node_modules')
+  if (fs.existsSync(path.join(direct, '@modelcontextprotocol', 'sdk'))) return direct
+  const fromRepo = path.join(repoRoot(), 'apps', 'web', 'node_modules')
+  return fromRepo
+}
+
 /** Walk up from `apps/web/` to the repo root so we can reach packages/. */
 export function repoRoot(): string {
   // This file ends up at apps/web/lib/server/paths.ts (src) or .next/.../paths.js (built).

@@ -1,0 +1,26 @@
+id: timeline-mcp-events
+name: MCP 이벤트 타임라인
+description: MCP 서버 tool 이 반환한 이벤트 리스트를 타임라인으로. 외부 서비스의 활동 피드.
+icon: "🛰️"
+category: integrations
+block:
+  type: timeline
+  colSpan: 2
+  rowSpan: 2
+  props: {}
+binding_skeleton:
+  source:
+    kind: mcp
+    config:
+      server: linear
+      tool: list_issues
+      args: {}
+  map:
+    rows: "$[*]"
+    ts: updatedAt
+    title: title
+    kind: state
+  refresh_seconds: 120
+ai_prompts:
+  goal: "MCP 서버가 반환하는 이벤트/이슈/노트 등 시간이 있는 리스트를 타임라인으로. ts 에는 updated_at 계열, title 은 식별가능한 제목, kind 는 상태/유형."
+  requires: []

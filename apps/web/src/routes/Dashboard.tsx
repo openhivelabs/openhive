@@ -11,7 +11,6 @@ import {
   fetchDashboard,
   saveDashboard,
 } from '@/lib/api/dashboards'
-import { refreshPanel } from '@/lib/api/panels'
 import { createSnapshot, discardSnapshot, restoreSnapshot } from '@/lib/api/snapshots'
 import {
   type QueryResult,
@@ -19,21 +18,14 @@ import {
   fetchSchema,
   fetchTableRows,
 } from '@/lib/api/teamData'
-import { usePanelData } from '@/lib/hooks/usePanelData'
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import {
-  ChartBar,
   ClockCounterClockwise,
-  Kanban,
-  Note,
   Package,
-  // Package is used both as icon and as recipe-picker trigger.
   PencilSimple,
   Plus,
   Sparkle,
-  Table as TableIcon,
-  TrendUp,
 } from '@phosphor-icons/react'
 import { useCallback, useEffect, useState } from 'react'
 
@@ -47,15 +39,6 @@ const STAGE_LABEL: Record<string, string> = {
 }
 
 const DEFAULT_LAYOUT: DashboardLayout = { blocks: [] }
-
-const ICON: Record<string, typeof TrendUp> = {
-  kpi: TrendUp,
-  table: TableIcon,
-  kanban: Kanban,
-  chart: ChartBar,
-  activity: ClockCounterClockwise,
-  note: Note,
-}
 
 export function Dashboard() {
   const t = useT()
@@ -203,7 +186,7 @@ export function Dashboard() {
   return (
     <div className="h-full flex overflow-hidden bg-neutral-50 dark:bg-neutral-950">
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex-1 min-h-0 flex flex-col p-4">
+        <div className="flex-1 min-h-0 flex flex-col p-3">
           <div className="mb-3 flex items-center gap-2 shrink-0">
             {editing ? (
               <>
@@ -259,9 +242,9 @@ export function Dashboard() {
               <button
                 type="button"
                 onClick={enterEdit}
-                className="h-9 pl-3 pr-3.5 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-[13px] font-medium inline-flex items-center gap-1.5 shadow-sm hover:opacity-90 cursor-pointer"
+                className="inline-flex items-center justify-center gap-1 h-[34px] px-[20px] text-[13px] leading-none bg-neutral-900 text-white rounded-sm hover:bg-neutral-800 cursor-pointer"
               >
-                <PencilSimple className="w-3.5 h-3.5" />
+                <PencilSimple weight="bold" className="w-3.5 h-3.5" />
                 {t('dashboard.edit')}
               </button>
             )}
@@ -280,7 +263,7 @@ export function Dashboard() {
                 <EmptyState />
               )
             ) : (
-              <div className="grid grid-cols-4 auto-rows-[180px] gap-3 max-w-[1400px] mx-auto">
+              <div className="grid grid-cols-4 auto-rows-[180px] gap-3">
                 {(layout?.blocks ?? []).map((spec) => (
                   <PanelCell
                     key={spec.id}
@@ -394,30 +377,18 @@ function PanelCell({
   byStage: { stage: string; rows: Record<string, unknown>[] }[]
   teamId: string
 }) {
-  const Icon = ICON[spec.type] ?? TrendUp
-  const live = usePanelData(spec.id, !!spec.binding)
   return (
     <Block
       id={spec.id}
       title={spec.title}
       subtitle={spec.subtitle}
-      icon={<Icon className="w-3.5 h-3.5" />}
       colSpan={spec.colSpan ?? 1}
       rowSpan={spec.rowSpan ?? 1}
       editing={editing}
       dragging={draggingId === spec.id}
       dragOver={dragOverId === spec.id && draggingId !== spec.id}
-      fetchedAt={spec.binding ? live.fetchedAt : null}
-      liveError={spec.binding ? live.error : null}
       onRemove={() => removeBlock(spec.id)}
       onEdit={spec.binding ? onEdit : undefined}
-      onRefresh={
-        spec.binding
-          ? async () => {
-              await refreshPanel(spec.id).catch((e) => console.warn('refresh failed', e))
-            }
-          : undefined
-      }
       onDragStart={(id, e) => {
         e.dataTransfer.effectAllowed = 'move'
         e.dataTransfer.setData('text/plain', id)

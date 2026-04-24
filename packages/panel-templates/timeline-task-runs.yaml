@@ -1,0 +1,24 @@
+id: timeline-task-runs
+name: 업무 실행 로그 타임라인
+description: 스케줄된/수동 실행된 업무의 실행 결과 이력을 시간순으로.
+icon: "⚙️"
+category: general
+block:
+  type: timeline
+  colSpan: 2
+  rowSpan: 2
+  props: {}
+binding_skeleton:
+  source:
+    kind: team_data
+    config:
+      sql: "SELECT id, status, label, started_at FROM task_runs ORDER BY started_at DESC LIMIT 30"
+  map:
+    rows: "$.rows[*]"
+    ts: started_at
+    title: label
+    kind: status
+  refresh_seconds: 30
+ai_prompts:
+  goal: "업무 실행/러너 로그를 타임라인으로. status 를 kind 로 써서 성공/실패 칩이 구분되게."
+  requires: []

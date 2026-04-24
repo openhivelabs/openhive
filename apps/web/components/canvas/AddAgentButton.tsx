@@ -38,13 +38,13 @@ export function AddAgentButton({
           className="fixed inset-0 z-10 cursor-default bg-transparent"
         />
       )}
-      <div className="absolute top-4 left-4 z-20 w-max">
+      <div className="absolute top-3 left-3 z-20 w-max">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="h-9 px-3 rounded-sm bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-[14px] font-medium flex items-center gap-1.5 hover:opacity-90 cursor-pointer shadow-sm"
+          className="inline-flex items-center justify-center gap-1 h-[34px] px-[20px] text-[13px] leading-none bg-neutral-900 text-white rounded-sm hover:bg-neutral-800 cursor-pointer"
         >
-          <Plus className="w-4 h-4" />
+          <Plus weight="bold" className="w-3.5 h-3.5" />
           {t('canvas.addAgent')}
         </button>
         {open && (

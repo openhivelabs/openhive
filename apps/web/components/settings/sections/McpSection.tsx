@@ -1,14 +1,20 @@
-import { CheckCircle, CircleNotch, Plug, Plus, Trash, Warning, X } from '@phosphor-icons/react'
+import { CheckCircle, CircleNotch, Plug, Plus, Sparkle, Trash, Warning, X } from '@phosphor-icons/react'
 import { useEffect, useMemo, useState } from 'react'
 import { BRAND_COLORS, BrandIcon, hasBrand } from '@/components/mcp/BrandIcon'
 import {
   type DiscoveredTool,
   type InstalledServer,
   type Preset,
+  type UserMcpFullRecord,
+  type UserMcpSummary,
+  approveUserServer,
   deleteServer,
+  deleteUserServer,
   fetchPresets,
   fetchServerTools,
   fetchServers,
+  fetchUserServer,
+  fetchUserServers,
   installFromPreset,
   restartServer,
   testDraft,
@@ -52,14 +58,21 @@ function PresetGlyph({ preset, size = 20 }: { preset: Preset; size?: number }) {
 export function McpSection() {
   const [servers, setServers] = useState<InstalledServer[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
+  const [userServers, setUserServers] = useState<UserMcpSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [adding, setAdding] = useState<Preset | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [reviewing, setReviewing] = useState<string | null>(null)
 
   const refresh = async () => {
-    const [s, p] = await Promise.all([fetchServers(), fetchPresets()])
+    const [s, p, u] = await Promise.all([
+      fetchServers(),
+      fetchPresets(),
+      fetchUserServers().catch(() => [] as UserMcpSummary[]),
+    ])
     setServers(s)
     setPresets(p)
+    setUserServers(u)
     setLoading(false)
   }
 
@@ -106,6 +119,73 @@ export function McpSection() {
           </ul>
         )}
       </section>
+
+      {userServers.length > 0 && (
+        <section>
+          <h2 className="text-[14px] font-semibold text-neutral-700 dark:text-neutral-300 mb-2 flex items-center gap-1.5">
+            <Sparkle className="w-3.5 h-3.5 text-amber-500" weight="fill" />
+            AI-generated
+          </h2>
+          <ul className="space-y-1.5">
+            {userServers.map((u) => (
+              <li
+                key={u.name}
+                className="flex items-center gap-3 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3 py-2"
+              >
+                <span
+                  className={
+                    u.approved
+                      ? 'w-1.5 h-1.5 rounded-full bg-emerald-500'
+                      : 'w-1.5 h-1.5 rounded-full bg-amber-500'
+                  }
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[14px] font-medium text-neutral-900 dark:text-neutral-100 truncate">
+                      {u.name}
+                    </span>
+                    <span className="text-[11px] uppercase tracking-wider px-1.5 py-[1px] rounded-sm bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300">
+                      AI
+                    </span>
+                    {!u.approved && (
+                      <span className="text-[11px] text-amber-700 dark:text-amber-300">
+                        pending approval
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[12px] text-neutral-500 truncate">
+                    {u.manifest.description}
+                  </div>
+                  <div className="text-[11px] text-neutral-400 font-mono mt-0.5 truncate">
+                    hosts: {u.manifest.allowed_hosts.join(', ')} · tools:{' '}
+                    {u.manifest.tools.length} · creds:{' '}
+                    {u.manifest.required_credentials.length}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setReviewing(u.name)}
+                  className="inline-flex items-center justify-center gap-1 h-[28px] px-2.5 text-[12px] leading-none border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-200 rounded-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
+                >
+                  {u.approved ? 'View' : 'Review & approve'}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!confirm(`Delete user MCP "${u.name}"?`)) return
+                    await deleteUserServer(u.name)
+                    await refresh()
+                  }}
+                  aria-label="Delete"
+                  className="w-7 h-7 flex items-center justify-center rounded-sm text-neutral-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 cursor-pointer"
+                >
+                  <Trash className="w-3.5 h-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section>
         <h2 className="text-[14px] font-semibold text-neutral-700 dark:text-neutral-300 mb-2">
@@ -157,6 +237,188 @@ export function McpSection() {
           }}
         />
       )}
+
+      {reviewing && (
+        <UserMcpReviewModal
+          name={reviewing}
+          onClose={() => setReviewing(null)}
+          onChanged={async () => {
+            setReviewing(null)
+            await refresh()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function UserMcpReviewModal({
+  name,
+  onClose,
+  onChanged,
+}: {
+  name: string
+  onClose: () => void
+  onChanged: () => Promise<void>
+}) {
+  const [rec, setRec] = useState<UserMcpFullRecord | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchUserServer(name)
+      .then((r) => !cancelled && setRec(r))
+      .catch((e) => !cancelled && setErr(e instanceof Error ? e.message : String(e)))
+    return () => {
+      cancelled = true
+    }
+  }, [name])
+
+  const onApprove = async () => {
+    setBusy(true)
+    setErr(null)
+    try {
+      await approveUserServer(name)
+      await onChanged()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white dark:bg-neutral-900 rounded-md shadow-xl max-w-[720px] w-full max-h-[85vh] overflow-hidden flex flex-col border border-neutral-200 dark:border-neutral-800"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-4 py-2.5 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+          <div className="text-[14px] font-medium text-neutral-800 dark:text-neutral-100">
+            Review AI-generated MCP: {name}
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="overflow-y-auto p-4 space-y-4">
+          {!rec ? (
+            <div className="text-[13px] text-neutral-400">Loading…</div>
+          ) : (
+            <>
+              <div>
+                <div className="text-[11.5px] uppercase tracking-wider text-neutral-400">
+                  Description
+                </div>
+                <div className="text-[13px] text-neutral-700 dark:text-neutral-200 mt-0.5">
+                  {rec.manifest.description}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11.5px] uppercase tracking-wider text-neutral-400">
+                  Allowed hosts
+                </div>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {rec.manifest.allowed_hosts.map((h) => (
+                    <span
+                      key={h}
+                      className="text-[11.5px] font-mono px-1.5 py-[1px] rounded-sm bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300"
+                    >
+                      {h}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              {rec.manifest.required_credentials.length > 0 && (
+                <div>
+                  <div className="text-[11.5px] uppercase tracking-wider text-neutral-400">
+                    Required credentials
+                  </div>
+                  <ul className="mt-1 space-y-1">
+                    {rec.manifest.required_credentials.map((c) => (
+                      <li
+                        key={c.ref_id}
+                        className="text-[12.5px] text-neutral-700 dark:text-neutral-200"
+                      >
+                        <span className="font-mono">{c.ref_id}</span>
+                        <span className="text-neutral-400"> → env </span>
+                        <span className="font-mono">{c.env_name}</span>
+                        <div className="text-[11.5px] text-neutral-500 mt-0.5">{c.purpose}</div>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="text-[11.5px] text-amber-700 dark:text-amber-300 mt-1">
+                    Add these in Settings → Credentials before first use.
+                  </div>
+                </div>
+              )}
+              <div>
+                <div className="text-[11.5px] uppercase tracking-wider text-neutral-400">
+                  Tools ({rec.manifest.tools.length})
+                </div>
+                <ul className="mt-1 space-y-0.5">
+                  {rec.manifest.tools.map((t) => (
+                    <li key={t.name} className="text-[12.5px] text-neutral-700 dark:text-neutral-200">
+                      <span className="font-mono">{t.name}</span>
+                      <span
+                        className={
+                          t.side_effects === 'write'
+                            ? 'ml-1.5 text-[10.5px] font-mono px-1 py-[1px] rounded-sm bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300'
+                            : 'ml-1.5 text-[10.5px] font-mono px-1 py-[1px] rounded-sm bg-neutral-100 dark:bg-neutral-800 text-neutral-500'
+                        }
+                      >
+                        {t.side_effects}
+                      </span>
+                      <span className="text-neutral-500"> — {t.description}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <div className="text-[11.5px] uppercase tracking-wider text-neutral-400 mb-1">
+                  Source code (server.user.js)
+                </div>
+                <pre className="p-3 rounded-sm bg-neutral-50 dark:bg-neutral-800/40 border border-neutral-100 dark:border-neutral-800 text-[11.5px] font-mono text-neutral-700 dark:text-neutral-200 overflow-auto max-h-[320px]">
+                  {rec.code}
+                </pre>
+              </div>
+            </>
+          )}
+          {err && (
+            <div className="text-[12.5px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 p-2 rounded-sm">
+              {err}
+            </div>
+          )}
+        </div>
+        <div className="px-4 py-2.5 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center justify-center h-[28px] px-2.5 text-[12px] leading-none text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 rounded-sm cursor-pointer"
+          >
+            Close
+          </button>
+          {rec && !rec.approved && (
+            <button
+              type="button"
+              onClick={onApprove}
+              disabled={busy}
+              className="inline-flex items-center justify-center gap-1 h-[28px] px-2.5 text-[12px] leading-none bg-neutral-900 text-white rounded-sm hover:bg-neutral-800 disabled:opacity-50 cursor-pointer"
+            >
+              {busy ? <CircleNotch className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5" />}
+              Approve & install
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

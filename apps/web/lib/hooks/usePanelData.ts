@@ -8,7 +8,7 @@ import { type PanelCacheRow, fetchPanelData } from '@/lib/api/panels'
  * new fetches (action writes, composer chat, etc). Polling is plenty for
  * single-user local dashboards and keeps the connection pool free.
  */
-const POLL_MS = 3000
+const POLL_MS = 10000
 
 export function usePanelData(
   blockId: string,

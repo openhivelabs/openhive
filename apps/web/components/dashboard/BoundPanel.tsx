@@ -1,6 +1,9 @@
+import type React from 'react'
 import { useState } from 'react'
-import { ArrowsClockwise, Plus, TrashSimple, Warning } from '@phosphor-icons/react'
+import { Plus, TrashSimple, Warning } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { usePanelData } from '@/lib/hooks/usePanelData'
 import type { CellAction, PanelAction, PanelSpec } from '@/lib/api/dashboards'
 import { refreshPanel } from '@/lib/api/panels'
@@ -16,7 +19,7 @@ import { ActionFormModal, runConfirmAction } from './ActionForm'
  *  and trigger the action (detail modal, open URL, …). */
 export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string }) {
   const t = useT()
-  const { data, error, fetchedAt, shapeChanged } = usePanelData(spec.id, true)
+  const { data, error, shapeChanged } = usePanelData(spec.id, true)
   const onClick = spec.binding?.map?.on_click ?? null
   const actions = spec.binding?.actions ?? []
   const toolbarActions = actions.filter((a) => a.placement === 'toolbar')
@@ -24,38 +27,27 @@ export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string 
   const inlineActions = actions.filter((a) => a.placement === 'inline')
   const [openAction, setOpenAction] = useState<PanelAction | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [refreshing, setRefreshing] = useState(false)
-
   const handleRefresh = async () => {
-    setRefreshing(true)
     try {
       await refreshPanel(spec.id)
     } catch {
       /* usePanelData surfaces error on next stream tick */
-    } finally {
-      setRefreshing(false)
     }
   }
 
-  const header = (
-    <div className="px-3 py-2 flex items-center gap-2 border-b border-neutral-100 dark:border-neutral-800">
-      <span className="flex-1 truncate text-[14px] font-semibold text-neutral-800 dark:text-neutral-100">
-        {spec.title}
-      </span>
-      {fetchedAt != null && (
-        <span className="text-[11px] text-neutral-400 font-mono">
-          {formatRelative(fetchedAt, t)}
-        </span>
-      )}
+  const hasToolbar = (teamId && toolbarActions.length > 0) || shapeChanged
+  const header = hasToolbar ? (
+    <div className="px-3 py-1.5 flex items-center gap-2 border-b border-neutral-100 dark:border-neutral-800">
       {shapeChanged && (
         <span
           title={t('panel.shapeChanged')}
-          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40"
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[11px] text-neutral-500 dark:text-neutral-400 bg-neutral-100 dark:bg-neutral-800"
         >
           <Warning className="w-3 h-3" />
           <span>{t('panel.shapeChangedShort')}</span>
         </span>
       )}
+      <div className="flex-1" />
       {teamId &&
         toolbarActions.map((a) => (
           <button
@@ -81,38 +73,12 @@ export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string 
             <span>{a.label}</span>
           </button>
         ))}
-      <button
-        type="button"
-        aria-label={t('panel.refresh')}
-        title={t('panel.refresh')}
-        onClick={handleRefresh}
-        className={clsx(
-          'w-6 h-6 flex items-center justify-center rounded-sm text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer',
-          refreshing && 'animate-spin',
-        )}
-      >
-        <ArrowsClockwise className="w-3.5 h-3.5" />
-      </button>
     </div>
-  )
+  ) : null
 
   const body = (() => {
-    if (error && data == null) {
-      return (
-        <div className="p-4 text-[13px] text-red-600 dark:text-red-400 flex items-start gap-2">
-          <Warning className="w-4 h-4 mt-0.5 shrink-0" />
-          <div className="flex-1 whitespace-pre-wrap font-mono">{error}</div>
-          <button
-            type="button"
-            onClick={handleRefresh}
-            className="text-[12px] underline hover:no-underline cursor-pointer shrink-0"
-          >
-            {t('panel.retry')}
-          </button>
-        </div>
-      )
-    }
     if (data == null) {
+      if (error) return null
       return <div className="p-4 text-[13px] text-neutral-400">Loading…</div>
     }
     return (
@@ -135,20 +101,16 @@ export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string 
 
   return (
     <div className="h-full flex flex-col">
-      {header}
-      {error && data != null && (
-        <div className="px-3 py-1 text-[12px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-900/40 flex items-center gap-1.5">
-          <Warning className="w-3 h-3 shrink-0" />
-          <span className="flex-1 truncate">{error}</span>
-          <button
-            type="button"
-            onClick={handleRefresh}
-            className="underline hover:no-underline cursor-pointer"
-          >
-            {t('panel.retry')}
-          </button>
+      {error && (
+        <div className="px-3 py-1.5 text-[12px] text-neutral-500 dark:text-neutral-400 bg-neutral-50 dark:bg-neutral-900/40 border-b border-neutral-100 dark:border-neutral-800 flex items-center gap-2">
+          <span className="inline-block w-1 h-1 rounded-full bg-neutral-400 shrink-0" />
+          <span className="flex-1 truncate font-mono text-[11.5px]" title={error}>
+            {friendlyError(error, t)}
+          </span>
+          {errorCta(error)}
         </div>
       )}
+      {header}
       {actionError && (
         <div className="px-3 py-1 text-[12px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 flex items-center gap-1.5">
           <span className="flex-1 truncate">{actionError}</span>
@@ -175,14 +137,43 @@ export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string 
   )
 }
 
-function formatRelative(ts: number, t: (k: string, v?: Record<string, string | number>) => string): string {
-  const diff = Math.max(0, Date.now() - ts)
-  const mins = Math.floor(diff / 60_000)
-  if (mins < 1) return t('panel.justNow')
-  if (mins < 60) return t('panel.minutesAgo', { n: mins })
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return t('panel.hoursAgo', { n: hours })
-  return t('panel.daysAgo', { n: Math.floor(hours / 24) })
+function errorCta(raw: string): React.ReactNode {
+  const cred = raw.match(/missing credential:\s*"([^"]+)"/i)
+  if (cred?.[1]) {
+    const href = `/settings?section=credentials&prefill_ref=${encodeURIComponent(cred[1])}`
+    return (
+      <a
+        href={href}
+        className="shrink-0 text-neutral-600 dark:text-neutral-200 hover:underline"
+      >
+        Set up
+      </a>
+    )
+  }
+  const mcp = raw.match(/MCP server "([^"]+)" is not installed/i)
+  if (mcp?.[1]) {
+    return (
+      <a
+        href="/settings?section=mcp"
+        className="shrink-0 text-neutral-600 dark:text-neutral-200 hover:underline"
+      >
+        Install
+      </a>
+    )
+  }
+  return null
+}
+
+function friendlyError(
+  raw: string,
+  t: (k: string, v?: Record<string, string | number>) => string,
+): string {
+  const s = raw.trim()
+  const tbl = s.match(/no such table:\s*(\S+)/i)
+  if (tbl?.[1]) return t('panel.err.noTable', { name: tbl[1] })
+  const col = s.match(/no such column:\s*(\S+)/i)
+  if (col?.[1]) return t('panel.err.noColumn', { name: col[1] })
+  return s.replace(/^[A-Za-z]+Error:\s*/, '')
 }
 
 /** Pure renderer — takes (type, data, props) and draws using the per-type
@@ -258,7 +249,7 @@ export function PanelShape({
   const body = (() => {
     switch (panelType) {
       case 'kpi':
-        return <KpiView data={data as KpiShape} hint={String(props?.hint ?? '')} />
+        return <KpiView data={data as KpiShape} props={props} />
       case 'table':
         return (
           <TableView
@@ -272,6 +263,7 @@ export function PanelShape({
             teamId={teamId}
             onInlineDone={onRowActionDone}
             onInlineError={onRowActionError}
+            props={props}
           />
         )
       case 'kanban':
@@ -288,9 +280,23 @@ export function PanelShape({
           />
         )
       case 'chart':
-        return <ChartView data={data as ChartShape} />
+        return <ChartView data={data as ChartShape} props={props} />
       case 'list':
-        return <ListView data={data as ListShape} onCellClick={onClick ? dispatch : null} />
+        return (
+          <ListView
+            data={data as ListShape}
+            onCellClick={onClick ? dispatch : null}
+            props={props}
+          />
+        )
+      case 'timeline':
+        return (
+          <TimelineView data={data as TimelineShape} onCellClick={onClick ? dispatch : null} />
+        )
+      case 'markdown':
+        return <MarkdownView data={data as MarkdownShape} />
+      case 'metric_grid':
+        return <MetricGridView data={data as MetricGridShape} />
       case 'note':
         return (
           <div className="p-3 text-[14px] text-neutral-600 dark:text-neutral-300 whitespace-pre-wrap">
@@ -320,17 +326,254 @@ interface KpiShape {
   value: number | string | null
   rows_considered?: number
 }
-function KpiView({ data, hint }: { data: KpiShape; hint: string }) {
+interface KpiProps {
+  hint?: unknown
+  delta?: { value?: number; direction?: 'up' | 'down' | 'flat'; percent?: boolean }
+  sparkline?: number[]
+}
+function KpiView({ data, props }: { data: KpiShape; props?: Record<string, unknown> }) {
+  const p = (props ?? {}) as KpiProps
+  const hint = String(p.hint ?? '')
   const display =
     typeof data.value === 'number'
       ? Intl.NumberFormat().format(data.value)
       : String(data.value ?? '—')
+  const delta = p.delta
+  const deltaColor =
+    delta?.direction === 'up'
+      ? 'text-emerald-600 dark:text-emerald-400'
+      : delta?.direction === 'down'
+        ? 'text-red-600 dark:text-red-400'
+        : 'text-neutral-500'
+  const deltaArrow =
+    delta?.direction === 'up' ? '▲' : delta?.direction === 'down' ? '▼' : '–'
+  const spark = Array.isArray(p.sparkline) ? p.sparkline.filter((n) => Number.isFinite(n)) : []
   return (
     <div className="h-full flex flex-col justify-between p-4">
       <div className="text-[13px] text-neutral-400">{hint}</div>
-      <div className="text-[32px] font-semibold text-neutral-900 dark:text-neutral-100 tracking-tight">
-        {display}
+      <div className="flex items-end justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[32px] font-semibold text-neutral-900 dark:text-neutral-100 tracking-tight truncate">
+            {display}
+          </div>
+          {delta && typeof delta.value === 'number' && (
+            <div className={`text-[12px] font-mono mt-0.5 ${deltaColor}`}>
+              {deltaArrow} {Intl.NumberFormat().format(Math.abs(delta.value))}
+              {delta.percent ? '%' : ''}
+            </div>
+          )}
+        </div>
+        {spark.length > 1 && <Sparkline values={spark} />}
       </div>
+    </div>
+  )
+}
+
+function Sparkline({ values }: { values: number[] }) {
+  const w = 72
+  const h = 24
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = max - min || 1
+  const step = values.length > 1 ? w / (values.length - 1) : w
+  const points = values
+    .map((v, i) => `${i * step},${h - ((v - min) / range) * h}`)
+    .join(' ')
+  return (
+    <svg width={w} height={h} className="shrink-0">
+      <polyline
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        className="text-neutral-400 dark:text-neutral-500"
+        points={points}
+      />
+    </svg>
+  )
+}
+
+interface TimelineShape {
+  events: { ts: unknown; title: unknown; kind?: unknown; raw: unknown }[]
+}
+function TimelineView({
+  data,
+  onCellClick,
+}: {
+  data: TimelineShape
+  onCellClick: ((raw: unknown) => void) | null
+}) {
+  if (!data.events?.length) {
+    return <div className="p-4 text-[13px] text-neutral-400">(no events)</div>
+  }
+  const clickable = !!onCellClick
+  return (
+    <ol className="relative px-4 py-3 space-y-3">
+      <div className="absolute left-[22px] top-3 bottom-3 w-px bg-neutral-200 dark:bg-neutral-800" />
+      {data.events.map((e, i) => {
+        const kind = e.kind != null ? String(e.kind) : null
+        return (
+          <li
+            key={i}
+            onClick={clickable ? () => onCellClick!(e.raw) : undefined}
+            className={
+              'relative flex items-start gap-3 pl-4 ' +
+              (clickable ? 'cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800/40 rounded-sm' : '')
+            }
+          >
+            <div className="absolute left-[18px] top-[6px] w-2 h-2 rounded-full bg-neutral-400 dark:bg-neutral-500 ring-2 ring-white dark:ring-neutral-900" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[13px] text-neutral-800 dark:text-neutral-100 truncate">
+                  {fmt(e.title)}
+                </span>
+                {kind && (
+                  <span className="text-[10.5px] font-mono px-1.5 py-[1px] rounded-sm bg-neutral-100 dark:bg-neutral-800 text-neutral-500">
+                    {kind}
+                  </span>
+                )}
+              </div>
+              <div className="text-[11.5px] text-neutral-400 font-mono mt-0.5">
+                {formatTs(e.ts)}
+              </div>
+            </div>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+function formatTs(v: unknown): string {
+  if (v == null) return ''
+  let d: Date
+  if (typeof v === 'number') d = new Date(v < 1e12 ? v * 1000 : v)
+  else if (typeof v === 'string') d = new Date(v)
+  else return ''
+  if (Number.isNaN(d.getTime())) return String(v)
+  const diff = Date.now() - d.getTime()
+  if (diff >= 0 && diff < 60_000) return 'just now'
+  if (diff >= 0 && diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
+  if (diff >= 0 && diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
+  return d.toLocaleString()
+}
+
+interface MarkdownShape {
+  text: string
+}
+function MarkdownView({ data }: { data: MarkdownShape }) {
+  const text = String(data?.text ?? '')
+  if (!text.trim()) {
+    return <div className="p-4 text-[13px] text-neutral-400">(empty)</div>
+  }
+  return (
+    <div className="p-4 prose-sm max-w-none text-[13px] text-neutral-700 dark:text-neutral-200">
+      <Markdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
+        {text}
+      </Markdown>
+    </div>
+  )
+}
+
+const MARKDOWN_COMPONENTS = {
+  a: (p: { href?: string; children?: React.ReactNode }) => (
+    <a
+      href={p.href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-neutral-900 dark:text-neutral-100 underline underline-offset-2 hover:no-underline"
+    >
+      {p.children}
+    </a>
+  ),
+  p: (p: { children?: React.ReactNode }) => (
+    <p className="my-1.5 leading-relaxed">{p.children}</p>
+  ),
+  h1: (p: { children?: React.ReactNode }) => (
+    <h1 className="mt-3 mb-1.5 text-[16px] font-semibold text-neutral-900 dark:text-neutral-100">
+      {p.children}
+    </h1>
+  ),
+  h2: (p: { children?: React.ReactNode }) => (
+    <h2 className="mt-3 mb-1.5 text-[15px] font-semibold text-neutral-900 dark:text-neutral-100">
+      {p.children}
+    </h2>
+  ),
+  h3: (p: { children?: React.ReactNode }) => (
+    <h3 className="mt-2.5 mb-1 text-[14px] font-semibold text-neutral-900 dark:text-neutral-100">
+      {p.children}
+    </h3>
+  ),
+  ul: (p: { children?: React.ReactNode }) => (
+    <ul className="my-1.5 pl-5 list-disc space-y-0.5">{p.children}</ul>
+  ),
+  ol: (p: { children?: React.ReactNode }) => (
+    <ol className="my-1.5 pl-5 list-decimal space-y-0.5">{p.children}</ol>
+  ),
+  code: (p: { inline?: boolean; children?: React.ReactNode }) =>
+    p.inline ? (
+      <code className="px-1 py-[1px] rounded-sm bg-neutral-100 dark:bg-neutral-800 font-mono text-[12px]">
+        {p.children}
+      </code>
+    ) : (
+      <pre className="my-2 p-2 rounded-sm bg-neutral-100 dark:bg-neutral-800 overflow-auto">
+        <code className="font-mono text-[12px]">{p.children}</code>
+      </pre>
+    ),
+  table: (p: { children?: React.ReactNode }) => (
+    <table className="my-2 w-full border-collapse text-[12.5px]">{p.children}</table>
+  ),
+  th: (p: { children?: React.ReactNode }) => (
+    <th className="text-left px-2 py-1 border-b border-neutral-200 dark:border-neutral-700 font-medium text-neutral-600 dark:text-neutral-300">
+      {p.children}
+    </th>
+  ),
+  td: (p: { children?: React.ReactNode }) => (
+    <td className="px-2 py-1 border-b border-neutral-100 dark:border-neutral-800">
+      {p.children}
+    </td>
+  ),
+}
+
+interface MetricGridShape {
+  cells: { label: string; value: number | string | null; hint?: string | null; delta?: unknown }[]
+}
+function MetricGridView({ data }: { data: MetricGridShape }) {
+  const cells = Array.isArray(data?.cells) ? data.cells : []
+  if (cells.length === 0) {
+    return <div className="p-4 text-[13px] text-neutral-400">(no metrics)</div>
+  }
+  const cols = cells.length >= 4 ? 'grid-cols-2 md:grid-cols-3' : `grid-cols-${cells.length}`
+  return (
+    <div className={`grid ${cols} gap-3 p-3`}>
+      {cells.map((c, i) => {
+        const display =
+          typeof c.value === 'number'
+            ? Intl.NumberFormat().format(c.value)
+            : String(c.value ?? '—')
+        const deltaStr =
+          c.delta == null
+            ? null
+            : typeof c.delta === 'number'
+              ? Intl.NumberFormat().format(c.delta)
+              : String(c.delta)
+        return (
+          <div
+            key={i}
+            className="flex flex-col gap-0.5 p-3 rounded-sm bg-neutral-50 dark:bg-neutral-800/40 border border-neutral-100 dark:border-neutral-800"
+          >
+            <div className="text-[11.5px] uppercase tracking-wider text-neutral-400 truncate">
+              {c.label}
+            </div>
+            <div className="text-[22px] font-semibold text-neutral-900 dark:text-neutral-100 tracking-tight truncate">
+              {display}
+            </div>
+            {c.hint && <div className="text-[11.5px] text-neutral-500 truncate">{c.hint}</div>}
+            {deltaStr != null && (
+              <div className="text-[11.5px] font-mono text-neutral-500">{deltaStr}</div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -350,6 +593,7 @@ function TableView({
   teamId,
   onInlineDone,
   onInlineError,
+  props,
 }: {
   data: TableShape
   onCellClick: ((raw: unknown) => void) | null
@@ -361,7 +605,10 @@ function TableView({
   teamId?: string
   onInlineDone?: () => void
   onInlineError?: (msg: string) => void
+  props?: Record<string, unknown>
 }) {
+  const colFormatters =
+    (props?.column_formatters as Record<string, ColumnFormat> | undefined) ?? {}
   const [editing, setEditing] = useState<{ rowIdx: number; col: string } | null>(null)
   // Map column → first inline action that lists it in `fields`.
   const inlineByCol = new Map<string, PanelAction>()
@@ -462,7 +709,7 @@ function TableView({
                       onCancel={() => setEditing(null)}
                     />
                   ) : (
-                    fmt(r[c])
+                    formatCell(r[c], colFormatters[c])
                   )}
                 </td>
               )
@@ -716,24 +963,89 @@ interface ChartShape {
   y: number[]
   series?: { name: string; data: number[] }[]
 }
-function ChartView({ data }: { data: ChartShape }) {
-  const max = Math.max(1, ...(data.y ?? []))
+function ChartView({ data, props }: { data: ChartShape; props?: Record<string, unknown> }) {
+  const variant = (props?.variant as 'bar' | 'line' | 'area' | undefined) ?? 'bar'
+  const goal =
+    typeof props?.goal_line === 'number' && Number.isFinite(props.goal_line as number)
+      ? (props.goal_line as number)
+      : null
+  const xs = data.x ?? []
+  const ys = data.y ?? []
+  const max = Math.max(1, ...(goal != null ? [...ys, goal] : ys))
+
+  if (variant === 'line' || variant === 'area') {
+    const w = 100
+    const h = 40
+    const step = ys.length > 1 ? w / (ys.length - 1) : w
+    const points = ys.map((v, i) => `${i * step},${h - (v / max) * h}`)
+    const polyline = points.join(' ')
+    const area = `0,${h} ${polyline} ${w},${h}`
+    const goalY = goal != null ? h - (goal / max) * h : null
+    return (
+      <div className="p-3">
+        <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="w-full h-32">
+          {variant === 'area' && (
+            <polygon points={area} className="fill-neutral-200 dark:fill-neutral-700/60" />
+          )}
+          <polyline
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1"
+            className="text-neutral-700 dark:text-neutral-200"
+            points={polyline}
+          />
+          {goalY != null && (
+            <line
+              x1="0"
+              y1={goalY}
+              x2={w}
+              y2={goalY}
+              stroke="currentColor"
+              strokeDasharray="2,2"
+              strokeWidth="0.5"
+              className="text-emerald-500"
+            />
+          )}
+        </svg>
+        <div className="mt-2 grid grid-cols-4 gap-1 text-[10.5px] text-neutral-400 font-mono">
+          {xs.map((label, i) => (
+            <span key={`${label}-${i}`} className="truncate">
+              {label}
+            </span>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="p-3 space-y-2">
-      {(data.x ?? []).map((label, i) => {
-        const v = data.y?.[i] ?? 0
+      {goal != null && (
+        <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
+          goal {Intl.NumberFormat().format(goal)}
+        </div>
+      )}
+      {xs.map((label, i) => {
+        const v = ys[i] ?? 0
         const pct = Math.round((v / max) * 100)
+        const goalPct = goal != null ? Math.round((goal / max) * 100) : null
         return (
-          <div key={label}>
+          <div key={`${label}-${i}`}>
             <div className="flex items-center justify-between text-[12.5px] text-neutral-500 mb-0.5">
               <span className="truncate">{label}</span>
               <span className="font-mono">{Intl.NumberFormat().format(v)}</span>
             </div>
-            <div className="h-1.5 bg-neutral-100 dark:bg-neutral-800 rounded-sm overflow-hidden">
+            <div className="relative h-1.5 bg-neutral-100 dark:bg-neutral-800 rounded-sm overflow-hidden">
               <div
-                className="h-full bg-amber-400"
+                className="h-full bg-neutral-700 dark:bg-neutral-300"
                 style={{ width: `${pct}%` }}
               />
+              {goalPct != null && (
+                <div
+                  className="absolute top-0 bottom-0 w-px bg-emerald-500"
+                  style={{ left: `${goalPct}%` }}
+                />
+              )}
             </div>
           </div>
         )
@@ -748,35 +1060,54 @@ interface ListShape {
 function ListView({
   data,
   onCellClick,
+  props,
 }: {
   data: ListShape
   onCellClick: ((raw: unknown) => void) | null
+  props?: Record<string, unknown>
 }) {
   if (!data.items?.length) {
     return <div className="p-4 text-[13px] text-neutral-400">(empty)</div>
   }
+  const iconField = typeof props?.icon_slot === 'string' ? props.icon_slot : null
+  const metaField = typeof props?.meta_slot === 'string' ? props.meta_slot : null
   const clickable = !!onCellClick
   return (
     <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
-      {data.items.map((it, i) => (
-        <li
-          key={i}
-          onClick={clickable ? () => onCellClick!(it.raw) : undefined}
-          className={
-            'px-3 py-2 flex items-center justify-between gap-3 ' +
-            (clickable ? 'cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800/50' : '')
-          }
-        >
-          <span className="text-[13px] text-neutral-800 dark:text-neutral-100 truncate">
-            {fmt(it.title)}
-          </span>
-          {it.value != null && (
-            <span className="text-[12px] text-neutral-500 font-mono shrink-0">
-              {fmt(it.value)}
-            </span>
-          )}
-        </li>
-      ))}
+      {data.items.map((it, i) => {
+        const raw = (it.raw ?? {}) as Record<string, unknown>
+        const icon = iconField ? raw[iconField] : null
+        const meta = metaField ? raw[metaField] : null
+        return (
+          <li
+            key={i}
+            onClick={clickable ? () => onCellClick!(it.raw) : undefined}
+            className={
+              'px-3 py-2 flex items-center gap-2 ' +
+              (clickable ? 'cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800/50' : '')
+            }
+          >
+            {icon != null && (
+              <span className="w-5 h-5 flex items-center justify-center text-[14px] text-neutral-500 shrink-0">
+                {String(icon)}
+              </span>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] text-neutral-800 dark:text-neutral-100 truncate">
+                {fmt(it.title)}
+              </div>
+              {meta != null && (
+                <div className="text-[11.5px] text-neutral-500 truncate">{fmt(meta)}</div>
+              )}
+            </div>
+            {it.value != null && (
+              <span className="text-[12px] text-neutral-500 font-mono shrink-0">
+                {fmt(it.value)}
+              </span>
+            )}
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -835,6 +1166,69 @@ function fmt(v: unknown): string {
   if (typeof v === 'number') return Intl.NumberFormat().format(v)
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
+}
+
+type ColumnFormat = 'money' | 'date' | 'datetime' | 'relative' | 'badge' | 'boolean' | 'percent'
+
+function formatCell(v: unknown, kind: ColumnFormat | undefined): React.ReactNode {
+  if (!kind) return fmt(v)
+  if (v == null) return '—'
+  switch (kind) {
+    case 'money': {
+      const n = Number(v)
+      if (!Number.isFinite(n)) return fmt(v)
+      return (
+        <span className="font-mono">
+          {Intl.NumberFormat(undefined, { style: 'currency', currency: 'KRW', maximumFractionDigits: 0 }).format(n)}
+        </span>
+      )
+    }
+    case 'percent': {
+      const n = Number(v)
+      if (!Number.isFinite(n)) return fmt(v)
+      const shown = Math.abs(n) <= 1 ? n * 100 : n
+      return <span className="font-mono">{Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(shown)}%</span>
+    }
+    case 'date':
+    case 'datetime': {
+      const d = typeof v === 'number' ? new Date(v < 1e12 ? v * 1000 : v) : new Date(String(v))
+      if (Number.isNaN(d.getTime())) return fmt(v)
+      return (
+        <span className="font-mono text-neutral-600 dark:text-neutral-300">
+          {kind === 'date' ? d.toLocaleDateString() : d.toLocaleString()}
+        </span>
+      )
+    }
+    case 'relative': {
+      const d = typeof v === 'number' ? new Date(v < 1e12 ? v * 1000 : v) : new Date(String(v))
+      if (Number.isNaN(d.getTime())) return fmt(v)
+      return <span className="font-mono text-neutral-600 dark:text-neutral-300">{formatTs(d.getTime())}</span>
+    }
+    case 'badge': {
+      const s = String(v)
+      return (
+        <span className="inline-block px-1.5 py-[1px] rounded-sm bg-neutral-100 dark:bg-neutral-800 text-[12px] text-neutral-700 dark:text-neutral-200">
+          {s}
+        </span>
+      )
+    }
+    case 'boolean': {
+      const truthy = v === true || v === 1 || v === 'true' || v === 't'
+      return (
+        <span
+          className={
+            truthy
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : 'text-neutral-400'
+          }
+        >
+          {truthy ? '✓' : '—'}
+        </span>
+      )
+    }
+    default:
+      return fmt(v)
+  }
 }
 
 function toEntries(raw: unknown): [string, unknown][] {

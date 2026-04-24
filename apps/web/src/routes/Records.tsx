@@ -17,8 +17,8 @@ export function Records() {
   const [view, setView] = useState<StorageView>('files')
   return (
     <div className="h-full flex flex-col bg-white dark:bg-neutral-950">
-      <nav className="h-[48px] shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-6 flex items-center">
-        <div className="inline-flex p-0.5 rounded-lg bg-neutral-100/80 dark:bg-neutral-900">
+      <nav className="h-[48px] shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-3 flex items-center">
+        <div className="inline-flex -ml-0.5 p-0.5 rounded-lg bg-neutral-100/80 dark:bg-neutral-900">
           {VIEWS.map(({ id, labelKey, icon: Icon }) => {
             const active = view === id
             return (

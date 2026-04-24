@@ -21,9 +21,32 @@ const SECTION_COMPONENTS: Record<SettingsSection, () => React.ReactElement> = {
   about: AboutSection,
 }
 
+const SECTION_IDS: SettingsSection[] = [
+  'general',
+  'appearance',
+  'providers',
+  'credentials',
+  'mcp',
+  'usage',
+  'data',
+  'about',
+]
+
+function sectionFromUrl(): SettingsSection | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const s = params.get('section')
+    if (s && (SECTION_IDS as string[]).includes(s)) return s as SettingsSection
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
 export function Settings() {
   const hydrate = useAppStore((s) => s.hydrate)
-  const [active, setActive] = useState<SettingsSection>('general')
+  const [active, setActive] = useState<SettingsSection>(() => sectionFromUrl() ?? 'general')
 
   useEffect(() => {
     hydrateLocaleFromStorage()
