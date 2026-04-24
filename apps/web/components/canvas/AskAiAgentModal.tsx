@@ -1,24 +1,22 @@
-import { CircleNotch, X } from '@phosphor-icons/react'
+import { X } from '@phosphor-icons/react'
 import { useState } from 'react'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
-import type { Agent } from '@/lib/types'
 import { Button } from '../ui/Button'
 
 interface AskAiAgentModalProps {
   open: boolean
   onClose: () => void
-  onCreate: (agent: Agent, warnings?: string[]) => void
-  companySlug: string
+  /** Fire-and-forget: parent kicks off generation and renders progress UI
+   *  outside this modal so the user isn't stuck watching a spinner. */
+  onSubmit: (description: string) => void
 }
 
-export function AskAiAgentModal({ open, onClose, onCreate, companySlug }: AskAiAgentModalProps) {
+export function AskAiAgentModal({ open, onClose, onSubmit }: AskAiAgentModalProps) {
   const t = useT()
   const defaultModel = useAppStore((s) => s.defaultModel)
   const [description, setDescription] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   useEscapeClose(open, onClose)
 
@@ -26,56 +24,14 @@ export function AskAiAgentModal({ open, onClose, onCreate, companySlug }: AskAiA
 
   const reset = () => {
     setDescription('')
-    setError(null)
-    setLoading(false)
     onClose()
   }
 
-  const submit = async () => {
-    if (!description.trim()) return
-    if (!defaultModel) return
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetch('/api/agents/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          description,
-          company_slug: companySlug || undefined,
-          provider_id: defaultModel.providerId,
-          model: defaultModel.model,
-        }),
-      })
-      if (!res.ok) {
-        const body = await res.text()
-        throw new Error(`generate failed (${res.status}): ${body}`)
-      }
-      const raw = (await res.json()) as Record<string, unknown>
-      const personaPath =
-        typeof raw.persona_path === 'string' && raw.persona_path ? raw.persona_path : undefined
-      const personaName =
-        typeof raw.persona_name === 'string' && raw.persona_name ? raw.persona_name : undefined
-      const agent: Agent = {
-        id: String(raw.id ?? ''),
-        role: String(raw.role ?? 'Member'),
-        label: String(raw.label ?? 'Copilot'),
-        providerId: String(raw.provider_id ?? defaultModel.providerId),
-        model: String(raw.model ?? defaultModel.model),
-        systemPrompt: String(raw.system_prompt ?? ''),
-        skills: (raw.skills as string[]) ?? [],
-        position: (raw.position as { x: number; y: number }) ?? { x: 0, y: 0 },
-        personaPath,
-        personaName,
-      }
-      const warnings = Array.isArray(raw.warnings) ? (raw.warnings as string[]) : undefined
-      onCreate(agent, warnings)
-      reset()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
-    }
+  const submit = () => {
+    const trimmed = description.trim()
+    if (!trimmed || !defaultModel) return
+    onSubmit(trimmed)
+    reset()
   }
 
   return (
@@ -112,18 +68,12 @@ export function AskAiAgentModal({ open, onClose, onCreate, companySlug }: AskAiA
             rows={4}
             placeholder={t('canvas.askAiPlaceholder')}
             className="w-full px-3 py-2 text-[13px] rounded border border-neutral-200 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-100 resize-none"
-            disabled={loading}
             // biome-ignore lint/a11y/noAutofocus: the modal is intent-driven — typing is the only thing to do
             autoFocus
           />
           {!defaultModel && (
             <div className="text-[12px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
               {t('canvas.askAiDefaultModelRequired')}
-            </div>
-          )}
-          {error && (
-            <div className="text-[12px] text-red-700 bg-red-50 border border-red-200 rounded px-2.5 py-1.5 whitespace-pre-wrap">
-              {error}
             </div>
           )}
           <div className="flex justify-end gap-2">
@@ -133,10 +83,9 @@ export function AskAiAgentModal({ open, onClose, onCreate, companySlug }: AskAiA
             <Button
               variant="primary"
               onClick={submit}
-              disabled={loading || !description.trim() || !defaultModel}
+              disabled={!description.trim() || !defaultModel}
             >
-              {loading && <CircleNotch className="w-3.5 h-3.5 animate-spin" />}
-              {loading ? t('canvas.askAiGenerating') : t('canvas.askAiSubmit')}
+              {t('canvas.askAiSubmit')}
             </Button>
           </div>
         </div>

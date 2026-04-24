@@ -16,6 +16,10 @@ interface GenerateBody {
   company_slug?: string
   provider_id?: string
   model?: string
+  /** Client-supplied id so the client can save its poll target to localStorage
+   *  BEFORE the POST returns. Survives the "user clicks Generate then refreshes
+   *  instantly" race. Server uses it verbatim if provided. */
+  client_job_id?: string
 }
 
 export interface LibraryPersona {
@@ -221,31 +225,16 @@ function formatRefList(refs: PlannerRef[]): string {
   return refs.map((r) => `- ${r.filename} — ${r.purpose}`).join('\n')
 }
 
-// POST /api/agents/generate — 3-pass pipeline:
+// 3-pass pipeline:
 //   1. Planner    : decide role/label + reference topics (evidence-gated)
 //   2. AGENT.md   : author the entry file, referencing (not inlining) files
 //   3. References : one LLM call per reference file, in parallel
-agents.post('/generate', async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as GenerateBody
-  const description = body.description?.trim()
-  const companySlug = body.company_slug?.trim() || null
-  const providerId = body.provider_id?.trim()
-  const model = body.model?.trim()
-
-  if (!description) {
-    return c.json({ detail: 'description is required' }, 400)
-  }
-  if (!providerId || !model) {
-    return c.json(
-      {
-        detail: 'default_model_required',
-        message: 'Set a default model in Settings before asking AI to design an agent.',
-      },
-      400,
-    )
-  }
-
-  try {
+async function runGeneratePipeline(
+  description: string,
+  companySlug: string | null,
+  providerId: string,
+  model: string,
+): Promise<Record<string, unknown>> {
     // Pass 1 — planner.
     const plannerRaw = await oneShot(
       providerId,
@@ -341,14 +330,92 @@ agents.post('/generate', async (c) => {
       out.system_prompt = inline || `You are a ${plan.role}.`
     }
 
-    if (warnings.length > 0) out.warnings = warnings
-    return c.json(out)
-  } catch (exc) {
-    if (exc instanceof ScopeViolationError) {
-      return c.json({ detail: `persona file path rejected: ${exc.message}` }, 400)
-    }
-    return c.json({ detail: exc instanceof Error ? exc.message : String(exc) }, 500)
+  if (warnings.length > 0) out.warnings = warnings
+  return out
+}
+
+// Server-side job registry for async AI agent generation. In-memory only —
+// survives route navigation and page reload but not server restart. A job
+// evicts itself the first time the client polls and sees a terminal state,
+// so we don't accumulate. TTL fallback prevents leaks for orphaned jobs.
+interface JobRecord {
+  status: 'pending' | 'done' | 'error'
+  result?: Record<string, unknown>
+  error?: string
+  createdAt: number
+}
+const generateJobs = new Map<string, JobRecord>()
+const JOB_TTL_MS = 30 * 60 * 1000
+
+function sweepExpiredJobs() {
+  const now = Date.now()
+  for (const [id, rec] of generateJobs.entries()) {
+    if (now - rec.createdAt > JOB_TTL_MS) generateJobs.delete(id)
   }
+}
+
+// POST /api/agents/generate — fire-and-forget. Returns a job_id immediately;
+// client polls GET /api/agents/generate/:id for status. This way the UI can
+// show a "generating" indicator that survives page reloads.
+agents.post('/generate', async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as GenerateBody
+  const description = body.description?.trim()
+  const companySlug = body.company_slug?.trim() || null
+  const providerId = body.provider_id?.trim()
+  const model = body.model?.trim()
+
+  if (!description) return c.json({ detail: 'description is required' }, 400)
+  if (!providerId || !model) {
+    return c.json(
+      {
+        detail: 'default_model_required',
+        message: 'Set a default model in Settings before asking AI to design an agent.',
+      },
+      400,
+    )
+  }
+
+  sweepExpiredJobs()
+  const suppliedId = body.client_job_id?.trim()
+  const jobId =
+    suppliedId && /^[a-zA-Z0-9_-]{4,64}$/.test(suppliedId)
+      ? suppliedId
+      : `genjob-${Math.random().toString(36).slice(2, 10)}`
+  // If the client is retrying with the same id (page was reloaded mid-POST),
+  // don't start a second pipeline — surface the existing record's state.
+  if (generateJobs.has(jobId)) {
+    return c.json({ job_id: jobId })
+  }
+  generateJobs.set(jobId, { status: 'pending', createdAt: Date.now() })
+
+  runGeneratePipeline(description, companySlug, providerId, model)
+    .then((result) => {
+      generateJobs.set(jobId, { status: 'done', result, createdAt: Date.now() })
+    })
+    .catch((exc) => {
+      const message =
+        exc instanceof ScopeViolationError
+          ? `persona file path rejected: ${exc.message}`
+          : exc instanceof Error
+            ? exc.message
+            : String(exc)
+      generateJobs.set(jobId, { status: 'error', error: message, createdAt: Date.now() })
+    })
+
+  return c.json({ job_id: jobId })
+})
+
+// GET /api/agents/generate/:id — poll job status. Terminal states (done/error)
+// are evicted after this call returns them, so the next poll 404s. That's
+// intentional: client claims the result exactly once.
+agents.get('/generate/:id', (c) => {
+  const id = c.req.param('id')
+  const rec = generateJobs.get(id)
+  if (!rec) return c.json({ status: 'missing' }, 404)
+  if (rec.status === 'done' || rec.status === 'error') {
+    generateJobs.delete(id)
+  }
+  return c.json({ status: rec.status, result: rec.result, error: rec.error })
 })
 
 // GET /api/agents/persona/files?persona_path=… — read every .md file in

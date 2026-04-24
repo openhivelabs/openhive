@@ -81,9 +81,13 @@ function buildDefaultAgentMd(agent: Record<string, unknown>): string {
   const persona = String(agent.system_prompt ?? '').trim() || `You are a ${role}.`
   const id = String(agent.id ?? 'bundle')
   const name = agentDirBase(role, id)
+  const description =
+    role.toLowerCase() === 'lead'
+      ? 'Owns the conversation with the user and routes tasks to the right specialist.'
+      : label
   return `---
 name: ${yamlStr(name)}
-description: ${yamlStr(label)}
+description: ${yamlStr(description)}
 ---
 
 # Persona

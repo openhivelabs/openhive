@@ -1,14 +1,16 @@
-import { CircleNotch, File as FileIcon, FolderOpen, Package, X } from '@phosphor-icons/react'
+import { CircleNotch, File as FileIcon, FolderOpen, Package, Trash, X } from '@phosphor-icons/react'
 import { useEffect, useMemo, useState } from 'react'
 import { downloadAgentFrame } from '@/lib/api/agent-frames'
 import { getPersonaFiles, savePersonaFiles } from '@/lib/api/agent-library'
 import { type ModelInfo, listModels } from '@/lib/api/models'
+import { type ProviderStatus, listProviders } from '@/lib/api/providers'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { useT } from '@/lib/i18n'
 import { mockProviders } from '@/lib/mock/companies'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
 import { useCanvasStore } from '@/lib/stores/useCanvasStore'
 import type { Agent } from '@/lib/types'
+import { DEFAULT_TEAM_ICON_KEY, IconPickerButton } from '../shell/TeamIcon'
 import { Button } from '../ui/Button'
 import {
   buildTree,
@@ -43,6 +45,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
   const [models, setModels] = useState<ModelInfo[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelsError, setModelsError] = useState<string | null>(null)
+  const [connectedProviders, setConnectedProviders] = useState<ProviderStatus[]>([])
   // The live editable files map + extra empty folders the user added in-flight.
   const [files, setFiles] = useState<Record<string, string>>({})
   const [folders, setFolders] = useState<Set<string>>(new Set())
@@ -69,6 +72,15 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
   }, [agent])
 
   useEscapeClose(agent, onClose)
+
+  // Only show providers the user has actually connected. Fall back to mock
+  // list when the API call fails so the modal still renders something.
+  useEffect(() => {
+    if (!agent) return
+    void listProviders()
+      .then((list) => setConnectedProviders(list.filter((p) => p.connected)))
+      .catch(() => setConnectedProviders([]))
+  }, [agent])
 
   // Load files from disk whenever the attached persona changes.
   useEffect(() => {
@@ -144,13 +156,14 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
     !personaPath.includes(`/agents/`)
 
   const onChangeProvider = (providerId: string) => {
-    const provider = mockProviders.find((p) => p.id === providerId)
+    const connected = connectedProviders.find((p) => p.id === providerId)
+    const fallback = mockProviders.find((p) => p.id === providerId)
     const cached = modelCache[providerId]
     const nextModel = cached?.find((m) => m.default)?.id ?? cached?.[0]?.id ?? draft.model
     setDraft({
       ...draft,
       providerId,
-      label: provider?.label ?? draft.label,
+      label: connected?.label ?? fallback?.label ?? draft.label,
       model: nextModel,
     })
   }
@@ -324,6 +337,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
       maxParallel: clampedParallel,
       personaName: draft.personaName || undefined,
       personaPath: draft.personaPath || undefined,
+      icon: draft.icon || undefined,
     })
     onClose()
   }
@@ -350,82 +364,114 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
       onKeyDown={(e) => e.key === 'Escape' && onClose()}
     >
       <div
-        className="relative w-[1040px] max-w-[96vw] h-[680px] max-h-[92vh] flex flex-col rounded-md bg-white shadow-xl border border-neutral-200"
+        className="relative w-[1040px] max-w-[96vw] h-[680px] max-h-[92vh] flex flex-col rounded-md bg-white shadow-xl border border-neutral-200 focus:outline-none"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-center gap-3 px-5 py-3 border-b border-neutral-200">
-          <input
-            value={draft.role}
-            onChange={(e) => setDraft({ ...draft, role: e.target.value })}
-            className="input !w-40 !py-1 text-[14px] font-semibold"
-            placeholder="Role"
-          />
-          <select
-            value={draft.providerId}
-            onChange={(e) => onChangeProvider(e.target.value)}
-            className="input !w-32 !py-1 text-[13px]"
-          >
-            {mockProviders.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-          {loadingModels ? (
-            <div className="input !w-44 !py-1 flex items-center gap-2 text-[13px] text-neutral-500">
-              <CircleNotch className="w-3.5 h-3.5 animate-spin" />
-              Loading…
-            </div>
-          ) : modelsError ? (
-            <input
-              value={draft.model}
-              onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-              className="input !w-44 !py-1 text-[13px] font-mono"
-              placeholder="model id"
+        {/* Header — identity row + runtime row */}
+        <div className="px-5 pt-3.5 pb-3 border-b border-neutral-200 space-y-2.5">
+          <div className="flex items-center gap-2.5">
+            <IconPickerButton
+              value={draft.icon ?? DEFAULT_TEAM_ICON_KEY}
+              onChange={(k) => setDraft({ ...draft, icon: k })}
+              className="!h-9"
             />
-          ) : (
-            <select
-              value={models.some((m) => m.id === draft.model) ? draft.model : ''}
-              onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-              className="input !w-52 !py-1 text-[13px]"
-            >
-              {!models.some((m) => m.id === draft.model) && draft.model && (
-                <option value="">{draft.model} (not in list)</option>
-              )}
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                  {m.default ? ' · default' : ''}
-                </option>
-              ))}
-            </select>
-          )}
-          {!isLead && (
-            <label className="flex items-center gap-1.5 text-[12px] text-neutral-500">
-              <span>Parallel</span>
-              <input
-                type="number"
-                min={1}
-                max={HARD_MAX_PARALLEL}
-                value={draft.maxParallel ?? 1}
-                onChange={(e) =>
-                  setDraft({ ...draft, maxParallel: Number(e.target.value) || 1 })
-                }
-                className="input !w-16 !py-1 font-mono text-[13px]"
-              />
-            </label>
-          )}
-          <div className="ml-auto">
+            <input
+              value={draft.role}
+              onChange={(e) => setDraft({ ...draft, role: e.target.value })}
+              className="flex-1 min-w-0 px-2.5 py-1.5 text-[15px] font-semibold bg-transparent border-0 border-b border-transparent hover:border-neutral-200 focus:border-neutral-400 focus:outline-none rounded-none"
+              placeholder="Role"
+            />
             <button
               type="button"
               onClick={onClose}
               aria-label="Close"
-              className="p-1 rounded-sm hover:bg-neutral-100"
+              className="p-1 rounded-sm hover:bg-neutral-100 shrink-0"
             >
               <X className="w-4 h-4 text-neutral-500" />
             </button>
+          </div>
+          <div className="flex items-end gap-4 text-[11px] text-neutral-500">
+            <label className="flex flex-col gap-1">
+              <span className="font-medium uppercase tracking-wide">Provider</span>
+              <select
+                value={draft.providerId}
+                onChange={(e) => onChangeProvider(e.target.value)}
+                className="input !w-36 !py-1 text-[13px] text-neutral-900"
+              >
+                {/* Current provider may not be in the connected list
+                    (disconnected after selection). Surface it so the user
+                    still sees what's set. */}
+                {!connectedProviders.some((p) => p.id === draft.providerId) && draft.providerId && (
+                  <option value={draft.providerId}>
+                    {draft.label || draft.providerId} (disconnected)
+                  </option>
+                )}
+                {connectedProviders.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="font-medium uppercase tracking-wide">Model</span>
+              {loadingModels ? (
+                <div className="input !w-56 !py-1 flex items-center gap-2 text-[13px] text-neutral-500">
+                  <CircleNotch className="w-3.5 h-3.5 animate-spin" />
+                  Loading…
+                </div>
+              ) : modelsError ? (
+                <input
+                  value={draft.model}
+                  onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                  className="input !w-56 !py-1 text-[13px] font-mono text-neutral-900"
+                  placeholder="model id"
+                />
+              ) : (
+                <select
+                  value={models.some((m) => m.id === draft.model) ? draft.model : ''}
+                  onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                  className="input !w-56 !py-1 text-[13px] text-neutral-900"
+                >
+                  {!models.some((m) => m.id === draft.model) && draft.model && (
+                    <option value="">{draft.model} (not in list)</option>
+                  )}
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                      {m.default ? ' · default' : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </label>
+            {!isLead && (
+              <label className="flex flex-col gap-1">
+                <span className="font-medium uppercase tracking-wide">Parallel</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={HARD_MAX_PARALLEL}
+                  value={draft.maxParallel ?? 1}
+                  onChange={(e) =>
+                    setDraft({ ...draft, maxParallel: Number(e.target.value) || 1 })
+                  }
+                  className="input !w-16 !py-1 font-mono text-[13px] text-neutral-900"
+                />
+              </label>
+            )}
+            {agent.role !== 'Lead' && (
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                title="Delete agent"
+                aria-label="Delete agent"
+                className="ml-auto self-end p-1.5 rounded-sm text-neutral-400 hover:text-red-600 hover:bg-red-50 transition-colors focus:outline-none"
+              >
+                <Trash className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -497,7 +543,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
 
           {/* RIGHT: body editor or folder placeholder */}
           <div className="flex-1 min-w-0 flex flex-col min-h-0">
-            <div className="px-5 py-2 border-b border-neutral-200 bg-neutral-50/60 flex items-center gap-2">
+            <div className="px-5 py-2.5 border-b border-neutral-200 bg-white/50 flex items-center gap-2">
               <FileIcon className="w-3.5 h-3.5 text-neutral-500" />
               {selectedFile === 'AGENT.md' || readOnly ? (
                 <span className="font-mono text-[12px] text-neutral-700 truncate">
@@ -545,31 +591,22 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
           </div>
         </div>
 
-        <div className="flex items-center justify-between px-5 py-3 border-t border-neutral-200 bg-neutral-50 rounded-b-md gap-3">
-          <div className="flex items-center gap-2">
-            {agent.role !== 'Lead' && (
-              <Button
-                variant="ghost"
-                onClick={() => setConfirmDelete(true)}
-                className="!text-red-600 hover:!bg-red-50"
-              >
-                Delete
-              </Button>
-            )}
+        <div className="flex items-center justify-between px-5 py-2.5 border-t border-neutral-200 rounded-b-md gap-3">
+          <div className="flex items-center gap-1">
             <Button
-              variant="outline"
+              variant="ghost"
               onClick={() => {
                 if (companySlug && team?.slug) downloadAgentFrame(companySlug, team.slug, agent.id)
               }}
               disabled={!companySlug || !team?.slug}
               title={t('canvas.exportAsFrameHint')}
-              className="!text-neutral-700"
+              className="!text-neutral-600 focus:outline-none"
             >
-              <Package className="w-3.5 h-3.5" />
+              <Package className="w-4 h-4" />
               {t('canvas.exportAsFrame')}
             </Button>
             {saveError && (
-              <span className="text-[12px] text-red-600 truncate">{saveError}</span>
+              <span className="ml-2 text-[12px] text-red-600 truncate">{saveError}</span>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -587,25 +624,28 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
           <div
             role="dialog"
             aria-modal="true"
-            aria-label="Confirm delete"
-            className="absolute inset-0 z-10 flex items-center justify-center bg-black/40 rounded-md"
+            aria-label={t('nodeEditor.deleteTitle')}
+            // -inset-px so the overlay fully covers the outer modal's 1px
+            // border — otherwise the light-gray border appears to "glow"
+            // against the dark backdrop.
+            className="absolute -inset-px z-10 flex items-center justify-center bg-black/40 rounded-md focus:outline-none"
             onClick={() => setConfirmDelete(false)}
             onKeyDown={(e) => e.key === 'Escape' && setConfirmDelete(false)}
           >
             <div
-              className="w-[420px] max-w-[90%] rounded-md bg-white shadow-xl border border-neutral-200 p-5"
+              className="w-[420px] max-w-[90%] rounded-md bg-white shadow-xl border border-neutral-200 p-5 focus:outline-none"
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
             >
               <div className="text-[15px] font-semibold text-neutral-900 mb-1">
-                Delete this agent?
+                {t('nodeEditor.deleteTitle')}
               </div>
               <div className="text-[13px] text-neutral-600 leading-relaxed mb-4">
-                <span className="font-medium">{draft.role || agent.role}</span> 에이전트가 팀에서 제거되고 연결된 엣지도 함께 삭제됩니다. 이 작업은 되돌릴 수 없어요.
+                {t('nodeEditor.deleteBody', { role: draft.role || agent.role })}
               </div>
               <div className="flex justify-end gap-2">
                 <Button variant="ghost" onClick={() => setConfirmDelete(false)}>
-                  Cancel
+                  {t('canvas.cancel')}
                 </Button>
                 <Button
                   variant="primary"
@@ -616,7 +656,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
                   }}
                   className="!bg-red-600 hover:!bg-red-700 !text-white"
                 >
-                  Delete
+                  {t('nodeEditor.deleteConfirm')}
                 </Button>
               </div>
             </div>

@@ -474,13 +474,6 @@ export function CreateAgentModal({ open, onClose }: CreateAgentModalProps) {
                   className="font-mono text-[12px] text-neutral-700 bg-transparent outline-none focus:bg-white focus:border focus:border-neutral-300 rounded px-1 min-w-[260px]"
                 />
               )}
-              <span className="text-[11px] text-neutral-500 ml-auto">
-                {selectedIsFolder
-                  ? 'folder'
-                  : selectedFile === 'AGENT.md'
-                    ? 'persona body'
-                    : 'file content'}
-              </span>
             </div>
             {selectedIsFolder ? (
               <div className="flex-1 min-h-0 flex items-center justify-center text-[13px] text-neutral-400">
