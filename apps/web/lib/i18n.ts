@@ -74,6 +74,7 @@ const en: Dict = {
   'records.db.nextPage': 'Next',
   'records.db.pageOf': 'Page {page} / {pages}',
   'records.db.filterPageHint': 'Filter / sort apply to this page only',
+  'records.db.emptyDb': 'No tables have been created yet',
   // records — files browser
   'records.files.searchPlaceholder': 'Search filename',
   'records.files.countFiles': '{n} files',
@@ -484,7 +485,7 @@ const en: Dict = {
   'settings.about.license': 'License',
   'settings.about.source': 'Source',
   // team settings
-  'teamSettings.title': 'Team settings — {name}',
+  'teamSettings.title': 'Team settings',
   'teamSettings.name': 'Name',
   'teamSettings.delete': 'Delete team',
   'teamSettings.saveFrame': 'Save as Frame',
@@ -691,6 +692,7 @@ const ko: Dict = {
   'records.db.nextPage': '다음',
   'records.db.pageOf': '{page} / {pages} 페이지',
   'records.db.filterPageHint': '필터 · 정렬은 현재 페이지에만 적용됩니다',
+  'records.db.emptyDb': '아직 생성된 테이블이 없습니다',
   // records — files browser
   'records.files.searchPlaceholder': '파일명 검색',
   'records.files.countFiles': '파일 {n}개',
@@ -1101,7 +1103,7 @@ const ko: Dict = {
   'settings.about.license': '라이선스',
   'settings.about.source': '소스',
   // team settings
-  'teamSettings.title': '팀 설정 — {name}',
+  'teamSettings.title': '팀 설정',
   'teamSettings.name': '이름',
   'teamSettings.delete': '팀 삭제',
   'teamSettings.saveFrame': '프레임으로 저장',

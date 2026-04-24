@@ -118,7 +118,7 @@ export function DualSidebar() {
         {selectedCompany && (collapsed ? (
           /* ── 접힌 상태 : 52px 세로 레일 — 상단은 토글 버튼만 ── */
           <>
-            <div className="px-2 pt-3 pb-2 flex flex-col items-center border-b border-neutral-100 dark:border-neutral-800">
+            <div className="h-[48px] px-2 flex items-center justify-center border-b border-neutral-100 dark:border-neutral-800">
               <button
                 type="button"
                 onClick={toggleTeamPanel}
@@ -187,7 +187,7 @@ export function DualSidebar() {
         ) : (
           /* ── 펼친 상태 : 220px 기본 패널 ── */
           <>
-            <div className="px-3 pt-3 pb-2 flex items-center gap-2 border-b border-neutral-100 dark:border-neutral-800 group">
+            <div className="h-[48px] px-3 flex items-center gap-2 border-b border-neutral-100 dark:border-neutral-800 group">
               <Buildings className="w-4 h-4 text-neutral-500 shrink-0" />
               <span className="flex-1 truncate text-[15px] font-semibold text-neutral-800 dark:text-neutral-100">
                 {selectedCompany.name}

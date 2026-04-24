@@ -1,5 +1,14 @@
-import { ArrowLeft, CircleNotch, Package, Sparkle, Upload, Warning, X } from '@phosphor-icons/react'
-import { useEffect, useRef, useState } from 'react'
+import {
+  ArrowLeft,
+  CircleNotch,
+  Plus,
+  Storefront,
+  Upload,
+  UploadSimple,
+  Warning,
+  X,
+} from '@phosphor-icons/react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import {
   type FramePreview,
   installFrame,
@@ -8,10 +17,10 @@ import {
 } from '@/lib/api/frames'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { useAppStore } from '@/lib/stores/useAppStore'
-import { PRESETS, type PresetDef } from '@/lib/presets'
-import type { Team } from '@/lib/types'
+import { PRESETS } from '@/lib/presets'
 import { DEFAULT_TEAM_ICON_KEY, IconPickerButton } from '../shell/TeamIcon'
 import { Button } from '../ui/Button'
+import { FrameMarketModal } from './FrameMarketModal'
 
 interface NewTeamModalProps {
   open: boolean
@@ -19,25 +28,24 @@ interface NewTeamModalProps {
   onClose: () => void
 }
 
-type Mode = 'picker' | 'empty' | 'nl' | 'frame'
+type Mode = 'picker' | 'empty' | 'frame'
 
 export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
   const addTeam = useAppStore((s) => s.addTeam)
   const companies = useAppStore((s) => s.companies)
   const [mode, setMode] = useState<Mode>('picker')
-  const [nlInput, setNlInput] = useState('')
+  const [marketOpen, setMarketOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [framePreview, setFramePreview] = useState<FramePreview | null>(null)
   const [frameWarnings, setFrameWarnings] = useState<string[]>([])
   const frameFileInput = useRef<HTMLInputElement>(null)
-  // Empty-preset config step
   const [emptyName, setEmptyName] = useState('New Team')
   const [emptyIcon, setEmptyIcon] = useState<string>(DEFAULT_TEAM_ICON_KEY)
   const emptyNameInput = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
     if (mode === 'empty') {
-      // Auto-focus + select so the user can just start typing.
       const el = emptyNameInput.current
       if (el) {
         el.focus()
@@ -46,25 +54,11 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
     }
   }, [mode])
 
-  useEscapeClose(open && companyId, onClose)
+  useEscapeClose(open && companyId && !marketOpen, onClose)
 
   if (!open || !companyId) return null
 
   const company = companies.find((c) => c.id === companyId)
-
-  const applyPreset = (p: PresetDef) => {
-    // Empty preset gets a follow-up form (name + icon) instead of silently
-    // landing as "New Team". Every other preset is opinionated enough to
-    // commit straight away.
-    if (p.id === 'empty-team') {
-      setEmptyName('New Team')
-      setEmptyIcon(DEFAULT_TEAM_ICON_KEY)
-      setMode('empty')
-      return
-    }
-    addTeam(companyId, p.build())
-    reset()
-  }
 
   const applyEmpty = () => {
     const name = emptyName.trim() || 'New Team'
@@ -72,31 +66,6 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
     if (!base) return
     addTeam(companyId, { ...base, name, icon: emptyIcon })
     reset()
-  }
-
-  const applyNl = async () => {
-    if (!nlInput.trim() || !company) return
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetch('/api/teams/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: nlInput, company_slug: company.slug }),
-      })
-      if (!res.ok) {
-        const body = await res.text()
-        throw new Error(`generate failed (${res.status}): ${body}`)
-      }
-      const raw = (await res.json()) as Record<string, unknown>
-      const team = fromServer(raw)
-      addTeam(companyId, team)
-      reset()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
-    }
   }
 
   const onFrameFile = async (file: File | null) => {
@@ -120,8 +89,6 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
       const result = await installFrame(company.slug, framePreview.raw)
       const team = teamFromInstallResult(result.team)
       addTeam(companyId, team)
-      // Surface warnings briefly even though the team was created. If the user
-      // hits Close, they're gone — that's fine; the team exists and is usable.
       if (result.warnings.length > 0) {
         setFrameWarnings(result.warnings)
       } else {
@@ -136,7 +103,6 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
 
   const reset = () => {
     setMode('picker')
-    setNlInput('')
     setError(null)
     setFramePreview(null)
     setFrameWarnings([])
@@ -147,16 +113,17 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
   }
 
   return (
+    <>
     <div
       role="dialog"
       aria-modal="true"
       aria-label="New team"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
-      onClick={reset}
-      onKeyDown={(e) => e.key === 'Escape' && reset()}
+      onClick={marketOpen ? undefined : reset}
+      onKeyDown={(e) => e.key === 'Escape' && !marketOpen && reset()}
     >
       <div
-        className="w-[620px] max-w-[94vw] rounded-md bg-white shadow-xl border border-neutral-200"
+        className="w-[520px] max-w-[94vw] rounded-md bg-white shadow-xl border border-neutral-200"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       >
@@ -172,72 +139,30 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
           </button>
         </div>
 
-        {mode !== 'empty' && (
-          <div className="px-5 pt-4">
-            <div className="inline-flex rounded border border-neutral-200 p-0.5 text-[15px]">
-              <button
-                type="button"
-                onClick={() => setMode('picker')}
-                className={
-                  mode === 'picker'
-                    ? 'px-3 py-1 rounded-sm bg-neutral-900 text-white'
-                    : 'px-3 py-1 rounded-sm text-neutral-600 hover:bg-neutral-100'
-                }
-              >
-                From preset
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode('nl')}
-                className={
-                  mode === 'nl'
-                    ? 'px-3 py-1 rounded-sm bg-neutral-900 text-white'
-                    : 'px-3 py-1 rounded-sm text-neutral-600 hover:bg-neutral-100'
-                }
-              >
-                From description
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode('frame')}
-                className={
-                  mode === 'frame'
-                    ? 'px-3 py-1 rounded-sm bg-neutral-900 text-white'
-                    : 'px-3 py-1 rounded-sm text-neutral-600 hover:bg-neutral-100'
-                }
-              >
-                From Frame
-              </button>
-            </div>
-          </div>
-        )}
-
         {mode === 'picker' && (
-          <div className="px-5 py-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {PRESETS.map((p) => {
-              const isEmpty = p.id === 'empty-team'
-              const agentCount = p.build().agents.length
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => applyPreset(p)}
-                  className="group text-left rounded-md border border-neutral-200 bg-white p-4 hover:border-neutral-900 hover:shadow-sm transition-all flex flex-col"
-                >
-                  <div className="text-2xl mb-2">{p.icon}</div>
-                  <div className="font-semibold text-neutral-900 text-[15px]">{p.name}</div>
-                  <div className="text-[14px] text-neutral-500 mt-1 leading-relaxed flex-1">{p.tagline}</div>
-                  <div className="text-[13px] text-neutral-400 mt-2 flex items-center justify-between">
-                    <span>{agentCount} agent{agentCount === 1 ? '' : 's'}</span>
-                    {isEmpty && (
-                      <span className="opacity-0 group-hover:opacity-100 transition-opacity text-neutral-700">
-                        Customize →
-                      </span>
-                    )}
-                  </div>
-                </button>
-              )
-            })}
+          <div className="px-5 py-5 space-y-2">
+            <PickerRow
+              icon={<Plus className="w-5 h-5" />}
+              title="Empty"
+              desc="Provision a single Lead agent and compose the team manually."
+              onClick={() => {
+                setEmptyName('New Team')
+                setEmptyIcon(DEFAULT_TEAM_ICON_KEY)
+                setMode('empty')
+              }}
+            />
+            <PickerRow
+              icon={<Storefront className="w-5 h-5" />}
+              title="Frame Market"
+              desc="Install a curated frame tailored to common workflows."
+              onClick={() => setMarketOpen(true)}
+            />
+            <PickerRow
+              icon={<UploadSimple className="w-5 h-5" />}
+              title="Import a frame"
+              desc="Load a .yaml frame exported from another hive."
+              onClick={() => setMode('frame')}
+            />
           </div>
         )}
 
@@ -248,7 +173,7 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
               onClick={() => setMode('picker')}
               className="inline-flex items-center gap-1 text-[13px] text-neutral-500 hover:text-neutral-900"
             >
-              <ArrowLeft className="w-3.5 h-3.5" /> Back to presets
+              <ArrowLeft className="w-3.5 h-3.5" /> Back
             </button>
             <div>
               <div className="text-[15px] font-medium text-neutral-700 mb-2">
@@ -271,15 +196,17 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
                 />
               </div>
               <p className="text-[13px] text-neutral-500 mt-2">
-                Starts with just a Lead agent. Add more from the team canvas later.
+                Create a new team. Configure members and structure from the team canvas afterwards.
               </p>
             </div>
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setMode('picker')}>
+              <Button variant="ghost" size="sm" className="h-8" onClick={() => setMode('picker')}>
                 Cancel
               </Button>
               <Button
                 variant="primary"
+                size="sm"
+                className="h-8"
                 onClick={applyEmpty}
                 disabled={!emptyName.trim()}
               >
@@ -291,13 +218,17 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
 
         {mode === 'frame' && (
           <div className="px-5 py-4 space-y-3">
-            <div className="flex items-start gap-2 text-[15px] text-neutral-600 bg-amber-50 border border-amber-200 rounded p-2.5">
-              <Package className="w-3.5 h-3.5 mt-0.5 text-amber-600 shrink-0" />
-              <div>
-                Drop a <code>.openhive-frame.yaml</code> file someone shared with you.
-                It packs a team's agents, dashboard, and data schema into one file.
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={() => setMode('picker')}
+              className="inline-flex items-center gap-1 text-[13px] text-neutral-500 hover:text-neutral-900"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" /> Back
+            </button>
+            <p className="text-[13px] text-neutral-500 leading-relaxed">
+              Upload a <code className="font-mono text-neutral-700">.openhive-frame.yaml</code> file shared by
+              another hive. A frame bundles the team's agents, dashboard layout, and data schema.
+            </p>
             <input
               ref={frameFileInput}
               type="file"
@@ -339,8 +270,7 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
                 <ul className="text-[14px] text-neutral-700 space-y-0.5">
                   <li>· {framePreview.agentCount} agents</li>
                   <li>
-                    · {framePreview.hasDashboard ? 'includes' : 'no'} dashboard
-                    layout
+                    · {framePreview.hasDashboard ? 'includes' : 'no'} dashboard layout
                   </li>
                   <li>
                     · {framePreview.schemaStatementCount} data-schema statement
@@ -384,12 +314,14 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
               </div>
             )}
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={reset}>
+              <Button variant="ghost" size="sm" className="h-8" onClick={reset}>
                 {frameWarnings.length > 0 ? 'Done' : 'Cancel'}
               </Button>
               {framePreview && frameWarnings.length === 0 && (
                 <Button
                   variant="primary"
+                  size="sm"
+                  className="h-8"
                   onClick={applyFrame}
                   disabled={loading}
                 >
@@ -400,71 +332,47 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
             </div>
           </div>
         )}
-
-        {mode === 'nl' && (
-          <div className="px-5 py-4 space-y-3">
-            <div className="flex items-start gap-2 text-[15px] text-neutral-600 bg-amber-50 border border-amber-200 rounded p-2.5">
-              <Sparkle className="w-3.5 h-3.5 mt-0.5 text-amber-600 shrink-0" />
-              <div>
-                Copilot LLM이 설명을 읽고 역할·보고선·시스템 프롬프트를 짜서 YAML로 저장.
-              </div>
-            </div>
-            <textarea
-              value={nlInput}
-              onChange={(e) => setNlInput(e.target.value)}
-              rows={4}
-              placeholder="어떤 팀을 만들지 설명. 예: '반도체 2nm GAA 트랜지스터 관련 R&D 팀.'"
-              className="w-full px-3 py-2 text-[15px] rounded border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-300"
-            />
-            {error && (
-              <div className="text-[14px] text-red-700 bg-red-50 border border-red-200 rounded px-2.5 py-2 whitespace-pre-wrap">
-                {error}
-              </div>
-            )}
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={reset}>
-                Cancel
-              </Button>
-              <Button variant="primary" onClick={applyNl} disabled={loading || !nlInput.trim()}>
-                {loading && <CircleNotch className="w-3.5 h-3.5 animate-spin" />}
-                {loading ? 'Generating…' : 'Generate'}
-              </Button>
-            </div>
-          </div>
-        )}
       </div>
+
     </div>
+    <FrameMarketModal
+      open={marketOpen}
+      onClose={() => {
+        setMarketOpen(false)
+        reset()
+      }}
+      defaultCompanyId={companyId}
+      defaultTeamId={null}
+      allowedTabs={['team']}
+      lockTarget
+    />
+    </>
   )
 }
 
-function fromServer(t: Record<string, unknown>): Team {
-  const rawAgents = (t.agents as Record<string, unknown>[]) ?? []
-  const rawEdges = (t.edges as Record<string, unknown>[]) ?? []
-  return {
-    id: String(t.id ?? ''),
-    slug: String(t.slug ?? t.id ?? ''),
-    name: String(t.name ?? ''),
-    agents: rawAgents.map((a) => ({
-      id: String(a.id ?? ''),
-      role: String(a.role ?? ''),
-      label: String(a.label ?? ''),
-      providerId: String(a.provider_id ?? ''),
-      model: String(a.model ?? ''),
-      systemPrompt: String(a.system_prompt ?? ''),
-      skills: (a.skills as string[]) ?? [],
-      position: (a.position as { x: number; y: number }) ?? { x: 0, y: 0 },
-      maxParallel: Number(a.max_parallel ?? 1) || 1,
-    })),
-    edges: rawEdges.map((e) => ({
-      id: String(e.id ?? ''),
-      source: String(e.source ?? ''),
-      target: String(e.target ?? ''),
-    })),
-    entryAgentId: (t.entry_agent_id as string | null) ?? null,
-    allowedSkills: (t.allowed_skills as string[]) ?? [],
-    limits: (t.limits as { max_tool_rounds_per_turn: number; max_delegation_depth: number } | undefined) ?? {
-      max_tool_rounds_per_turn: 8,
-      max_delegation_depth: 4,
-    },
-  }
+function PickerRow({
+  icon,
+  title,
+  desc,
+  onClick,
+}: {
+  icon: ReactNode
+  title: string
+  desc: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full text-left rounded-md border border-neutral-200 bg-white px-4 py-3 hover:border-neutral-900 hover:shadow-sm transition-all flex items-start gap-3"
+    >
+      <div className="text-neutral-500 mt-0.5">{icon}</div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[15px] font-semibold text-neutral-900">{title}</div>
+        <div className="text-[13px] text-neutral-500 mt-0.5 leading-relaxed">{desc}</div>
+      </div>
+    </button>
+  )
 }
+

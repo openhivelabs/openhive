@@ -342,8 +342,7 @@ export function Onboarding() {
         onClose={() => setFrameModal(null)}
         defaultCompanyId={null}
         defaultTeamId={null}
-        disabledTabs={['team', 'agent']}
-        hideTabs
+        allowedTabs={['company']}
       />
       {frameModal === 'import' && (
         <FrameImportModal

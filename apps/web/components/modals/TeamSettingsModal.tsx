@@ -2,7 +2,6 @@ import { DownloadSimple, Trash, X } from '@phosphor-icons/react'
 import { useEffect, useState } from 'react'
 import { deleteTeam } from '@/lib/api/companies'
 import { downloadFrame } from '@/lib/api/frames'
-import { type InstalledServer, fetchServers } from '@/lib/api/mcp'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
@@ -25,16 +24,10 @@ export function TeamSettingsModal({ open, companyId, teamId, onClose }: Props) {
   const team = company?.teams.find((t) => t.id === teamId)
 
   const [draft, setDraft] = useState<Team | null>(null)
-  const [mcpServers, setMcpServers] = useState<InstalledServer[]>([])
 
   useEffect(() => {
     if (team) setDraft(JSON.parse(JSON.stringify(team)) as Team)
   }, [team])
-
-  useEffect(() => {
-    if (!open) return
-    void fetchServers().then(setMcpServers).catch(() => setMcpServers([]))
-  }, [open])
 
   useEscapeClose(open && team && draft, onClose)
 
@@ -72,7 +65,7 @@ export function TeamSettingsModal({ open, companyId, teamId, onClose }: Props) {
         onKeyDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-neutral-200">
-          <h2 className="text-base font-semibold">{t('teamSettings.title', { name: team.name })}</h2>
+          <h2 className="text-base font-semibold">{t('teamSettings.title')}</h2>
           <button
             type="button"
             onClick={onClose}
@@ -99,74 +92,34 @@ export function TeamSettingsModal({ open, companyId, teamId, onClose }: Props) {
             </div>
           </div>
 
-          <div>
-            <div className="text-[15px] font-medium text-neutral-600">
-              {t('teamSettings.allowedMcp')}
-            </div>
-            <p className="text-[13px] text-neutral-500 mt-0.5">
-              {t('teamSettings.allowedMcpHint')}
-            </p>
-            {mcpServers.length === 0 ? (
-              <div className="mt-2 text-[13px] text-neutral-400 border border-dashed border-neutral-300 rounded-sm px-3 py-2">
-                {t('teamSettings.noMcpInstalled')}
-              </div>
-            ) : (
-              <div className="mt-2 space-y-1">
-                {mcpServers.map((s) => {
-                  const allowed = (draft.allowedMcpServers ?? []).includes(s.name)
-                  return (
-                    <label
-                      key={s.name}
-                      className="flex items-center gap-2 px-2 py-1.5 rounded-sm hover:bg-neutral-50 cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={allowed}
-                        onChange={(e) => {
-                          const list = new Set(draft.allowedMcpServers ?? [])
-                          if (e.target.checked) list.add(s.name)
-                          else list.delete(s.name)
-                          setDraft({ ...draft, allowedMcpServers: Array.from(list) })
-                        }}
-                      />
-                      <span className="text-[14px] font-medium text-neutral-900">
-                        {s.name}
-                      </span>
-                      <span className="text-[12px] text-neutral-400 font-mono">
-                        {s.preset_id ?? 'custom'}
-                      </span>
-                      <span className="ml-auto text-[12px] text-neutral-500">
-                        {s.tool_count !== null ? `${s.tool_count} tools` : '—'}
-                      </span>
-                    </label>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-
         </div>
 
         <div className="px-5 py-3 border-t border-neutral-200 flex items-center justify-between">
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={remove}>
-              <Trash className="w-3.5 h-3.5" />
-              {t('teamSettings.delete')}
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => company && downloadFrame(company.slug, team.slug)}
-              title={t('teamSettings.saveFrameHint')}
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={remove}
+              aria-label={t('teamSettings.delete')}
+              title={t('teamSettings.delete')}
+              className="inline-flex items-center justify-center w-8 h-8 rounded-sm text-neutral-500 hover:bg-neutral-100 hover:text-red-600 transition-colors"
             >
-              <DownloadSimple className="w-3.5 h-3.5" />
-              {t('teamSettings.saveFrame')}
-            </Button>
+              <Trash className="w-[18px] h-[18px]" />
+            </button>
+            <button
+              type="button"
+              onClick={() => company && downloadFrame(company.slug, team.slug)}
+              aria-label={t('teamSettings.saveFrame')}
+              title={t('teamSettings.saveFrameHint')}
+              className="inline-flex items-center justify-center w-8 h-8 rounded-sm text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 transition-colors"
+            >
+              <DownloadSimple className="w-[18px] h-[18px]" />
+            </button>
           </div>
           <div className="flex gap-2">
-            <Button variant="ghost" onClick={onClose}>
+            <Button variant="ghost" size="sm" onClick={onClose} className="h-8">
               {t('settings.cancel')}
             </Button>
-            <Button variant="primary" onClick={save}>
+            <Button variant="primary" size="sm" onClick={save} className="h-8">
               {t('settings.save')}
             </Button>
           </div>

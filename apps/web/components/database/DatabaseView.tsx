@@ -13,6 +13,7 @@ import {
   ArrowsDownUp,
   CaretLeft,
   CaretRight,
+  Database as DatabaseIcon,
   Table as TableIcon,
   X,
 } from '@phosphor-icons/react'
@@ -342,7 +343,14 @@ export function DatabaseView() {
         </div>
       )}
 
-      {/* Main: sidebar + table body */}
+      {tables.length === 0 && !loading ? (
+        <div className="flex-1 min-h-0 flex items-center justify-center text-[13px] text-neutral-400">
+          <div className="text-center">
+            <DatabaseIcon className="w-10 h-10 mx-auto text-neutral-300 dark:text-neutral-700 mb-2" />
+            {t('records.db.emptyDb')}
+          </div>
+        </div>
+      ) : (
       <div className="flex-1 flex min-h-0">
         <aside className="w-[240px] shrink-0 border-r border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-950 flex flex-col">
           <div className="flex-1 overflow-y-auto px-2 py-3">
@@ -499,6 +507,7 @@ export function DatabaseView() {
           )}
         </div>
       </div>
+      )}
     </div>
   )
 }

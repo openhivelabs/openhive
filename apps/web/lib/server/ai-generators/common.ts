@@ -1,28 +1,4 @@
-/**
- * Shared helpers for the NL→JSON generators (agents/generate, teams/generate).
- * Ports the skill-body loader + JSON extraction logic from
- * apps/server/openhive/api/{agents,teams}_generate.py.
- */
-
-import fs from 'node:fs'
-import path from 'node:path'
 import crypto from 'node:crypto'
-import { packagesRoot } from '../paths'
-
-export function loadSkillBody(skillName: string): string {
-  const file = path.join(packagesRoot(), 'skills', skillName, 'SKILL.md')
-  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
-    throw new Error(`skill not found: ${file}`)
-  }
-  let text = fs.readFileSync(file, 'utf8')
-  if (text.startsWith('---')) {
-    const end = text.indexOf('\n---', 3)
-    if (end !== -1) {
-      text = text.slice(end + '\n---'.length).replace(/^\n+/, '')
-    }
-  }
-  return text
-}
 
 export function extractJson(text: string): Record<string, unknown> {
   const match = /\{[\s\S]*\}/.exec(text)

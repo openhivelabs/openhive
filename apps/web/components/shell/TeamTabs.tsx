@@ -36,7 +36,7 @@ export function TeamTabs({ companySlug, teamSlug }: TeamTabsProps) {
   const raw = rest.split('/')[0] || 'dashboard'
   const segment = SEGMENT_TO_TAB[raw] ?? raw
   return (
-    <nav className="h-[42px] shrink-0 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3 flex items-center justify-center gap-1">
+    <nav className="h-[48px] shrink-0 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3 flex items-center justify-center gap-1">
       {TABS.map(({ id, icon: Icon }) => {
         const active = segment === id
         const label = t(`tab.${id}`)
