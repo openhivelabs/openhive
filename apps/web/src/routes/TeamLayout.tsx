@@ -1,5 +1,6 @@
 import { DualSidebar } from '@/components/shell/DualSidebar'
 import { TeamTabs } from '@/components/shell/TeamTabs'
+import { useAgentGenerationStore } from '@/lib/stores/useAgentGenerationStore'
 import { hydrateLocaleFromStorage, useAppStore } from '@/lib/stores/useAppStore'
 import { useTasksStore } from '@/lib/stores/useTasksStore'
 import { useEffect } from 'react'
@@ -13,12 +14,14 @@ export function TeamLayout() {
   const { companies, currentCompanyId, currentTeamId, hydrated, hydrate, setCompany, setTeam } =
     useAppStore()
   const hydrateTasks = useTasksStore((s) => s.hydrate)
+  const hydrateGeneration = useAgentGenerationStore((s) => s.hydrate)
 
   useEffect(() => {
     hydrateLocaleFromStorage()
     void hydrate()
     void hydrateTasks()
-  }, [hydrate, hydrateTasks])
+    hydrateGeneration()
+  }, [hydrate, hydrateTasks, hydrateGeneration])
 
   useEffect(() => {
     if (!hydrated || !companySlug || !teamSlug) return

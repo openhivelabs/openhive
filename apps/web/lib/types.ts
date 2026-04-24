@@ -27,6 +27,9 @@ export interface Agent {
   /** Explicit path to a persona .md file or directory. Preferred over name
    *  when both present. Absolute or ~-prefixed. */
   personaPath?: string
+  /** 에이전트 카드에 표시되는 아이콘 키. TEAM_ICONS 에서 찾는 식별자.
+   *  값 없으면 role 기반 기본 아이콘(Lead=Crown, 그 외 User) 사용. */
+  icon?: string
 }
 
 export interface ReportingEdge {

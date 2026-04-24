@@ -1,3 +1,4 @@
+import { normalizeAgentRole } from '@/lib/agent-role'
 import type { Company, Team } from '@/lib/types'
 
 /** Convert UI Team (camelCase) ⇄ server YAML (snake_case for provider/system fields). */
@@ -8,7 +9,7 @@ function teamToServer(team: Team): Record<string, unknown> {
     name: team.name,
     agents: team.agents.map((a) => ({
       id: a.id,
-      role: a.role,
+      role: normalizeAgentRole(a.role),
       label: a.label,
       provider_id: a.providerId,
       model: a.model,
@@ -18,6 +19,7 @@ function teamToServer(team: Team): Record<string, unknown> {
       max_parallel: a.maxParallel ?? 1,
       persona_name: a.personaName ?? null,
       persona_path: a.personaPath ?? null,
+      icon: a.icon ?? null,
     })),
     edges: team.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
     entry_agent_id: team.entryAgentId ?? null,
@@ -36,7 +38,7 @@ function teamFromServer(t: Record<string, unknown>): Team {
     name: String(t.name ?? ''),
     agents: rawAgents.map((a) => ({
       id: String(a.id ?? ''),
-      role: String(a.role ?? ''),
+      role: normalizeAgentRole(String(a.role ?? '')),
       label: String(a.label ?? ''),
       providerId: String(a.provider_id ?? a.providerId ?? ''),
       model: String(a.model ?? ''),
@@ -47,6 +49,7 @@ function teamFromServer(t: Record<string, unknown>): Team {
       maxParallel: Number(a.max_parallel ?? a.maxParallel ?? 1) || 1,
       personaName: typeof a.persona_name === 'string' && a.persona_name ? a.persona_name : undefined,
       personaPath: typeof a.persona_path === 'string' && a.persona_path ? a.persona_path : undefined,
+      icon: typeof a.icon === 'string' && a.icon ? a.icon : undefined,
     })),
     edges: rawEdges.map((e) => ({
       id: String(e.id ?? ''),

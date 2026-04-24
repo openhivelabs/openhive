@@ -13,6 +13,7 @@ import { mockProviders } from '@/lib/mock/companies'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
 import { useCanvasStore } from '@/lib/stores/useCanvasStore'
 import type { Agent } from '@/lib/types'
+import { useAgentGenerationStore } from '@/lib/stores/useAgentGenerationStore'
 import { AddAgentButton } from './AddAgentButton'
 import { AgentFrameGalleryModal } from './AgentFrameGalleryModal'
 import { AgentNode, type AgentFlowNode } from './AgentNode'
@@ -158,6 +159,7 @@ export function OrgCanvas() {
   const [askAiOpen, setAskAiOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [frameGalleryOpen, setFrameGalleryOpen] = useState(false)
+  const startGeneration = useAgentGenerationStore((s) => s.start)
 
   const positions = useMemo(() => {
     if (!team) return {}
@@ -176,12 +178,14 @@ export function OrgCanvas() {
       data: {
         role: a.role,
         label: a.label,
+        model: a.model,
         providerColor: PROVIDER_COLORS[a.label],
         isActive: a.isActive,
         // Only the role-Lead hides its top handle. Using "no incoming edges"
         // would also hide it for orphan Members, leaving them impossible to
         // wire into the chart (catch-22).
         isLead: isLeadRole(a.role),
+        icon: a.icon,
       },
       draggable: false,
     }))
@@ -270,14 +274,6 @@ export function OrgCanvas() {
     setAskAiOpen(true)
   }, [])
 
-  const onAiCreated = useCallback(
-    (agent: Agent, warnings?: string[]) => {
-      addAgent(agent)
-      if (warnings && warnings.length > 0) console.warn('[agent generate]', warnings)
-      setEditingAgentId(agent.id)
-    },
-    [addAgent],
-  )
 
   const addFromFrame = useCallback(() => {
     setFrameGalleryOpen(true)
@@ -347,8 +343,7 @@ export function OrgCanvas() {
       <AskAiAgentModal
         open={askAiOpen}
         onClose={() => setAskAiOpen(false)}
-        onCreate={onAiCreated}
-        companySlug={companySlug}
+        onSubmit={(description) => startGeneration(description)}
       />
       <AgentFrameGalleryModal
         open={frameGalleryOpen}

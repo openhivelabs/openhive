@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
+import { AgentGenerationChipStack } from '@/components/canvas/AgentGenerationChip'
 
 /**
  * Root shell for the Vite/React Router SPA port of OpenHive.
@@ -14,5 +15,10 @@ export function Root() {
     document.title = 'OpenHive'
   }, [])
 
-  return <Outlet />
+  return (
+    <>
+      <Outlet />
+      <AgentGenerationChipStack />
+    </>
+  )
 }

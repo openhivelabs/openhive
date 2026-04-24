@@ -168,6 +168,12 @@ const en: Dict = {
   'canvas.askAiGenerating': 'Generating…',
   'canvas.askAiDefaultModelRequired':
     'Pick a default model in Settings before asking AI to design an agent.',
+  'canvas.askAiFailed': 'Generation failed',
+  'canvas.askAiRetry': 'Retry',
+  'nodeEditor.deleteTitle': 'Delete this agent?',
+  'nodeEditor.deleteBody':
+    'The {role} agent will be removed from the team along with any connected edges. This cannot be undone.',
+  'nodeEditor.deleteConfirm': 'Delete',
   'canvas.cancel': 'Cancel',
   'canvas.close': 'Close',
   // drawer tabs
@@ -786,6 +792,12 @@ const ko: Dict = {
   'canvas.askAiGenerating': '생성 중…',
   'canvas.askAiDefaultModelRequired':
     'AI에게 에이전트 설계를 맡기기 전에 Settings 에서 기본 모델을 먼저 지정해 주세요.',
+  'canvas.askAiFailed': '생성 실패',
+  'canvas.askAiRetry': '다시 시도',
+  'nodeEditor.deleteTitle': '이 에이전트를 삭제할까요?',
+  'nodeEditor.deleteBody':
+    '{role} 에이전트가 팀에서 제거되고 연결된 엣지도 함께 삭제됩니다. 이 작업은 되돌릴 수 없어요.',
+  'nodeEditor.deleteConfirm': '삭제',
   'canvas.cancel': '취소',
   'canvas.close': '닫기',
   // drawer tabs
