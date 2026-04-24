@@ -156,6 +156,12 @@ interface ResponseInputItem {
   output?: string
   name?: string
   arguments?: string
+  /** Server-assigned ids — required when re-submitting on subsequent rounds
+   *  so gpt-5/5.5 reasoning models can anchor their prior state. See the
+   *  `attach_item_ids` block below. */
+  id?: string
+  encrypted_content?: string
+  summary?: unknown
 }
 
 function toResponsesInput(
@@ -252,35 +258,118 @@ export interface StreamOpts {
   messages: ChatMessage[]
   tools?: ToolSpec[]
   providerId?: string
+  /** Session key used to isolate per-chat prior-item buffers across
+   *  concurrent sessions. Without it, parallel chats would share one
+   *  global slot and clobber each other's reasoning anchors. */
+  sessionId?: string
 }
 
 const cachingStrategy = new CodexCachingStrategy()
 
 /**
- * Single-slot response-id memory. The engine does not pass a sessionId
- * down to the provider, so for a first cut we keep module-local "last
- * response id" — sufficient for back-to-back turns within one agent loop.
- * When the engine grows a sessionId in StreamOpts this becomes a Map.
+ * attach_item_ids — mirror OpenAI Codex CLI's multi-round strategy.
  *
- * Chaining is **opt-in** via OPENHIVE_CODEX_CHAIN=1 to avoid surprising
- * users with `store: true` (OpenAI retains the conversation server-side)
- * until we have a ToS review.
+ * gpt-5 / gpt-5.5 are reasoning models that return empty `response.output`
+ * on follow-up rounds unless their prior reasoning items are re-presented
+ * to them with server-assigned IDs (reference:
+ * `codex-rs/codex-api/src/requests/responses.rs::attach_item_ids`).
+ *
+ * Approach:
+ *   - Buffer the reasoning items the server emits in each response
+ *     (extracted from `response.output_item.done` SSE events).
+ *   - Buffer the server-assigned `id` for every `function_call` item,
+ *     keyed by the call_id we generated client-side.
+ *   - On the NEXT request: translate history to items as usual, then
+ *     overlay the server ids onto any `function_call` items whose
+ *     call_id we have on file, and splice the buffered reasoning
+ *     items into the items array right BEFORE the first
+ *     `function_call` / `function_call_output` so the chronological
+ *     shape matches what the server originally emitted.
+ *
+ * Do NOT use `previous_response_id` + `store: true` — those do not
+ * restore reasoning state reliably on the chatgpt.com/backend-api
+ * endpoint. `attach_item_ids` is the only pattern known to work.
+ *
+ * State is keyed by sessionId so parallel chat sessions don't stomp
+ * each other. Session exit clears the entry via `clearCodexChain`.
  */
-const globalForResp = globalThis as unknown as {
-  __openhive_codex_last_response_id?: string | null
-  __openhive_codex_chain_warned?: boolean
+interface CodexSessionState {
+  /** reasoning items from the MOST RECENT `response.completed`.
+   *  Replaced on each complete, so we only carry what the model last
+   *  emitted — older reasonings become dead weight after a new one
+   *  supersedes them. */
+  lastReasonings: ResponseInputItem[]
+  /** server-assigned ids for function_call items, keyed by our
+   *  client-side call_id. Accumulates — on multi-turn sessions the
+   *  model may reference calls from earlier turns. */
+  funcItemIds: Map<string, string>
 }
 
-function chainingEnabled(): boolean {
-  return process.env.OPENHIVE_CODEX_CHAIN === '1'
+const globalForState = globalThis as unknown as {
+  __openhive_codex_session_state?: Map<string, CodexSessionState>
 }
 
-export function getLastResponseId(): string | null {
-  return globalForResp.__openhive_codex_last_response_id ?? null
+function stateMap(): Map<string, CodexSessionState> {
+  if (!globalForState.__openhive_codex_session_state) {
+    globalForState.__openhive_codex_session_state = new Map()
+  }
+  return globalForState.__openhive_codex_session_state
 }
 
-export function setLastResponseId(id: string | null): void {
-  globalForResp.__openhive_codex_last_response_id = id
+function sessionKey(sessionId: string | undefined): string {
+  return sessionId && sessionId.length > 0 ? sessionId : '__default__'
+}
+
+function getState(sessionId: string | undefined): CodexSessionState {
+  const k = sessionKey(sessionId)
+  let s = stateMap().get(k)
+  if (!s) {
+    s = { lastReasonings: [], funcItemIds: new Map() }
+    stateMap().set(k, s)
+  }
+  return s
+}
+
+/** Drop a session's attach-items state — call when a session ends so we
+ *  don't leak entries indefinitely. Safe to call for unknown sessions. */
+export function clearCodexChain(sessionId: string): void {
+  stateMap().delete(sessionId)
+}
+
+/** Apply the attach-items overlay + reasoning splice to a translated
+ *  items array, producing the final `input` for a Responses-API call. */
+function applyAttachItemIds(
+  items: ResponseInputItem[],
+  state: CodexSessionState,
+): ResponseInputItem[] {
+  if (state.lastReasonings.length === 0 && state.funcItemIds.size === 0) {
+    return items
+  }
+  // Overlay server ids onto function_call items.
+  const overlaid = items.map((it) => {
+    if (it.type === 'function_call' && it.call_id) {
+      const id = state.funcItemIds.get(it.call_id)
+      if (id && !it.id) return { ...it, id }
+    }
+    return it
+  })
+  // Splice reasoning items right BEFORE the first function_call /
+  // function_call_output so chronological shape matches the server's
+  // original emission order: [user, reasoning, fc_*, fco_*, ...].
+  if (state.lastReasonings.length === 0) return overlaid
+  let insertAt = overlaid.length
+  for (let i = 0; i < overlaid.length; i++) {
+    const t = overlaid[i]!.type
+    if (t === 'function_call' || t === 'function_call_output') {
+      insertAt = i
+      break
+    }
+  }
+  return [
+    ...overlaid.slice(0, insertAt),
+    ...state.lastReasonings,
+    ...overlaid.slice(insertAt),
+  ]
 }
 
 export async function* streamResponses(
@@ -295,23 +384,14 @@ export async function* streamResponses(
     (system ?? '').trim() ||
     "You are Codex, a helpful coding assistant. Follow the user's request directly."
 
-  const chain = chainingEnabled()
-  if (chain && !globalForResp.__openhive_codex_chain_warned) {
-    // ToS-ish heads-up — `store: true` means OpenAI retains the request
-    // body server-side. We emit once per process to usage_logs via
-    // stderr (the logger pipeline picks it up).
-    console.warn(
-      '[codex] OPENHIVE_CODEX_CHAIN=1 — previous_response_id chaining on; requests stored server-side (store: true). Review ToS before enabling in shared deployments.',
-    )
-    globalForResp.__openhive_codex_chain_warned = true
-  }
+  const state = getState(opts.sessionId)
+  const inputItems = applyAttachItemIds(items, state)
 
   const payload = cachingStrategy.applyToRequest({
     model: opts.model,
-    input: items,
+    input: inputItems,
     instructions,
     tools: respTools,
-    previousResponseId: chain ? getLastResponseId() : null,
   })
 
   const headers: Record<string, string> = {
@@ -324,21 +404,60 @@ export async function* streamResponses(
   }
   if (session.accountId) headers['chatgpt-account-id'] = session.accountId
 
+  // AbortSignal.timeout applies to the ENTIRE fetch lifetime, including body
+  // streaming — so a long synthesis response (Lead assembling a final answer
+  // across many tokens) that exceeds this hardcap is killed mid-stream with
+  // "operation was aborted due to timeout" and the whole run errors out.
+  // 600s default gives Lead headroom for multi-paragraph comparative reports;
+  // tunable via env for slower networks or even larger syntheses.
+  const timeoutMs = Number(process.env.OPENHIVE_CODEX_TIMEOUT_MS ?? 600_000)
   const resp = await fetch(RESPONSES_URL, {
     method: 'POST',
     headers,
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(180_000),
+    signal: AbortSignal.timeout(
+      Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 600_000,
+    ),
   })
   if (!resp.ok || !resp.body) {
     const body = resp.body ? await resp.text() : ''
     throw new Error(`Codex responses ${resp.status}: ${body}`)
   }
+
+  // Scratch capture: reasonings + function_call id mappings accrued during
+  // THIS response. Committed to session state only on `response.completed`
+  // so a mid-stream failure doesn't leave partial anchors that would
+  // poison the next round.
+  const scratchReasonings: ResponseInputItem[] = []
+  const scratchFuncIds = new Map<string, string>()
+
   for await (const ev of sseEvents(resp.body)) {
-    // Capture response id for next-turn chaining (only when enabled — we
-    // still read it either way so flipping the env var mid-session works).
-    const id = cachingStrategy.extractResponseId?.(ev)
-    if (id) setLastResponseId(id)
+    const type = (ev as { type?: string }).type
+    if (type === 'response.output_item.done') {
+      const item = ((ev as { item?: Record<string, unknown> }).item ?? {}) as Record<string, unknown>
+      const itemType = typeof item.type === 'string' ? item.type : ''
+      if (itemType === 'reasoning' && typeof item.id === 'string') {
+        // Preserve the full raw shape so we can re-submit it verbatim.
+        const preserved: ResponseInputItem = {
+          type: 'reasoning',
+          id: item.id,
+        }
+        if (typeof item.encrypted_content === 'string') {
+          preserved.encrypted_content = item.encrypted_content
+        }
+        if (item.summary !== undefined) preserved.summary = item.summary
+        scratchReasonings.push(preserved)
+      } else if (itemType === 'function_call') {
+        const id = typeof item.id === 'string' ? item.id : ''
+        const callId = typeof item.call_id === 'string' ? item.call_id : ''
+        if (id && callId) scratchFuncIds.set(callId, id)
+      }
+    } else if (type === 'response.completed') {
+      // Commit anchors: replace reasonings (only the most recent matter),
+      // merge function-call ids (accumulate across turns).
+      state.lastReasonings = scratchReasonings
+      for (const [k, v] of scratchFuncIds) state.funcItemIds.set(k, v)
+    }
     yield ev
   }
 }

@@ -8,13 +8,24 @@ import {
   Copy,
   DownloadSimple,
   FileText,
+  Globe,
+  MagnifyingGlass,
   Paperclip,
   Plus,
   Warning,
   Wrench,
   X,
 } from '@phosphor-icons/react'
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  createContext,
+  memo,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { flushSync } from 'react-dom'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
@@ -47,6 +58,14 @@ interface SessionUsage {
   n: number
 }
 
+export interface ChatSource {
+  title: string
+  url: string
+  domain: string
+  snippet?: string
+  rank?: number
+}
+
 interface TranscriptEntry {
   kind: string
   ts?: number
@@ -57,6 +76,14 @@ interface TranscriptEntry {
   node_id?: string
   tool?: string
   args?: Record<string, unknown>
+  /** Set by server-side transcript builder for web-search / web-fetch tool
+   *  calls. Presence triggers the SourceCard renderer instead of the generic
+   *  tool chip. Absence = parse failure or tool didn't produce sources. */
+  sources?: ChatSource[]
+  /** Set alongside sources — we allow non-depth-0 tool calls for these
+   *  specific tools because research happens in sub-agents but users still
+   *  want to see "what was searched / fetched" in the main chat. */
+  depth?: number
 }
 
 interface SessionSummary {
@@ -123,6 +150,15 @@ type ChatItem =
       summary: string
     }
   | {
+      // web-search / web-fetch rendered as a Claude-style source card:
+      // collapsed header + stacked rows with favicon + title + domain.
+      kind: 'sources'
+      id: string
+      author: string
+      variant: 'search' | 'fetch'
+      sources: ChatSource[]
+    }
+  | {
       // 2+ consecutive tool steps fold into one expandable bar. Rendered as
       // "진행 내역 N개 ∨" when collapsed, expands into the original tool
       // chip list when clicked. Prevents long research turns from burying
@@ -139,6 +175,73 @@ type ChatItem =
       agentRole?: string
     }
   | { kind: 'error'; id: string; text: string }
+
+/** Has the server recorded this pending user message? We match by text AND
+ *  by timestamp — a retyped duplicate ("hi" twice in the same chat) must
+ *  NOT be dedup'd against the earlier entry, or the optimistic bubble
+ *  vanishes until the refetch lands. The transcript carries `ts` in seconds,
+ *  so convert and give a couple-second buffer for clock skew between the
+ *  client that stamped createdAt and the server that stamped ts. */
+function isPendingConfirmed(
+  summary: SessionSummary,
+  pending: { text: string; createdAt: number },
+): boolean {
+  const wanted = pending.text.trim()
+  if (!wanted) return true
+  const cutoffMs = pending.createdAt - 2000
+  // goal is the FIRST user message; it shares the session's started_at.
+  // `started_at` is already in ms (unlike transcript event `ts`, which is
+  // seconds) — don't re-scale it.
+  if (summary.goal && summary.goal.trim() === wanted) {
+    if (summary.started_at >= cutoffMs) return true
+  }
+  for (const e of summary.transcript) {
+    if (e.kind !== 'user_message' && e.kind !== 'goal') continue
+    if (String(e.text ?? '').trim() !== wanted) continue
+    const tsMs = typeof e.ts === 'number' ? e.ts * 1000 : 0
+    if (tsMs >= cutoffMs) return true
+  }
+  return false
+}
+
+/** Normalise a URL down to `host + path` so we can compare a URL the Lead
+ *  wrote in prose against the URLs actually fetched this session. We drop
+ *  scheme, `www.` prefix, trailing slash, query string, fragment — things
+ *  the model routinely varies without meaning to reference a different page.
+ *  `apple.com/investor` and `https://www.apple.com/investor/` collapse to
+ *  the same key; `apple.com/investor-relations` stays distinct (correctly). */
+function normalizeUrlForVerification(raw: string): string {
+  try {
+    const u = new URL(raw)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return ''
+    const host = u.hostname.replace(/^www\./i, '').toLowerCase()
+    const path = u.pathname.replace(/\/$/, '')
+    return `${host}${path}`
+  } catch {
+    return ''
+  }
+}
+
+/** Collect every URL this session's workers actually web-searched or
+ *  web-fetched — the "verified" set. Links in assistant prose that DON'T
+ *  match any entry here are almost certainly hallucinated paths, and get
+ *  a warning indicator in the UI. */
+function collectVerifiedUrls(items: ChatItem[]): Set<string> {
+  const out = new Set<string>()
+  for (const it of items) {
+    if (it.kind !== 'sources') continue
+    for (const s of it.sources) {
+      const key = normalizeUrlForVerification(s.url)
+      if (key) out.add(key)
+    }
+  }
+  return out
+}
+
+/** Context carrying the per-session set of verified URLs down to the
+ *  Markdown component's custom `a` renderer. Defaults to an empty set so
+ *  Markdown outside a chat (if any) behaves as "trust by default". */
+const VerifiedUrlsContext = createContext<Set<string>>(new Set())
 
 function summarizeTool(
   e: TranscriptEntry,
@@ -239,7 +342,22 @@ function buildChat(
         )
         break
       }
-      case 'tool_call':
+      case 'tool_call': {
+        const tool = e.tool ?? ''
+        if (
+          (tool === 'web-search' || tool === 'web-fetch') &&
+          Array.isArray(e.sources) &&
+          e.sources.length > 0
+        ) {
+          out.push({
+            kind: 'sources',
+            id,
+            author: agentLabel(team, e.node_id, e.agent_role ?? 'agent'),
+            variant: tool === 'web-search' ? 'search' : 'fetch',
+            sources: e.sources,
+          })
+          break
+        }
         out.push({
           kind: 'tool',
           id,
@@ -247,6 +365,7 @@ function buildChat(
           summary: summarizeTool(e, t),
         })
         break
+      }
       case 'ask_user':
         // Pending ask (if any) is rendered as a live inline card below, after
         // the base transcript loop. Already-answered asks don't need a
@@ -373,8 +492,14 @@ export function RunDetailPage() {
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [sending, setSending] = useState(false)
+  // Bumped by sendMessage after a successful POST so the stream effect re-runs
+  // and re-opens the SSE subscription. Idle sessions close the stream on
+  // `[DONE]`; without a reconnect hook, a follow-up message's events never
+  // reach the client and the optimistic bubble has nothing to resolve to
+  // until a manual page refresh.
+  const [streamEpoch, setStreamEpoch] = useState(0)
   const [pendingUserMessages, setPendingUserMessages] = useState<
-    { id: string; text: string }[]
+    { id: string; text: string; createdAt: number }[]
   >(() => {
     // Seed from NewChatPage handoff: the user's first message was typed there
     // but the session only exists now. Without this, the bubble briefly
@@ -385,7 +510,9 @@ export function RunDetailPage() {
       const text = sessionStorage.getItem(key)
       if (text) {
         sessionStorage.removeItem(key)
-        return [{ id: `handoff-${Date.now()}`, text }]
+        // createdAt=0 so the goal event (which has ts ≈ session started_at
+        // before this seed was created) still dedup's this handoff bubble.
+        return [{ id: `handoff-${Date.now()}`, text, createdAt: 0 }]
       }
     } catch {
       /* sessionStorage unavailable */
@@ -529,7 +656,7 @@ export function RunDetailPage() {
       if (refetchTimer) clearTimeout(refetchTimer)
       if (es) es.close()
     }
-  }, [id])
+  }, [id, streamEpoch])
 
   // 드래프트/세션 분리 이후 session 은 sessions store 의 1급 레코드로 관리됨.
   // 이 화면의 데이터 소스는 서버 summary — task 참조는 오직 화면 컨텍스트
@@ -602,18 +729,13 @@ export function RunDetailPage() {
       }))
     }
     const base = buildChat(summary, team, t)
-    // Drop pending bubbles whose text already appears as goal or user_message
-    // in the transcript — avoids duplicates once the server catches up.
-    const serverTexts = new Set<string>()
-    if (summary.goal) serverTexts.add(summary.goal.trim())
-    for (const e of summary.transcript) {
-      if (e.kind === 'user_message' || e.kind === 'goal') {
-        const t = String(e.text ?? '').trim()
-        if (t) serverTexts.add(t)
-      }
-    }
+    // Drop pending bubbles only when the server has recorded a matching
+    // user_message/goal AFTER the pending was created. Text-only dedup would
+    // silently eat the optimistic bubble whenever the user retyped the same
+    // message (e.g. "hi" twice) — collapsing to a ~1s gap until the refetch
+    // brought in the real transcript entry.
     for (const m of pendingUserMessages) {
-      if (serverTexts.has(m.text.trim())) continue
+      if (isPendingConfirmed(summary, m)) continue
       base.push({ kind: 'user', id: m.id, text: m.text, pending: true })
     }
     if (pendingAsk) {
@@ -628,20 +750,19 @@ export function RunDetailPage() {
     return base
   }, [summary, team, pendingUserMessages, pendingAsk, t])
 
+  // Every URL the session's workers actually web-searched or web-fetched —
+  // passed through context to the Markdown component so the `a` renderer
+  // can tag unverified links (i.e. links the Lead wrote in prose that the
+  // workers never touched) with a warning indicator. Recomputed only when
+  // the source set changes — NOT on every token stream tick.
+  const verifiedUrls = useMemo(() => collectVerifiedUrls(chat), [chat])
+
   // Once the server transcript catches up with a pending bubble, drop it
   // from state so it doesn't linger as a stale entry.
   useEffect(() => {
     if (!summary || pendingUserMessages.length === 0) return
-    const serverTexts = new Set<string>()
-    if (summary.goal) serverTexts.add(summary.goal.trim())
-    for (const e of summary.transcript) {
-      if (e.kind === 'user_message' || e.kind === 'goal') {
-        const t = String(e.text ?? '').trim()
-        if (t) serverTexts.add(t)
-      }
-    }
     const next = pendingUserMessages.filter(
-      (m) => !serverTexts.has(m.text.trim()),
+      (m) => !isPendingConfirmed(summary, m),
     )
     if (next.length !== pendingUserMessages.length) {
       setPendingUserMessages(next)
@@ -651,12 +772,16 @@ export function RunDetailPage() {
   async function sendMessage(raw: string) {
     const text = raw.trim()
     if (!text || !id || sending) return
-    const localId = `pending-${Date.now()}`
+    const now = Date.now()
+    const localId = `pending-${now}`
     // Force the optimistic bubble to paint this frame — otherwise React
     // batches these sets with the subsequent setSummary/refetch work and
     // the user perceives a ~1s gap before their message appears.
     flushSync(() => {
-      setPendingUserMessages((prev) => [...prev, { id: localId, text }])
+      setPendingUserMessages((prev) => [
+        ...prev,
+        { id: localId, text, createdAt: now },
+      ])
       setSending(true)
       setSendError(null)
     })
@@ -670,16 +795,16 @@ export function RunDetailPage() {
         },
       )
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      // Re-fetch summary so the pending message is replaced by the real
-      // transcript entry, and any new agent reply shows up.
-      const refreshed = await fetch(
-        `/api/sessions/${encodeURIComponent(id)}`,
-      )
-      if (refreshed.ok) {
-        const data = (await refreshed.json()) as SessionSummary
-        setSummary(data)
-      }
-      setPendingUserMessages((prev) => prev.filter((m) => m.id !== localId))
+      // POST returns as soon as the engine accepts the inbox push — the
+      // user_message event is written asynchronously moments later. Bump
+      // streamEpoch to force the SSE effect to tear down + re-subscribe, so
+      // the engine's events (user_message, tokens, agent_message) flow into
+      // this client even for a previously-idle session whose first stream
+      // closed on `[DONE]`. The scheduled refetches on each SSE frame will
+      // swap the optimistic bubble for the real transcript entry — do NOT
+      // remove it here, otherwise there's a visible gap between "POST ok"
+      // and "events actually persisted".
+      setStreamEpoch((n) => n + 1)
     } catch (e) {
       setSendError(e instanceof Error ? e.message : 'send failed')
       // Keep the optimistic bubble so the user can see what they tried to send.
@@ -771,6 +896,7 @@ export function RunDetailPage() {
         >
           <div className="flex-1 min-h-0 overflow-y-auto scrollbar-quiet">
             <div className="max-w-[760px] mx-auto px-6 pt-6 pb-4 space-y-4">
+              <VerifiedUrlsContext.Provider value={verifiedUrls}>
               {chat.map((item) => {
                 if (item.kind === 'ask') {
                   return (
@@ -786,6 +912,7 @@ export function RunDetailPage() {
                 }
                 return <ChatBubble key={item.id} item={item} />
               })}
+              </VerifiedUrlsContext.Provider>
               {running && (
                 <div className="flex items-center px-1 text-neutral-400">
                   <CircleNotch className="w-4 h-4 animate-spin" weight="bold" />
@@ -1103,6 +1230,108 @@ function ToolGroupBar({
   )
 }
 
+/** Source card for web-search (10 collapsed rows) / web-fetch (single row).
+ *  Mirrors Claude's "웹 검색됨 · 결과 N개" pattern: collapsed header with an
+ *  icon + label + count badge, expandable into a list of favicon-titled rows
+ *  each linking to the source URL in a new tab. */
+function SourceCard({
+  variant,
+  sources,
+}: {
+  variant: 'search' | 'fetch'
+  sources: ChatSource[]
+}) {
+  const t = useT()
+  // Fetch is a single row — always "expanded". Search collapses by default;
+  // the count badge signals how many are hidden.
+  const collapsible = variant === 'search' && sources.length > 1
+  const [expanded, setExpanded] = useState(!collapsible)
+  const label = t(
+    variant === 'search'
+      ? 'session.sources.searchLabel'
+      : 'session.sources.fetchLabel',
+  )
+  const count = sources.length
+  const Icon = variant === 'search' ? MagnifyingGlass : Globe
+  return (
+    <div className="px-4">
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-900/40 overflow-hidden">
+        {collapsible ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100/50 dark:hover:bg-neutral-900/60 transition-colors"
+          >
+            <Icon className="w-3.5 h-3.5 shrink-0 opacity-70" />
+            <span className="font-medium">{label}</span>
+            <span className="text-[11.5px] text-neutral-400 dark:text-neutral-500 ml-auto mr-1">
+              {t('session.sources.count', { count })}
+            </span>
+            <CaretDown
+              className={`w-3 h-3 transition-transform duration-150 ${
+                expanded ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+        ) : (
+          <div className="flex items-center gap-2 px-3 py-2 text-[13px] text-neutral-600 dark:text-neutral-300">
+            <Icon className="w-3.5 h-3.5 shrink-0 opacity-70" />
+            <span className="font-medium">{label}</span>
+          </div>
+        )}
+        {expanded && (
+          <ul className="divide-y divide-neutral-200/70 dark:divide-neutral-800/70">
+            {sources.map((s, i) => (
+              <li key={`${i}-${s.url}`}>
+                <a
+                  href={s.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2.5 px-3 py-2 hover:bg-neutral-100/60 dark:hover:bg-neutral-900/60 transition-colors"
+                >
+                  <SourceFavicon domain={s.domain} />
+                  <span className="text-[13px] text-neutral-800 dark:text-neutral-200 truncate flex-1 min-w-0">
+                    {s.title}
+                  </span>
+                  <span className="text-[11.5px] text-neutral-400 dark:text-neutral-500 shrink-0 max-w-[40%] truncate">
+                    {s.domain}
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** 16px favicon with a graceful fallback (grey globe) when the image
+ *  doesn't load — some domains block Google's favicon service or have
+ *  none at all. */
+function SourceFavicon({ domain }: { domain: string }) {
+  const [failed, setFailed] = useState(false)
+  if (!domain || failed) {
+    return (
+      <span className="w-4 h-4 shrink-0 rounded-sm bg-neutral-200 dark:bg-neutral-800 flex items-center justify-center">
+        <Globe className="w-2.5 h-2.5 text-neutral-400" />
+      </span>
+    )
+  }
+  return (
+    <img
+      src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`}
+      alt=""
+      width={16}
+      height={16}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="w-4 h-4 shrink-0 rounded-sm"
+    />
+  )
+}
+
 function EmptyNote({ children }: { children: ReactNode }) {
   return (
     <div className="text-[12.5px] text-neutral-400 leading-relaxed">
@@ -1307,7 +1536,28 @@ const Composer = memo(function Composer({
   )
 })
 
+/** Inline placeholder rendered when the Lead cites a URL that wasn't
+ *  actually fetched or searched this session. We don't show the raw URL
+ *  (it's dead-end traffic for the user — often 404) and we don't warn
+ *  prominently either — we quietly redact it with a muted marker so the
+ *  surrounding markdown structure (bullet lists, numbered lists) stays
+ *  intact. Tooltip explains for curious users. */
+function UnverifiedUrlRedacted() {
+  const t = useT()
+  return (
+    <span
+      title={t('session.links.unverifiedTitle')}
+      aria-label={t('session.links.unverifiedTitle')}
+      className="text-neutral-400 dark:text-neutral-500 italic cursor-help select-none text-[13px]"
+    >
+      [{t('session.links.unverifiedShort')}]
+    </span>
+  )
+}
+
 const Markdown = memo(function MarkdownInner({ text }: { text: string }) {
+  const verifiedUrls = useContext(VerifiedUrlsContext)
+  const t = useT()
   // Terse chat-friendly prose styling. Headings are dialed down (h1/h2 look
   // oversized in a bubble), lists keep their markers, code blocks get a
   // subtle surface, links are underlined on hover.
@@ -1365,6 +1615,49 @@ const Markdown = memo(function MarkdownInner({ text }: { text: string }) {
             // as plain prose text.
             if (href && href.startsWith('artifact://')) {
               return <span>{children}</span>
+            }
+            // http(s) link verification: compare the href against URLs the
+            // workers actually web-fetched/web-searched this session. If the
+            // href's host+path doesn't match any entry in the verified set,
+            // the Lead likely hallucinated it (observed production bug —
+            // bare-domain / guessed-path citations in session d5407a19).
+            // Internal/non-http hrefs bypass the check entirely.
+            const isHttp =
+              typeof href === 'string' &&
+              (href.startsWith('http://') || href.startsWith('https://'))
+            const hrefKey = isHttp ? normalizeUrlForVerification(href) : ''
+            const isUnverified =
+              isHttp &&
+              verifiedUrls.size > 0 &&
+              hrefKey !== '' &&
+              !verifiedUrls.has(hrefKey)
+            if (isUnverified) {
+              // Redact: unverified URLs are almost always dead ends for the
+              // reader (404 / nxdomain). If the link has a meaningful label
+              // different from the URL, keep the label as plain text so the
+              // prose still reads. If the label IS the URL (bare citation),
+              // swap in a muted "[unverified · redacted]" placeholder so
+              // list structure survives but the broken URL isn't offered.
+              const label = Array.isArray(children) ? children : [children]
+              const asString = label
+                .map((c) => (typeof c === 'string' ? c : ''))
+                .join('')
+                .trim()
+              const labelIsBareUrl =
+                asString.length > 0 &&
+                (asString === href ||
+                  (isHttp && normalizeUrlForVerification(asString) === hrefKey))
+              if (labelIsBareUrl || asString.length === 0) {
+                return <UnverifiedUrlRedacted />
+              }
+              return (
+                <span
+                  className="text-neutral-600 dark:text-neutral-400"
+                  title={t('session.links.unverifiedTitle')}
+                >
+                  {children}
+                </span>
+              )
             }
             return (
               <a
@@ -1535,6 +1828,9 @@ const ChatBubble = memo(
   if (item.kind === 'tool_group') {
     return <ToolGroupBar group={item} />
   }
+  if (item.kind === 'sources') {
+    return <SourceCard variant={item.variant} sources={item.sources} />
+  }
   if (item.kind === 'ask') {
     // Handled inline at the map site where submit/skip callbacks live.
     return null
@@ -1582,6 +1878,14 @@ const ChatBubble = memo(
       if (a.items.length !== b.items.length) return false
       for (let i = 0; i < a.items.length; i++) {
         if (a.items[i]!.summary !== b.items[i]!.summary) return false
+      }
+      return true
+    }
+    if (a.kind === 'sources' && b.kind === 'sources') {
+      if (a.variant !== b.variant) return false
+      if (a.sources.length !== b.sources.length) return false
+      for (let i = 0; i < a.sources.length; i++) {
+        if (a.sources[i]!.url !== b.sources[i]!.url) return false
       }
       return true
     }

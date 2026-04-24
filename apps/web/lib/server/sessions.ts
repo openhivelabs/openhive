@@ -522,12 +522,114 @@ export function backfillTranscripts(): number {
 
 // ---------- transcript helper ----------
 
+/** Shape rendered by `SourceCard` in the chat UI. Kept flat + JSON-serialisable
+ *  because it travels through the transcript → SessionSummary → client. */
+export interface TranscriptSource {
+  title: string
+  url: string
+  domain: string
+  snippet?: string
+  rank?: number
+}
+
+/** Parse the JSON body of a `tool_result` for web-search / web-fetch and
+ *  return a normalised source list. Returns `null` if parse fails or the
+ *  shape is unexpected — caller falls back to a plain tool chip. */
+function extractSources(
+  toolName: string,
+  resultEvent: StoredEventRow,
+): TranscriptSource[] | null {
+  const content = resultEvent.data.content
+  if (typeof content !== 'string' || !content.trim()) return null
+  // The skillTool handler wraps skill stdout in
+  // `{ok, exit_code, stdout, stderr, files}` — the interesting body is in
+  // `stdout`. Some older/custom paths put the payload directly. Handle both.
+  let body: unknown
+  try {
+    body = JSON.parse(content)
+  } catch {
+    return null
+  }
+  let payload: unknown = body
+  if (body && typeof body === 'object' && 'stdout' in (body as Record<string, unknown>)) {
+    const stdout = (body as Record<string, unknown>).stdout
+    if (typeof stdout === 'string' && stdout.trim()) {
+      try {
+        payload = JSON.parse(stdout)
+      } catch {
+        return null
+      }
+    }
+  }
+  if (!payload || typeof payload !== 'object') return null
+  const p = payload as Record<string, unknown>
+  if (p.ok === false) return null
+
+  if (toolName === 'web-search') {
+    const results = p.results
+    if (!Array.isArray(results)) return null
+    const out: TranscriptSource[] = []
+    for (const r of results) {
+      if (!r || typeof r !== 'object') continue
+      const rr = r as Record<string, unknown>
+      const url = typeof rr.url === 'string' ? rr.url : ''
+      const title = typeof rr.title === 'string' ? rr.title : ''
+      if (!url || !title) continue
+      out.push({
+        title,
+        url,
+        domain: typeof rr.domain === 'string' ? rr.domain : domainFromUrl(url),
+        snippet: typeof rr.snippet === 'string' ? rr.snippet : undefined,
+        rank: typeof rr.rank === 'number' ? rr.rank : undefined,
+      })
+    }
+    return out.length > 0 ? out : null
+  }
+
+  if (toolName === 'web-fetch') {
+    const url = typeof p.url === 'string' ? p.url : ''
+    if (!url) return null
+    const title =
+      typeof p.title === 'string' && p.title.trim()
+        ? p.title
+        : domainFromUrl(url) || url
+    const contentStr = typeof p.content === 'string' ? p.content : ''
+    return [
+      {
+        title,
+        url,
+        domain: domainFromUrl(url),
+        snippet: contentStr ? contentStr.slice(0, 160) : undefined,
+      },
+    ]
+  }
+
+  return null
+}
+
+function domainFromUrl(raw: string): string {
+  try {
+    const u = new URL(raw)
+    return u.hostname.replace(/^www\./i, '').toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
 export function buildTranscript(
   goal: string,
   startedAt: number,
   events: StoredEventRow[],
 ): Record<string, unknown>[] {
   const lines: Record<string, unknown>[] = [{ kind: 'goal', text: goal, ts: startedAt / 1000 }]
+  // Pre-index tool_result events by tool_call_id so we can attach parsed
+  // sources to the corresponding tool_call entry without an O(n^2) scan.
+  const resultByCallId = new Map<string, StoredEventRow>()
+  for (const ev of events) {
+    if (ev.kind === 'tool_result' && ev.tool_call_id) {
+      resultByCallId.set(ev.tool_call_id, ev)
+    }
+  }
   for (const ev of events) {
     if (ev.kind === 'user_question') {
       lines.push({
@@ -541,15 +643,27 @@ export function buildTranscript(
     } else if (ev.kind === 'user_message') {
       // Follow-up user message in an ongoing chat session.
       lines.push({ kind: 'user_message', ts: ev.ts, text: ev.data.text })
-    } else if (ev.kind === 'tool_called' && ev.depth === 0) {
-      // Only Lead-level tool calls make it into the chat. Sub-agent tool
-      // calls live in events.jsonl for the thinking-process view.
+    } else if (ev.kind === 'tool_called') {
+      // Lead-level (depth=0) tool calls always surface. Sub-agent tool calls
+      // normally stay in events.jsonl only, EXCEPT for `web-search` and
+      // `web-fetch` — these are information-gathering steps the user wants
+      // visible even when a sub-agent did them. Both paths attach parsed
+      // `sources` when the tool is a web one.
+      const isWeb =
+        ev.tool_name === 'web-search' || ev.tool_name === 'web-fetch'
+      if (ev.depth !== 0 && !isWeb) continue
+      const result =
+        isWeb && ev.tool_call_id ? resultByCallId.get(ev.tool_call_id) : null
+      const sources =
+        isWeb && result ? extractSources(ev.tool_name ?? '', result) : null
       lines.push({
         kind: 'tool_call',
         ts: ev.ts,
         node_id: ev.node_id,
         tool: ev.tool_name,
         args: ev.data.arguments,
+        sources: sources ?? undefined,
+        depth: ev.depth,
       })
     } else if (ev.kind === 'node_finished' && ev.depth === 0) {
       // Only Lead (depth=0) turns surface as assistant messages in the chat.

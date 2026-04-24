@@ -48,7 +48,10 @@ export const MICROCOMPACT_MIN_CHARS = (() => {
  *  (A3) — its output is a snapshot of a session-local file; if the LLM
  *  needs the content again it can just call the tool again. */
 export const COMPACTABLE_BUILTIN = new Set<string>([
-  'web_fetch',
+  // Typed skills (kebab-case): read-only networked calls whose bodies bloat
+  // history; safe to compact because the skill re-runs cheaply with cache.
+  'web-fetch',
+  'web-search',
   'sql_query',
   'read_skill_file',
   'run_skill_script', // special-cased below — files[] preserved

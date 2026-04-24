@@ -90,13 +90,16 @@ providers.post('/:providerId/connect/start', async (c) => {
   if (!getProvider(providerId)) {
     return c.json({ detail: 'unknown provider' }, 404)
   }
-  // Build the callback URI from the current request origin. Matches the Python
-  // side which used `request.base_url` — so redirect URIs consistently point
-  // at the host the browser reached, whatever port/hostname that is.
-  const origin = new URL(c.req.url).origin
-  const callbackUri = `${origin}/api/providers/oauth/callback`
+  // Pass the request origin; orchestrator decides the path per provider
+  // (Claude `/callback`, Codex `/auth/callback`) to match the paths their
+  // shared CLI client_ids expect. `127.0.0.1` in the raw url → normalise
+  // to `localhost` because Anthropic/OpenAI whitelists the hostname
+  // `localhost`, not the IP literal.
+  const raw = new URL(c.req.url)
+  const host = raw.hostname === '127.0.0.1' ? 'localhost' : raw.hostname
+  const origin = `${raw.protocol}//${host}${raw.port ? `:${raw.port}` : ''}`
   try {
-    return c.json(await startConnect(providerId, callbackUri))
+    return c.json(await startConnect(providerId, origin))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ detail: message }, 400)

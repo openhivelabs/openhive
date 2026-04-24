@@ -33,6 +33,10 @@ export type EventKind =
   | 'turn.blocked'
   | 'turn.round_limit'
   | 'autocompact.disabled'
+  // Round-level observability (multi-round tool-calling turns)
+  | 'round_started'
+  | 'round_finished'
+  | 'provider.empty_round'
   // A2 — lifecycle hooks
   | 'hook.invoked'
   // S3 — parallel fork
