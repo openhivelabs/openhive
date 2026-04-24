@@ -82,7 +82,7 @@ export async function listMcpCatalog(): Promise<CatalogServer[]> {
   const out: CatalogServer[] = []
   for (const [id, cfg] of Object.entries(servers)) {
     const label = String(cfg.label ?? id)
-    const connected = status[id]?.connected === true
+    const connected = status[id]?.running === true
     let tools: CatalogTool[] = []
     let error: string | null = null
     try {

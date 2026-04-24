@@ -30,7 +30,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { decrypt, encrypt } from './crypto'
 import { dataDir } from './paths'
-import { getToken } from './tokens'
+import { loadToken } from './tokens'
 
 export type CredentialKind = 'api_key' | 'oauth'
 
@@ -121,7 +121,7 @@ export function getCredentialValue(refId: string): string | null {
     }
   }
   if (entry.kind === 'oauth' && entry.provider) {
-    const token = getToken(entry.provider)
+    const token = loadToken(entry.provider)
     return token?.access_token ?? null
   }
   return null

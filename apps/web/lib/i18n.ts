@@ -473,8 +473,7 @@ const en: Dict = {
   'settings.data.location': 'Storage location',
   'settings.data.locationHint': 'All workspace data lives under this path.',
   'settings.data.export': 'Backup',
-  'settings.data.exportHint':
-    'Download a portable archive of your workspace. Secrets (encryption key, OAuth tokens) are excluded — keep them separately.',
+  'settings.data.exportHint': 'Export workspace as .tar.gz. Secrets excluded.',
   'settings.data.exportButton': 'Download backup',
   'settings.data.exportPreparing': 'Preparing…',
   'settings.about.header': 'About',
@@ -1083,8 +1082,7 @@ const ko: Dict = {
   'settings.data.location': '저장 위치',
   'settings.data.locationHint': '모든 워크스페이스 데이터가 이 경로에 저장됩니다.',
   'settings.data.export': '백업',
-  'settings.data.exportHint':
-    '워크스페이스 전체를 아카이브로 다운로드합니다. 시크릿(암호화 키·OAuth 토큰)은 제외되니 별도로 보관하세요.',
+  'settings.data.exportHint': '워크스페이스를 .tar.gz 로 내보냅니다. 시크릿 제외.',
   'settings.data.exportButton': '백업 다운로드',
   'settings.data.exportPreparing': '준비 중…',
   'settings.about.header': '정보',
