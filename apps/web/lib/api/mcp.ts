@@ -108,3 +108,72 @@ export async function testDraft(args: {
   })
   return jsonOrThrow(res)
 }
+
+// -------- AI-generated user MCP servers --------
+
+export interface UserMcpCredentialSpec {
+  ref_id: string
+  env_name: string
+  purpose: string
+}
+
+export interface UserMcpToolSpec {
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+  side_effects: 'read' | 'write'
+}
+
+export interface UserMcpManifest {
+  name: string
+  description: string
+  allowed_hosts: string[]
+  required_credentials: UserMcpCredentialSpec[]
+  tools: UserMcpToolSpec[]
+}
+
+export interface UserMcpSummary {
+  name: string
+  manifest: UserMcpManifest
+  installed_at: number
+  approved: boolean
+}
+
+export interface UserMcpFullRecord extends UserMcpSummary {
+  code: string
+  approved_hash: string | null
+}
+
+export async function fetchUserServers(): Promise<UserMcpSummary[]> {
+  const res = await fetch('/api/mcp/user')
+  return jsonOrThrow(res)
+}
+
+export async function fetchUserServer(name: string): Promise<UserMcpFullRecord> {
+  const res = await fetch(`/api/mcp/user/${encodeURIComponent(name)}`)
+  return jsonOrThrow(res)
+}
+
+export async function approveUserServer(name: string): Promise<void> {
+  await jsonOrThrow(
+    await fetch(`/api/mcp/user/${encodeURIComponent(name)}/approve`, { method: 'POST' }),
+  )
+}
+
+export async function deleteUserServer(name: string): Promise<void> {
+  await jsonOrThrow(
+    await fetch(`/api/mcp/user/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  )
+}
+
+export async function generateUserServer(args: {
+  manifest: UserMcpManifest
+  code: string
+}): Promise<{ name: string }> {
+  const res = await fetch('/api/mcp/user/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+  })
+  return jsonOrThrow(res)
+}

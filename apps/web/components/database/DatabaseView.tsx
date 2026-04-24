@@ -259,7 +259,7 @@ export function DatabaseView() {
   return (
     <div className="h-full flex flex-col bg-white dark:bg-neutral-950">
       {/* Top header — spans the full width above sidebar + table body */}
-      <div className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-6 py-2.5 min-h-[53px] flex flex-col justify-center">
+      <div className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-3 py-2.5 min-h-[53px] flex flex-col justify-center">
         {selectedTable && rows ? (
           <>
             <div className="flex items-center gap-2">
@@ -337,7 +337,7 @@ export function DatabaseView() {
       </div>
 
       {error && (
-        <div className="mx-6 mt-3 rounded-md border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-300 text-[12px] px-3 py-2 font-mono">
+        <div className="mx-3 mt-3 rounded-md border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-300 text-[12px] px-3 py-2 font-mono">
           {error}
         </div>
       )}
@@ -455,7 +455,7 @@ export function DatabaseView() {
               const totalPages = Math.max(1, Math.ceil(rows.total / PAGE_SIZE))
               if (totalPages <= 1) return null
               return (
-                <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-800 px-6 h-10 flex items-center justify-between gap-3">
+                <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-800 px-3 h-10 flex items-center justify-between gap-3">
                   <span className="text-[11.5px] text-neutral-400">
                     {(filters.length > 0 || sortRules.length > 0) &&
                       t('records.db.filterPageHint')}

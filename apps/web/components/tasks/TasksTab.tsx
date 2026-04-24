@@ -490,7 +490,7 @@ export function TasksTab() {
             <button
               type="button"
               onClick={() => setShowNew(true)}
-              className="inline-flex items-center justify-center gap-1 text-[13px] bg-neutral-900 text-white px-2 py-1.5 rounded-sm hover:bg-neutral-800"
+              className="inline-flex items-center justify-center gap-1 h-[34px] px-[20px] text-[13px] leading-none bg-neutral-900 text-white rounded-sm hover:bg-neutral-800"
             >
               <Plus weight="bold" className="w-3.5 h-3.5" />
               {t('tasks.newTask')}
@@ -499,7 +499,7 @@ export function TasksTab() {
               type="button"
               onClick={goNewChat}
               disabled={!team}
-              className="inline-flex items-center justify-center gap-1 text-[13px] border border-neutral-300 dark:border-neutral-700 text-neutral-800 dark:text-neutral-100 px-2 py-1.5 rounded-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="inline-flex items-center justify-center gap-1 h-[34px] px-[20px] text-[13px] leading-none border border-neutral-300 dark:border-neutral-700 text-neutral-800 dark:text-neutral-100 rounded-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <ChatCircle weight="regular" className="w-3.5 h-3.5" />
               {t('tasks.newChat')}

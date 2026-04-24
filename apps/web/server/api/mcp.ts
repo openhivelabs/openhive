@@ -7,6 +7,13 @@ import {
 } from '@/lib/server/mcp/config'
 import { getTools, restart, statusSnapshot, testConnection } from '@/lib/server/mcp/manager'
 import { getPreset, listPresets, materialise } from '@/lib/server/mcp/presets'
+import {
+  approveUserServer,
+  deleteUserServer,
+  installUserServer,
+  listUserServers,
+  loadUserServer,
+} from '@/lib/server/mcp/user-servers'
 import { Hono } from 'hono'
 
 export const mcp = new Hono()
@@ -159,6 +166,70 @@ interface TestBody {
   preset_id?: string | null
   inputs?: Record<string, string> | null
 }
+
+// -------- AI-generated user MCP servers --------
+
+// GET /api/mcp/user — list installed user servers (approved + pending)
+mcp.get('/user', (c) =>
+  c.json(
+    listUserServers().map((r) => ({
+      name: r.name,
+      manifest: r.manifest,
+      installed_at: r.installed_at,
+      approved: r.approved,
+      // intentionally omit raw code here — fetched separately on demand
+    })),
+  ),
+)
+
+// GET /api/mcp/user/:name — full record including code (for approval review UI)
+mcp.get('/user/:name', (c) => {
+  const name = c.req.param('name')
+  const rec = loadUserServer(name)
+  if (!rec) return c.json({ detail: 'not found' }, 404)
+  return c.json(rec)
+})
+
+interface GenerateBody {
+  manifest?: unknown
+  code?: unknown
+}
+
+// POST /api/mcp/user/generate — AI (or manual) installs a server. Not yet approved.
+mcp.post('/user/generate', async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as GenerateBody
+  try {
+    const rec = installUserServer({
+      manifest: body.manifest,
+      code: typeof body.code === 'string' ? body.code : '',
+    })
+    return c.json({ ok: true, name: rec.name, approved: false })
+  } catch (err) {
+    return c.json({ detail: err instanceof Error ? err.message : String(err) }, 400)
+  }
+})
+
+// POST /api/mcp/user/:name/approve — user review passed, register in mcp.yaml
+mcp.post('/user/:name/approve', async (c) => {
+  const name = c.req.param('name')
+  try {
+    const rec = approveUserServer(name)
+    await restart(name)
+    return c.json({ ok: true, name: rec.name, approved: rec.approved })
+  } catch (err) {
+    return c.json({ detail: err instanceof Error ? err.message : String(err) }, 400)
+  }
+})
+
+// DELETE /api/mcp/user/:name — remove files + yaml entry
+mcp.delete('/user/:name', async (c) => {
+  const name = c.req.param('name')
+  await restart(name)
+  if (!deleteUserServer(name)) {
+    return c.json({ detail: 'not found' }, 404)
+  }
+  return c.json({ ok: true })
+})
 
 // POST /api/mcp/test
 mcp.post('/test', async (c) => {

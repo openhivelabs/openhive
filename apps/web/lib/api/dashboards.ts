@@ -1,4 +1,14 @@
-export type PanelType = 'kpi' | 'table' | 'kanban' | 'chart' | 'activity' | 'note' | 'list'
+export type PanelType =
+  | 'kpi'
+  | 'table'
+  | 'kanban'
+  | 'chart'
+  | 'activity'
+  | 'note'
+  | 'list'
+  | 'timeline'
+  | 'markdown'
+  | 'metric_grid'
 
 /** Where a block's data comes from. The shape inside `config` varies by kind:
  *   - mcp:        { server, tool, args }
@@ -103,6 +113,28 @@ export interface PanelMap {
   /** Cell click action: what happens when the user clicks a row/card/list item.
    *  Applies to table rows, kanban cards, list items. No effect on kpi/chart. */
   on_click?: CellAction
+  /** Timeline: dotted path in each row for the event timestamp. Accepts number
+   *  (unix ms / s) or ISO string. */
+  ts?: string
+  /** Timeline: dotted path in each row for the event kind/category. Used for
+   *  a subtle chip color in the renderer. */
+  kind?: string
+  /** Markdown: either a dotted path into raw (picks the first row's field) or
+   *  a literal string. If omitted, the raw source is stringified. */
+  text?: string
+  /** Metric grid: each cell is its own KPI computed over the (filtered) rows. */
+  cells?: MetricGridCellSpec[]
+}
+
+export interface MetricGridCellSpec {
+  label: string
+  aggregate?: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'first'
+  field?: string
+  /** Per-cell row filter expression (same grammar as PanelMap.filter). */
+  filter?: string
+  hint?: string
+  /** Optional dotted path into raw for a delta indicator ("+12%" etc). */
+  delta_field?: string
 }
 
 /** A Cell is an interactive unit inside a Panel (a table row, kanban card, list

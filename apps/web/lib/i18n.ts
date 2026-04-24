@@ -579,6 +579,8 @@ const en: Dict = {
   'panel.error': 'Error',
   'panel.shapeChanged': 'Upstream response structure changed — mapper may be outdated.',
   'panel.shapeChangedShort': 'schema drift',
+  'panel.err.noTable': '"{name}" table does not exist yet',
+  'panel.err.noColumn': '"{name}" column does not exist yet',
   // action modal + confirm
   'action.irreversibleWarning': 'This action cannot be undone once it runs.',
   'action.irreversibleConfirm': 'Run "{label}"? This cannot be undone.',
@@ -1189,6 +1191,8 @@ const ko: Dict = {
   'panel.error': '오류',
   'panel.shapeChanged': '소스 응답 구조가 변경됨 — 매퍼가 더 이상 맞지 않을 수 있어요.',
   'panel.shapeChangedShort': '스키마 변경',
+  'panel.err.noTable': '"{name}" 테이블이 아직 없어요',
+  'panel.err.noColumn': '"{name}" 컬럼이 아직 없어요',
   // action modal + confirm
   'action.irreversibleWarning': '이 작업은 실행 후 되돌릴 수 없어요.',
   'action.irreversibleConfirm': '"{label}" 실행할까요? 되돌릴 수 없어요.',

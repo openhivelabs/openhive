@@ -289,7 +289,7 @@ export function FileBrowser() {
   return (
     <div className="h-full flex flex-col bg-white dark:bg-neutral-950">
       {/* Toolbar */}
-      <header className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-6 py-2.5">
+      <header className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-3 py-2.5">
         <div className="flex items-center gap-3">
           <div className="group flex items-center gap-1 h-8 w-[320px] max-w-full pl-2.5 pr-2 rounded-md border bg-white dark:bg-neutral-900 border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 focus-within:border-neutral-400 dark:focus-within:border-neutral-600 transition-colors">
             <MagnifyingGlass className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
@@ -338,7 +338,7 @@ export function FileBrowser() {
       </header>
 
       {error && (
-        <div className="mx-6 mt-3 rounded-md border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-300 text-[12px] px-3 py-2">
+        <div className="mx-3 mt-3 rounded-md border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-300 text-[12px] px-3 py-2">
           {error}
         </div>
       )}
@@ -408,7 +408,7 @@ function GridView({
   onSelect: (a: ArtifactDetailed) => void
 }) {
   return (
-    <div className="px-6 py-5 space-y-5">
+    <div className="px-3 py-5 space-y-5">
       {buckets.map((b) => (
         <section key={bucketKeyId(b.key)}>
           <BucketHeading bucket={b} />

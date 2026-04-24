@@ -17,10 +17,21 @@ import { useT } from '@/lib/i18n'
  * gets fernet-encrypted on disk. The key value is never returned from the
  * server after save — this page only lists metadata.
  */
+function prefillFromUrl(): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const p = new URLSearchParams(window.location.search)
+    return p.get('prefill_ref')
+  } catch {
+    return null
+  }
+}
+
 export function CredentialsSection() {
   const t = useT()
   const [rows, setRows] = useState<CredentialMeta[] | null>(null)
   const [adding, setAdding] = useState(false)
+  const [prefill, setPrefill] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
@@ -33,6 +44,11 @@ export function CredentialsSection() {
 
   useEffect(() => {
     void reload()
+    const pre = prefillFromUrl()
+    if (pre) {
+      setPrefill(pre)
+      setAdding(true)
+    }
   }, [reload])
 
   const onDelete = async (ref: string) => {
@@ -101,9 +117,14 @@ export function CredentialsSection() {
         </button>
       ) : (
         <AddForm
-          onCancel={() => setAdding(false)}
+          initialRefId={prefill ?? ''}
+          onCancel={() => {
+            setAdding(false)
+            setPrefill(null)
+          }}
           onAdded={async () => {
             setAdding(false)
+            setPrefill(null)
             await reload()
           }}
           onError={setError}
@@ -121,13 +142,15 @@ function AddForm({
   onAdded,
   onCancel,
   onError,
+  initialRefId,
 }: {
   onAdded: () => void
   onCancel: () => void
   onError: (msg: string) => void
+  initialRefId?: string
 }) {
   const t = useT()
-  const [refId, setRefId] = useState('')
+  const [refId, setRefId] = useState(initialRefId ?? '')
   const [value, setValue] = useState('')
   const [label, setLabel] = useState('')
   const [submitting, setSubmitting] = useState(false)

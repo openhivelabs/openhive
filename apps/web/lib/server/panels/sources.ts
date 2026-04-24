@@ -11,7 +11,8 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { getCredentialValue } from '../credentials'
+import { getCredentialMeta, getCredentialValue } from '../credentials'
+import { getServer as getMcpServer } from '../mcp/config'
 import { callTool as mcpCallTool } from '../mcp/manager'
 import { dataDir, teamDir } from '../paths'
 import { runQuery } from '../team-data'
@@ -62,6 +63,10 @@ export async function execute(
     throw new SourceError('source.config must be an object')
   }
 
+  // Pre-execute validation — surface actionable errors before the request is
+  // dispatched so the panel shows a clear "you need to do X" message.
+  validateSpec(spec, config)
+
   switch (spec.kind) {
     case 'mcp':
       return execMcp(config)
@@ -79,6 +84,31 @@ export async function execute(
       return config.value
     default:
       throw new SourceError(`unknown source kind: ${JSON.stringify(spec.kind)}`)
+  }
+}
+
+// -------- pre-execute validation --------
+
+function validateSpec(spec: SourceSpec, config: Record<string, unknown>): void {
+  // Credential presence — check vault *before* the HTTP call so the panel
+  // renders a clear setup message instead of a 401 from the upstream.
+  if (spec.auth_ref) {
+    const meta = getCredentialMeta(spec.auth_ref)
+    if (!meta) {
+      throw new SourceError(
+        `missing credential: "${spec.auth_ref}". Add it in Settings → Credentials.`,
+      )
+    }
+  }
+
+  // MCP server must exist in mcp.yaml before we try to call it.
+  if (spec.kind === 'mcp') {
+    const serverName = String(config.server ?? '')
+    if (serverName && !getMcpServer(serverName)) {
+      throw new SourceError(
+        `MCP server "${serverName}" is not installed. Open Settings → MCP to add it.`,
+      )
+    }
   }
 }
 

@@ -1,0 +1,26 @@
+id: table-formatted-ledger
+name: 포맷 적용 테이블
+description: 컬럼별 포맷터 (money/date/badge/relative/boolean/percent) 를 지정해 가독성 있는 표.
+icon: "💱"
+category: general
+block:
+  type: table
+  colSpan: 2
+  rowSpan: 2
+  props:
+    column_formatters:
+      amount: money
+      created_at: date
+      status: badge
+binding_skeleton:
+  source:
+    kind: team_data
+    config:
+      sql: "SELECT id, name, amount, status, created_at FROM deals ORDER BY created_at DESC LIMIT 20"
+  map:
+    rows: "$.rows[*]"
+    columns: ["name", "amount", "status", "created_at"]
+  refresh_seconds: 60
+ai_prompts:
+  goal: "표 컬럼마다 포맷터를 붙여 보기 좋게. 통화 컬럼에 money, 시간 컬럼에 date/datetime/relative, 상태 컬럼에 badge."
+  requires: []

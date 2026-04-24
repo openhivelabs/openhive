@@ -1,0 +1,24 @@
+id: timeline-session-history
+name: 세션 기록 타임라인
+description: 현재 팀의 최근 작업/대화 세션을 시간순 타임라인으로 표시. 이벤트 유형별 칩.
+icon: "🕰️"
+category: general
+block:
+  type: timeline
+  colSpan: 2
+  rowSpan: 2
+  props: {}
+binding_skeleton:
+  source:
+    kind: team_data
+    config:
+      sql: "SELECT id, kind, title, created_at FROM session_events ORDER BY created_at DESC LIMIT 50"
+  map:
+    rows: "$.rows[*]"
+    ts: created_at
+    title: title
+    kind: kind
+  refresh_seconds: 60
+ai_prompts:
+  goal: "세션/작업/대화 이력 테이블을 타임라인으로. ts 에 시간 필드, title 에 주제, kind 에 이벤트 유형을 매핑."
+  requires: []

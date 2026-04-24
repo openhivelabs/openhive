@@ -1,0 +1,20 @@
+id: markdown-file-summary
+name: 파일 내용 (마크다운)
+description: 팀 데이터 폴더의 파일 내용을 리치 텍스트로 렌더. README · 메모 · 지침 문서 등.
+icon: "📄"
+category: general
+block:
+  type: markdown
+  colSpan: 2
+  rowSpan: 3
+  props: {}
+binding_skeleton:
+  source:
+    kind: team_file
+    config:
+      path: "notes/overview.md"
+  map: {}
+  refresh_seconds: 300
+ai_prompts:
+  goal: "팀 폴더의 마크다운/텍스트 파일을 표시. map.text 는 비워두면 파일 내용 자체가 본문."
+  requires: []

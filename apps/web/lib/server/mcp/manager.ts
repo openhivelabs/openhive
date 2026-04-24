@@ -12,7 +12,9 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { getCredentialValue } from '../credentials'
 import * as mcpConfig from './config'
+import { assertApprovedAndCurrent, USER_PRESET_ID } from './user-servers'
 
 const SPAWN_TIMEOUT_MS = 30_000
 const CALL_TIMEOUT_MS = 60_000
@@ -117,11 +119,34 @@ function ensureProc(name: string): Proc {
   return proc
 }
 
-function buildTransport(server: mcpConfig.ServerConfig): StdioClientTransport {
+function buildTransport(
+  server: mcpConfig.ServerConfig,
+  name?: string,
+): StdioClientTransport {
+  let env: Record<string, string> | undefined =
+    Object.keys(server.env ?? {}).length > 0 ? { ...server.env } : undefined
+
+  // AI-generated user MCP: verify approval hash + inject vault creds as env.
+  // Plaintext values only live in the child process env, never in mcp.yaml.
+  if (server.preset_id === USER_PRESET_ID && name) {
+    const manifest = assertApprovedAndCurrent(name)
+    const injected: Record<string, string> = { ...(env ?? {}) }
+    for (const cred of manifest.required_credentials) {
+      const value = getCredentialValue(cred.ref_id)
+      if (!value) {
+        throw new Error(
+          `user MCP "${name}" requires credential "${cred.ref_id}" but vault has no entry. Add it in Settings → Credentials.`,
+        )
+      }
+      injected[cred.env_name] = value
+    }
+    env = injected
+  }
+
   return new StdioClientTransport({
     command: server.command,
     args: server.args ?? [],
-    env: Object.keys(server.env ?? {}).length > 0 ? server.env : undefined,
+    env,
   })
 }
 
@@ -137,11 +162,14 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
   }
 }
 
-async function startClient(server: mcpConfig.ServerConfig): Promise<{
+async function startClient(
+  server: mcpConfig.ServerConfig,
+  name?: string,
+): Promise<{
   client: Client
   transport: StdioClientTransport
 }> {
-  const transport = buildTransport(server)
+  const transport = buildTransport(server, name)
   const client = new Client({ name: 'openhive', version: '0.1.0' }, { capabilities: {} })
   await withTimeout(client.connect(transport), SPAWN_TIMEOUT_MS, 'mcp connect')
   return { client, transport }
@@ -156,7 +184,7 @@ async function ensureStarted(name: string, server: mcpConfig.ServerConfig): Prom
   }
   const lock = (async () => {
     try {
-      const { client, transport } = await startClient(server)
+      const { client, transport } = await startClient(server, name)
       proc.client = client
       proc.transport = transport
       proc.lastError = null
