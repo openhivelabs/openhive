@@ -97,6 +97,7 @@ export async function previewPanelInstall(input: {
   target_company_slug: string
   target_team_slug: string
   target_team_id: string
+  user_intent?: string | null
 }): Promise<PanelInstallPreview> {
   const res = await fetch('/api/market/install/preview', {
     method: 'POST',
@@ -119,6 +120,10 @@ export async function applyPanelInstall(input: {
   decision: InstallDecision
   alter_sql: string[]
   skip_create_tables: string[]
+  user_intent?: string | null
+  prebuilt_binding?: Record<string, unknown> | null
+  col_span?: number
+  row_span?: number
 }): Promise<{ ok: true; panel: Record<string, unknown>; decision: InstallDecision }> {
   const res = await fetch('/api/market/install/apply', {
     method: 'POST',
@@ -134,4 +139,38 @@ export async function applyPanelInstall(input: {
     panel: Record<string, unknown>
     decision: InstallDecision
   }
+}
+
+export interface AiBindPreview {
+  binding: Record<string, unknown>
+  panel_type: string
+  /** Frame manifest's `panel.props` — needed by the renderer for chart
+   *  variant, formatters, etc. Without these the preview falls back to
+   *  default rendering (e.g. bars instead of a line chart). */
+  panel_props: Record<string, unknown> | null
+  data: unknown
+  /** Non-null when the binding was generated but could not be executed
+   *  (e.g. AI invented a column that doesn't exist). The modal still
+   *  shows the binding so the user can decide whether to install. */
+  error: string | null
+}
+
+export async function aiBindPreview(input: {
+  id: string
+  category: string
+  target_company_slug: string
+  target_team_slug: string
+  target_team_id: string
+  user_intent: string | null
+}): Promise<AiBindPreview> {
+  const res = await fetch('/api/market/install/ai-bind-preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`ai-bind-preview failed (${res.status}): ${body}`)
+  }
+  return (await res.json()) as AiBindPreview
 }

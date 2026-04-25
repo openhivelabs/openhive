@@ -1,18 +1,86 @@
 import { resolveTeamSlugs } from '@/lib/server/companies'
 import { loadDashboard } from '@/lib/server/dashboards'
+import { aiBindPanel } from '@/lib/server/panels/ai-bind'
 import {
   type PanelActionSpec,
   executeAction,
   ActionError,
 } from '@/lib/server/panels/actions'
 import { get } from '@/lib/server/panels/cache'
+import { apply as applyMapper } from '@/lib/server/panels/mapper'
 import { refreshOneNow } from '@/lib/server/panels/refresher'
+import { execute as executeSource } from '@/lib/server/panels/sources'
+import { describeSchema } from '@/lib/server/team-data'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 
 export const panels = new Hono()
 
 const POLL_INTERVAL_MS = 1000
+
+// POST /api/panels/rebind
+// Body: { team_id, spec: PanelSpec, user_intent }
+// Re-runs the AI binder against the team's current schema using an existing
+// panel spec as the skeleton. Returns the new binding + a one-shot executed
+// preview, so the edit modal can show what the rebound panel will look like
+// before the user saves.
+panels.post('/rebind', async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as {
+    team_id?: string
+    spec?: Record<string, unknown>
+    user_intent?: string | null
+  }
+  if (!body.team_id || !body.spec || typeof body.spec !== 'object') {
+    return c.json({ detail: 'team_id and spec required' }, 400)
+  }
+  const resolved = resolveTeamSlugs(body.team_id)
+  if (!resolved) {
+    return c.json({ detail: 'team not found' }, 404)
+  }
+  const userIntent =
+    typeof body.user_intent === 'string' && body.user_intent.trim().length > 0
+      ? body.user_intent.trim()
+      : null
+  const schema = (() => {
+    try {
+      return describeSchema(resolved.companySlug, { teamId: body.team_id })
+    } catch {
+      return { tables: [], recent_migrations: [] }
+    }
+  })()
+  try {
+    const binding = await aiBindPanel({
+      panel: body.spec,
+      schema,
+      userIntent,
+    })
+    const panelType = String((body.spec as { type?: unknown }).type ?? '')
+    const ctx = {
+      companySlug: resolved.companySlug,
+      teamSlug: resolved.teamSlug,
+      teamId: body.team_id,
+    }
+    let data: unknown = null
+    let execError: string | null = null
+    try {
+      const raw = await executeSource(
+        binding.source as unknown as Record<string, unknown>,
+        ctx,
+      )
+      data = applyMapper(
+        raw,
+        binding.map as unknown as Record<string, unknown>,
+        panelType,
+      )
+    } catch (exc) {
+      execError = exc instanceof Error ? exc.message : String(exc)
+    }
+    return c.json({ binding, panel_type: panelType, data, error: execError })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ detail: message }, 502)
+  }
+})
 
 // GET /api/panels/:panelId/data
 panels.get('/:panelId/data', (c) => {

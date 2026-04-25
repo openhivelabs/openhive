@@ -4,6 +4,20 @@ import { Plus, TrashSimple, Warning } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import { usePanelData } from '@/lib/hooks/usePanelData'
 import type { CellAction, PanelAction, PanelSpec } from '@/lib/api/dashboards'
 import { refreshPanel } from '@/lib/api/panels'
@@ -971,85 +985,97 @@ function ChartView({ data, props }: { data: ChartShape; props?: Record<string, u
       : null
   const xs = data.x ?? []
   const ys = data.y ?? []
-  const max = Math.max(1, ...(goal != null ? [...ys, goal] : ys))
+  const rows = xs.map((x, i) => ({ x, y: ys[i] ?? 0 }))
+  const tickCount = xs.length > 8 ? 5 : Math.max(2, xs.length)
+
+  if (xs.length === 0) {
+    return <div className="p-4 text-[13px] text-neutral-400">(no data)</div>
+  }
+
+  const sharedAxisProps = {
+    stroke: 'currentColor',
+    tick: { fontSize: 11, fill: 'currentColor' },
+    tickLine: false,
+    axisLine: { stroke: 'currentColor', strokeOpacity: 0.2 },
+  } as const
 
   if (variant === 'line' || variant === 'area') {
-    const w = 100
-    const h = 40
-    const step = ys.length > 1 ? w / (ys.length - 1) : w
-    const points = ys.map((v, i) => `${i * step},${h - (v / max) * h}`)
-    const polyline = points.join(' ')
-    const area = `0,${h} ${polyline} ${w},${h}`
-    const goalY = goal != null ? h - (goal / max) * h : null
+    const Chart = variant === 'area' ? AreaChart : LineChart
     return (
-      <div className="p-3">
-        <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="w-full h-32">
-          {variant === 'area' && (
-            <polygon points={area} className="fill-neutral-200 dark:fill-neutral-700/60" />
-          )}
-          <polyline
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1"
-            className="text-neutral-700 dark:text-neutral-200"
-            points={polyline}
-          />
-          {goalY != null && (
-            <line
-              x1="0"
-              y1={goalY}
-              x2={w}
-              y2={goalY}
-              stroke="currentColor"
-              strokeDasharray="2,2"
-              strokeWidth="0.5"
-              className="text-emerald-500"
-            />
-          )}
-        </svg>
-        <div className="mt-2 grid grid-cols-4 gap-1 text-[10.5px] text-neutral-400 font-mono">
-          {xs.map((label, i) => (
-            <span key={`${label}-${i}`} className="truncate">
-              {label}
-            </span>
-          ))}
-        </div>
+      <div className="h-full w-full p-3 text-neutral-400 dark:text-neutral-500">
+        <ResponsiveContainer width="100%" height="100%">
+          <Chart data={rows} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+            <CartesianGrid strokeDasharray="2 4" stroke="currentColor" strokeOpacity={0.15} vertical={false} />
+            <XAxis dataKey="x" {...sharedAxisProps} interval="preserveStartEnd" minTickGap={20} tickCount={tickCount} />
+            <YAxis {...sharedAxisProps} width={28} />
+            <Tooltip content={<ChartTooltip />} cursor={{ stroke: 'currentColor', strokeOpacity: 0.2 }} />
+            {variant === 'area' ? (
+              <Area
+                type="monotone"
+                dataKey="y"
+                stroke="rgb(38 38 38)"
+                strokeWidth={1.5}
+                fill="rgb(38 38 38)"
+                fillOpacity={0.12}
+                dot={false}
+                activeDot={{ r: 3 }}
+                isAnimationActive={false}
+              />
+            ) : (
+              <Line
+                type="monotone"
+                dataKey="y"
+                stroke="rgb(38 38 38)"
+                strokeWidth={1.5}
+                dot={false}
+                activeDot={{ r: 3 }}
+                isAnimationActive={false}
+              />
+            )}
+            {goal != null && (
+              <ReferenceLine y={goal} stroke="rgb(16 185 129)" strokeDasharray="3 3" strokeWidth={1} />
+            )}
+          </Chart>
+        </ResponsiveContainer>
       </div>
     )
   }
 
   return (
-    <div className="p-3 space-y-2">
-      {goal != null && (
-        <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
-          goal {Intl.NumberFormat().format(goal)}
-        </div>
-      )}
-      {xs.map((label, i) => {
-        const v = ys[i] ?? 0
-        const pct = Math.round((v / max) * 100)
-        const goalPct = goal != null ? Math.round((goal / max) * 100) : null
-        return (
-          <div key={`${label}-${i}`}>
-            <div className="flex items-center justify-between text-[12.5px] text-neutral-500 mb-0.5">
-              <span className="truncate">{label}</span>
-              <span className="font-mono">{Intl.NumberFormat().format(v)}</span>
-            </div>
-            <div className="relative h-1.5 bg-neutral-100 dark:bg-neutral-800 rounded-sm overflow-hidden">
-              <div
-                className="h-full bg-neutral-700 dark:bg-neutral-300"
-                style={{ width: `${pct}%` }}
-              />
-              {goalPct != null && (
-                <div
-                  className="absolute top-0 bottom-0 w-px bg-emerald-500"
-                  style={{ left: `${goalPct}%` }}
-                />
-              )}
-            </div>
-          </div>
-        )
-      })}
+    <div className="h-full w-full p-3 text-neutral-400 dark:text-neutral-500">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={rows} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+          <CartesianGrid strokeDasharray="2 4" stroke="currentColor" strokeOpacity={0.15} vertical={false} />
+          <XAxis dataKey="x" {...sharedAxisProps} interval={0} />
+          <YAxis {...sharedAxisProps} width={28} />
+          <Tooltip content={<ChartTooltip />} cursor={{ fill: 'currentColor', fillOpacity: 0.06 }} />
+          <Bar dataKey="y" fill="rgb(38 38 38)" radius={[2, 2, 0, 0]} isAnimationActive={false} />
+          {goal != null && (
+            <ReferenceLine y={goal} stroke="rgb(16 185 129)" strokeDasharray="3 3" strokeWidth={1} />
+          )}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+function ChartTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean
+  payload?: { value: number | string }[]
+  label?: string | number
+}) {
+  if (!active || !payload || payload.length === 0) return null
+  const v = payload[0]?.value
+  return (
+    <div className="rounded-sm border border-neutral-200 dark:border-neutral-700 bg-white/95 dark:bg-neutral-900/95 px-2 py-1 text-[11.5px] font-mono text-neutral-700 dark:text-neutral-200 shadow-sm">
+      <div className="text-neutral-400">{String(label ?? '')}</div>
+      <div className="text-neutral-900 dark:text-neutral-50">
+        {typeof v === 'number' ? Intl.NumberFormat().format(v) : String(v ?? '')}
+      </div>
     </div>
   )
 }
