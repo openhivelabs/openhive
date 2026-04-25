@@ -14,8 +14,10 @@ import traceback
 
 SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_ROOT))
-# _lib/fonts.py lives at packages/skills/_lib — one level above this skill.
+# _lib/ lives at packages/skills/_lib — one level above this skill.
 sys.path.insert(0, str(SKILL_ROOT.parent))
+
+from _lib.output_path import resolve_out  # noqa: E402
 
 
 def main() -> int:
@@ -82,7 +84,7 @@ def main() -> int:
                   + traceback.format_exc())
             return 1
 
-    out = pathlib.Path(args.out).expanduser().resolve()
+    out = resolve_out(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(out))
 

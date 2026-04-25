@@ -17,6 +17,7 @@ sys.path.insert(0, str(SKILL_ROOT))
 # _lib lives one level above packages/skills/pdf — at packages/skills/_lib.
 sys.path.insert(0, str(SKILL_ROOT.parent))
 
+from _lib.output_path import resolve_out  # noqa: E402
 from _lib.verify import EmitError, check_file, emit_error, emit_success  # noqa: E402
 
 
@@ -95,7 +96,7 @@ def _run(args: argparse.Namespace) -> int:
     page_w, page_h = resolve_page_size(size_name, orient)
     ctx = Ctx(theme, page_w, page_h)
 
-    out = pathlib.Path(args.out).expanduser().resolve()
+    out = resolve_out(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
 
     doc = SimpleDocTemplate(

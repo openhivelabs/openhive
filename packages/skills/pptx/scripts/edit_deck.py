@@ -32,6 +32,9 @@ import sys
 
 SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_ROOT))
+sys.path.insert(0, str(SKILL_ROOT.parent))
+
+from _lib.output_path import resolve_out  # noqa: E402
 
 
 def main() -> int:
@@ -70,7 +73,7 @@ def main() -> int:
         print(json.dumps({"ok": False, "error": f"unexpected: {e}\n{traceback.format_exc()}"}))
         return 1
 
-    out = pathlib.Path(args.out).expanduser().resolve()
+    out = resolve_out(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     pkg.save(str(out))
 

@@ -83,6 +83,11 @@ interface TranscriptEntry {
    *  calls. Presence triggers the SourceCard renderer instead of the generic
    *  tool chip. Absence = parse failure or tool didn't produce sources. */
   sources?: ChatSource[]
+  /** Set when the underlying skill returned `ok:false` (e.g. DDG timeout,
+   *  rate limit). FE renders a warning chip with tooltip so the user
+   *  understands why no results showed instead of assuming the UI broke. */
+  error_code?: string
+  error_message?: string
   /** Set alongside sources — we allow non-depth-0 tool calls for these
    *  specific tools because research happens in sub-agents but users still
    *  want to see "what was searched / fetched" in the main chat. */
@@ -179,6 +184,8 @@ type NestableChild =
        *  the team snapshot via the `assignee` arg. */
       expectedChildNode?: string
       children?: NestableChild[]
+      errorCode?: string
+      errorMessage?: string
     }
   | {
       kind: 'sources'
@@ -239,6 +246,11 @@ type ChatItem =
        *  chip's dropdown can show the actual work the sub-agent did,
        *  not just the brief. Empty / absent for non-delegation chips. */
       children?: NestableChild[]
+      /** Skill failure metadata — set for failed web-search / web-fetch
+       *  calls so the chip can render a warning indicator + tooltip
+       *  instead of looking like a chip with hidden results. */
+      errorCode?: string
+      errorMessage?: string
     }
   | {
       // web-search / web-fetch rendered as a Claude-style source card:
@@ -280,6 +292,8 @@ type ChatItem =
             delegate?: { mode: string; tasks: string[] }
             expectedChildNode?: string
             children?: NestableChild[]
+            errorCode?: string
+            errorMessage?: string
           }
         | {
             kind: 'sources'
@@ -414,6 +428,18 @@ function truncate(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max - 1)}…`
 }
 
+/** Browser-side domain extractor — mirror of the server's domainFromUrl
+ *  so we can synthesize a fetch-source when the server didn't attach one
+ *  (older sessions, or fetches whose result body wasn't parseable). */
+function domainFromBrowserUrl(raw: string): string {
+  try {
+    const u = new URL(raw)
+    return u.hostname.replace(/^www\./i, '').toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
 /** Pull the task brief out of a delegate_to / delegate_parallel call's
  *  args so the chip can drop down and show what the Lead actually
  *  dispatched. Returns undefined for non-delegation tools or when the
@@ -472,22 +498,55 @@ function ToolChip({
   summary,
   delegate,
   children,
+  errorCode,
+  errorMessage,
 }: {
   tool: string
   summary: string
   delegate?: { mode: string; tasks: string[] }
   children?: NestableChild[]
+  errorCode?: string
+  errorMessage?: string
 }) {
+  const t = useT()
   const Icon = iconForTool(tool)
   const [expanded, setExpanded] = useState(false)
   const hasChildren = !!children && children.length > 0
   const expandable = !!delegate || hasChildren
+  const failed = !!errorCode
+  const failedReason =
+    errorCode === 'search_unavailable'
+      ? t('session.tool.failed.timeout')
+      : errorCode === 'search_rate_limited'
+        ? t('session.tool.failed.rateLimited')
+        : null
+  const failedTitle = failed
+    ? errorMessage
+      ? `${errorCode}: ${errorMessage}`
+      : errorCode
+    : undefined
   const baseRow = (
-    <span className="inline-flex max-w-full items-center gap-2 text-[12.5px] text-neutral-500 dark:text-neutral-400 font-mono">
+    <span
+      className="inline-flex max-w-full items-center gap-2 text-[12.5px] font-mono text-neutral-500 dark:text-neutral-400"
+      title={failedTitle}
+    >
       <Icon className="w-3 h-3 shrink-0 opacity-60" />
       <span className="truncate text-neutral-600 dark:text-neutral-300">
         {summary}
       </span>
+      {failed && (
+        <span className="inline-flex items-center gap-1 shrink-0 rounded border border-neutral-200 dark:border-neutral-800 px-1.5 py-px text-[11px] uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+          <span>{t('session.tool.failed')}</span>
+          {failedReason && (
+            <>
+              <span className="opacity-50">·</span>
+              <span className="normal-case tracking-normal">
+                {failedReason}
+              </span>
+            </>
+          )}
+        </span>
+      )}
       {expandable && (
         <CaretDown
           className={`w-3 h-3 shrink-0 opacity-50 transition-transform duration-150 ${
@@ -536,9 +595,13 @@ function ToolChip({
           ))}
           {hasChildren && (
             <ul className="space-y-1.5 pt-1">
-              {children!.map((c) => (
-                <li key={c.id} className="flex">
-                  <NestedChild item={c} />
+              {partitionNestedChildren(children!).map((slot) => (
+                <li key={slot.key} className="flex">
+                  {slot.kind === 'fetch_strip' ? (
+                    <FetchStrip sources={slot.sources} />
+                  ) : (
+                    <NestedChild item={slot.item} />
+                  )}
                 </li>
               ))}
             </ul>
@@ -561,6 +624,8 @@ function NestedChild({ item }: { item: NestableChild }) {
         summary={item.summary}
         delegate={item.delegate}
         children={item.children}
+        errorCode={item.errorCode}
+        errorMessage={item.errorMessage}
       />
     )
   }
@@ -676,6 +741,30 @@ function buildChat(
           })
           break
         }
+        // web-fetch without extracted sources: synthesize one from the URL
+        // arg so EVERY fetch flows through the compact SourceCard renderer
+        // (icon-only, clickable). Avoids the noisy "web-fetch <full-url>"
+        // generic chip path that clutters research turns.
+        if (tool === 'web-fetch' && !e.error_code) {
+          const url = String(e.args?.url ?? '').trim()
+          if (url) {
+            out.push({
+              kind: 'sources',
+              id,
+              author: agentLabel(team, e.node_id, e.agent_role ?? 'agent'),
+              variant: 'fetch',
+              query: url,
+              sources: [
+                { title: url, url, domain: domainFromBrowserUrl(url) },
+              ],
+              depth: typeof e.depth === 'number' ? e.depth : 0,
+              nodeId: String(e.node_id ?? ''),
+              siblingGroupId: e.sibling_group_id,
+              siblingIndex: e.sibling_index,
+            })
+            break
+          }
+        }
         const author = agentLabel(team, e.node_id, e.agent_role ?? 'agent')
         const depth = typeof e.depth === 'number' ? e.depth : 0
         const nodeId = String(e.node_id ?? '')
@@ -736,6 +825,8 @@ function buildChat(
           siblingIndex: e.sibling_index,
           delegate: extractDelegatePayload(tool, e.args),
           expectedChildNode: childNode,
+          errorCode: e.error_code,
+          errorMessage: e.error_message,
         })
         break
       }
@@ -949,6 +1040,8 @@ function collapseToolRuns(items: ChatItem[]): ChatItem[] {
                 delegate: r.delegate,
                 expectedChildNode: r.expectedChildNode,
                 children: r.children,
+                errorCode: r.errorCode,
+                errorMessage: r.errorMessage,
               }
             : {
                 kind: 'sources',
@@ -1725,6 +1818,166 @@ function AttachmentCard({ artifact }: { artifact: SessionArtifact }) {
  * shell commands (delegation, ask_user, artifact reads, etc.). Swap the
  * i18n value when a better word surfaces.
  */
+/** Within a tool_group's expanded list, fold runs of ≥2 consecutive
+ *  web-fetch sources items into a single horizontal favicon strip. A long
+ *  research turn that fetches 8 pages becomes one compact row instead of
+ *  8 individual chips. Lone fetches (1 in a row) keep their normal
+ *  SourceCard render so they don't lose their click affordance. */
+type GroupSlot =
+  | { kind: 'item'; key: string; item: Extract<ChatItem, { kind: 'tool_group' }>['items'][number] }
+  | { kind: 'fetch_strip'; key: string; sources: ChatSource[] }
+
+function partitionGroupItems(
+  items: Extract<ChatItem, { kind: 'tool_group' }>['items'],
+): GroupSlot[] {
+  const out: GroupSlot[] = []
+  let run: { id: string; source: ChatSource }[] = []
+  const flush = () => {
+    if (run.length >= 2) {
+      out.push({
+        kind: 'fetch_strip',
+        key: `strip-${run[0]!.id}`,
+        sources: run.map((r) => r.source),
+      })
+    } else if (run.length === 1) {
+      const r = run[0]!
+      out.push({
+        kind: 'item',
+        key: r.id,
+        item: {
+          kind: 'sources',
+          id: r.id,
+          author: '',
+          variant: 'fetch',
+          query: r.source.url,
+          sources: [r.source],
+          depth: 0,
+          nodeId: '',
+        },
+      })
+    }
+    run = []
+  }
+  for (const it of items) {
+    if (
+      it.kind === 'sources' &&
+      it.variant === 'fetch' &&
+      it.sources.length === 1
+    ) {
+      run.push({ id: it.id, source: it.sources[0]! })
+      continue
+    }
+    flush()
+    out.push({ kind: 'item', key: it.id, item: it })
+  }
+  flush()
+  return out
+}
+
+/** Collapsible bundle for ≥2 consecutive web-fetch calls. Header shows
+ *  the count; clicking expands a vertical list of full URL rows
+ *  (favicon + URL + extlink). Keeps the chat scannable when an agent
+ *  fetches 8+ pages in a row instead of dumping a wall of URLs. */
+/** Same idea as partitionGroupItems, but for the children-list inside a
+ *  delegate dropdown. Sub-agent fetches were rendering as a long flat
+ *  URL wall — fold consecutive ≥2 fetch sources into the collapsible
+ *  FetchStrip so a research delegation reads as "search · search · 9
+ *  fetched ⌄". */
+type NestedSlot =
+  | { kind: 'item'; key: string; item: NestableChild }
+  | { kind: 'fetch_strip'; key: string; sources: ChatSource[] }
+
+function partitionNestedChildren(items: NestableChild[]): NestedSlot[] {
+  const out: NestedSlot[] = []
+  let run: { id: string; source: ChatSource }[] = []
+  const flush = () => {
+    if (run.length >= 2) {
+      out.push({
+        kind: 'fetch_strip',
+        key: `strip-${run[0]!.id}`,
+        sources: run.map((r) => r.source),
+      })
+    } else if (run.length === 1) {
+      const r = run[0]!
+      out.push({
+        kind: 'item',
+        key: r.id,
+        item: {
+          kind: 'sources',
+          id: r.id,
+          author: '',
+          variant: 'fetch',
+          query: r.source.url,
+          sources: [r.source],
+          depth: 0,
+          nodeId: '',
+        },
+      })
+    }
+    run = []
+  }
+  for (const it of items) {
+    if (
+      it.kind === 'sources' &&
+      it.variant === 'fetch' &&
+      it.sources.length === 1
+    ) {
+      run.push({ id: it.id, source: it.sources[0]! })
+      continue
+    }
+    flush()
+    out.push({ kind: 'item', key: it.id, item: it })
+  }
+  flush()
+  return out
+}
+
+function FetchStrip({ sources }: { sources: ChatSource[] }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div className="max-w-full">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        className="inline-flex max-w-full items-center gap-2 text-[12.5px] text-neutral-500 dark:text-neutral-400 font-mono hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors"
+      >
+        <Article className="w-3 h-3 shrink-0 opacity-60" />
+        <span className="text-neutral-600 dark:text-neutral-300 shrink-0">
+          web-fetch
+        </span>
+        <span className="text-neutral-400 dark:text-neutral-500 shrink-0">
+          · {sources.length}
+        </span>
+        <CaretDown
+          className={`w-3 h-3 shrink-0 opacity-50 transition-transform duration-150 ${
+            expanded ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+      {expanded && (
+        <ul className="mt-2 ml-[7px] pl-3 border-l border-neutral-200 dark:border-neutral-800 flex flex-col gap-1.5">
+          {sources.map((s, i) => (
+            <li key={`${i}-${s.url}`}>
+              <a
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={s.url}
+                className="group inline-flex max-w-full items-center gap-2 text-[12.5px] font-mono text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors"
+              >
+                <SourceFavicon domain={s.domain} />
+                <span className="truncate min-w-0">{s.url}</span>
+                <ArrowSquareOut className="w-3 h-3 shrink-0 opacity-40 group-hover:opacity-80 transition-opacity" />
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function ToolGroupBar({
   group,
 }: {
@@ -1754,21 +2007,25 @@ function ToolGroupBar({
       </button>
       {expanded && (
         <ul className="mt-2 ml-[7px] pl-3 border-l border-neutral-200 dark:border-neutral-800 flex flex-col gap-1.5">
-          {group.items.map((it) => (
-            <li key={it.id} className="flex">
-              {it.kind === 'tool' ? (
+          {partitionGroupItems(group.items).map((slot) => (
+            <li key={slot.key} className="flex">
+              {slot.kind === 'fetch_strip' ? (
+                <FetchStrip sources={slot.sources} />
+              ) : slot.item.kind === 'tool' ? (
                 <ToolChip
-                  tool={it.tool}
-                  summary={it.summary}
-                  delegate={it.delegate}
-                  children={it.children}
+                  tool={slot.item.tool}
+                  summary={slot.item.summary}
+                  delegate={slot.item.delegate}
+                  children={slot.item.children}
+                  errorCode={slot.item.errorCode}
+                  errorMessage={slot.item.errorMessage}
                 />
               ) : (
                 <div className="w-full">
                   <SourceCard
-                    variant={it.variant}
-                    query={it.query}
-                    sources={it.sources}
+                    variant={slot.item.variant}
+                    query={slot.item.query}
+                    sources={slot.item.sources}
                   />
                 </div>
               )}
@@ -1816,8 +2073,10 @@ function SourceCard({
   const count = sources.length
 
   if (variant === 'fetch') {
-    // web-fetch === one source. Render the source row inline as a clickable
-    // link, matching the other step chips' visual weight (no big card).
+    // web-fetch === one source. Render the URL inline as a single
+    // clickable row: favicon + full URL + external-link icon. Keeps the
+    // chat scannable ("which page did the agent read?") without forcing
+    // the user to hover every chip to see the target.
     const s = sources[0]
     if (!s) return null
     return (
@@ -1825,17 +2084,11 @@ function SourceCard({
         href={s.url}
         target="_blank"
         rel="noopener noreferrer"
-        className="group inline-flex max-w-full items-center gap-2 text-[12.5px] font-mono hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors"
+        title={s.url}
+        className="group inline-flex max-w-full items-center gap-2 text-[12.5px] font-mono text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors"
       >
         <SourceFavicon domain={s.domain} />
-        <span className="text-neutral-600 dark:text-neutral-300 truncate min-w-0">
-          {s.url}
-        </span>
-        {s.domain && (
-          <span className="text-neutral-400 dark:text-neutral-500 shrink-0">
-            {s.domain}
-          </span>
-        )}
+        <span className="truncate min-w-0">{s.url}</span>
         <ArrowSquareOut className="w-3 h-3 shrink-0 opacity-40 group-hover:opacity-80 transition-opacity" />
       </a>
     )
@@ -2407,6 +2660,8 @@ const ChatBubble = memo(
         summary={item.summary}
         delegate={item.delegate}
         children={item.children}
+        errorCode={item.errorCode}
+        errorMessage={item.errorMessage}
       />
     )
   }

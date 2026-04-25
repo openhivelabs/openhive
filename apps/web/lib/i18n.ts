@@ -317,6 +317,9 @@ const en: Dict = {
   'session.sources.searchLabel': 'Searched the web',
   'session.sources.fetchLabel': 'Fetched page',
   'session.sources.count': '{count} results',
+  'session.tool.failed': 'failed',
+  'session.tool.failed.timeout': 'timed out',
+  'session.tool.failed.rateLimited': 'rate limited',
   'session.links.unverifiedTitle':
     'This link was not actually visited by the agent — the AI likely generated it from memory. Redacted to avoid dead-end clicks.',
   'session.links.unverifiedShort': 'unverified · redacted',
@@ -974,6 +977,9 @@ const ko: Dict = {
   'session.sources.searchLabel': '웹 검색됨',
   'session.sources.fetchLabel': '웹 페이지 가져옴',
   'session.sources.count': '결과 {count}개',
+  'session.tool.failed': '실패',
+  'session.tool.failed.timeout': '타임아웃',
+  'session.tool.failed.rateLimited': '레이트 리밋',
   'session.links.unverifiedTitle':
     'AI가 이번 세션에서 실제로 방문하지 않은 URL 이에요. 기억으로 생성한 주소일 가능성이 높아, 클릭해도 막다른 페이지로 갈 수 있어 자동으로 숨겼습니다.',
   'session.links.unverifiedShort': '미검증 · 숨김',

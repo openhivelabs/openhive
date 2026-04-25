@@ -26,7 +26,16 @@ def main() -> int:
         return 2
     # Reject path traversal and subdirectories — keep writes flat in OUTPUT_DIR.
     if "/" in filename or "\\" in filename or filename.startswith(".."):
-        print(f"filename must be a bare name, got {filename!r}", file=sys.stderr)
+        # Stay actionable: tell the model exactly how to recover (basename only)
+        # and why (artifact dir is the only sandboxed write target).
+        from os.path import basename
+        bare = basename(filename.replace("\\", "/")) or "output.txt"
+        print(
+            f"filename must be a bare name (no '/' or '\\\\'). Got {filename!r} — "
+            f"retry with {bare!r}. Output is written to the run's artifact "
+            f"directory; absolute paths are not supported.",
+            file=sys.stderr,
+        )
         return 2
 
     out_dir_env = os.environ.get("OPENHIVE_OUTPUT_DIR")

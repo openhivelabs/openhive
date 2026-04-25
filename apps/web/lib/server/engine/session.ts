@@ -3210,7 +3210,13 @@ export function composeSystemPrompt(base: string, agentSkills: SkillDef[], teamS
       "like it matches one, call `activate_skill(name)` to load that skill's " +
       'full guide (SKILL.md) and file tree into the conversation. Then use ' +
       '`read_skill_file` to fetch supplementary docs and `run_skill_script` ' +
-      'to execute scripts inside it.\n',
+      'to execute scripts inside it.\n' +
+      '\n' +
+      'Output paths: skill file outputs are written to the run\'s artifact ' +
+      'directory automatically. Pass a bare filename (e.g. `report.pdf`) for ' +
+      '`--out` / `filename`. Absolute paths like `/tmp/foo.pdf` are either ' +
+      'rejected (text-file, image-gen) or silently rewritten to the artifact ' +
+      'directory (pdf, docx, pptx) — never trust them to land where you wrote.\n',
   )
   for (const skill of agentSkills) {
     parts.push(`- \`${skill.name}\` — ${formatSkillHint(skill)}\n`)
