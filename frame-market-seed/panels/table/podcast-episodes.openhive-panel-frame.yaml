@@ -1,0 +1,75 @@
+id: podcast-episodes
+name: Podcast Episodes
+description: >-
+  Podcast studio — track episodes with guest, duration, release status.
+  The `episode` table has a `guest_id` FK pattern; if a `guest` or
+  `contact` table already exists it may be worth linking, otherwise the
+  frame stands alone.
+author: OpenHive
+category: table
+tags: [table, podcast, media]
+
+sizes:
+  - { colSpan: 2, rowSpan: 2 }
+  - { colSpan: 4, rowSpan: 2 }
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS episode (
+    team_id      TEXT NOT NULL,
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    number       INTEGER,
+    title        TEXT NOT NULL,
+    guest_name   TEXT,
+    duration_min INTEGER,
+    status       TEXT DEFAULT 'draft',
+    release_at   TEXT,
+    created_at   TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: table
+  title: Episodes
+  colSpan: 2
+  rowSpan: 2
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT id, number, title, guest_name, duration_min, status, release_at
+            FROM episode
+           WHERE team_id = :team_id
+           ORDER BY COALESCE(release_at, created_at) DESC
+           LIMIT 100
+    map:
+      rows: "$.rows[*]"
+      columns: [number, title, guest_name, duration_min, status, release_at]
+      on_click: { kind: detail }
+    refresh_seconds: 60
+    actions:
+      - id: add-episode
+        kind: create
+        label: New episode
+        placement: toolbar
+        form:
+          fields:
+            - { name: number, label: "Ep #", type: number, min: 0 }
+            - { name: title, label: Title, type: text, required: true }
+            - { name: guest_name, label: Guest, type: text }
+            - { name: duration_min, label: "Duration (min)", type: number, min: 0 }
+            - { name: status, label: Status, type: select, options: [draft, recorded, edited, published], default: draft }
+            - { name: release_at, label: Release date, type: date }
+        target:
+          kind: team_data
+          config:
+            sql: |
+              INSERT INTO episode (team_id, number, title, guest_name, duration_min, status, release_at)
+              VALUES (:team_id, :number, :title, :guest_name, :duration_min, :status, :release_at)
+      - id: publish-episode
+        kind: update
+        label: Publish
+        placement: row
+        target:
+          kind: team_data
+          config:
+            sql: "UPDATE episode SET status = 'published' WHERE team_id = :team_id AND id = :id"

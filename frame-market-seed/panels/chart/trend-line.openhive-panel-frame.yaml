@@ -1,0 +1,50 @@
+id: trend-line
+name: Trend Line
+description: >-
+  Line chart of daily row count over the last 30 days. Expects a
+  `created_at` column (ISO date or unix epoch). Replace the table to
+  trend any other time-series.
+author: OpenHive
+category: chart
+tags: [chart, trend, time-series, universal]
+
+sizes:
+  - { colSpan: 2, rowSpan: 2 }
+  - { colSpan: 4, rowSpan: 2 }
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS customer (
+    team_id    TEXT NOT NULL,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT,
+    email      TEXT,
+    stage      TEXT DEFAULT 'prospect',
+    value      REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: chart
+  title: Daily Volume — 30 Days
+  colSpan: 2
+  rowSpan: 2
+  props:
+    variant: line
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT
+            date(created_at) AS day,
+            COUNT(*)        AS n
+          FROM customer
+          WHERE team_id = :team_id
+            AND date(created_at) >= date('now','-29 days')
+          GROUP BY day
+          ORDER BY day ASC
+    map:
+      rows: "$.rows[*]"
+      group_by: day
+      value: n
+    refresh_seconds: 600

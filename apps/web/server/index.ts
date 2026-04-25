@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import { logger } from 'hono/logger'
 import { migrateAllAgents } from '@/lib/server/agents/scaffold'
 import { callbackHtml, handleCallback } from '@/lib/server/auth/orchestrator'
+import { migrateTeamDbsToCompany } from '../scripts/migrate-team-db-to-company'
 import { registerNode } from '../instrumentation-node'
 import { api } from './api'
 
@@ -31,6 +32,15 @@ try {
   }
 } catch (exc) {
   console.error('[hono] agent migration failed', exc)
+}
+
+// One-shot migration: merge per-team data.db files into a single company DB
+// with a team_id soft namespace. Idempotent — a no-op once a company has
+// already been migrated. See apps/web/scripts/migrate-team-db-to-company.ts.
+try {
+  migrateTeamDbsToCompany()
+} catch (exc) {
+  console.error('[hono] team→company DB migration failed', exc)
 }
 
 const app = new Hono()

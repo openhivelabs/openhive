@@ -848,7 +848,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     }
   }
   if (teamSlugs) {
-    tools.push(...teamDataTools(teamSlugs, persona.tools))
+    tools.push(...teamDataTools(teamSlugs[0], team.id, persona.tools))
   }
   // A3: artifact rehydration — Lead + sub-agent both need to re-read files
   // produced earlier in the session (microcompact may have cleared the

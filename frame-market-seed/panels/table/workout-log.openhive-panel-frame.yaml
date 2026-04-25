@@ -1,0 +1,71 @@
+id: workout-log
+name: Workout Log
+description: >-
+  Fitness log — record workouts with duration and perceived intensity.
+  Keeps its own `workout` table; unrelated to any business data you may
+  have in the same team.
+author: OpenHive
+category: table
+tags: [table, fitness, personal]
+
+sizes:
+  - { colSpan: 2, rowSpan: 2 }
+  - { colSpan: 4, rowSpan: 2 }
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS workout (
+    team_id      TEXT NOT NULL,
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL,
+    duration_min INTEGER DEFAULT 0,
+    intensity    TEXT DEFAULT 'medium',
+    notes        TEXT,
+    logged_at    TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: table
+  title: Workout Log
+  colSpan: 2
+  rowSpan: 2
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT id, name, duration_min, intensity, notes, logged_at
+            FROM workout
+           WHERE team_id = :team_id
+           ORDER BY logged_at DESC
+           LIMIT 200
+    map:
+      rows: "$.rows[*]"
+      columns: [id, name, duration_min, intensity, logged_at]
+      on_click: { kind: detail }
+    refresh_seconds: 30
+    actions:
+      - id: add-workout
+        kind: create
+        label: Log workout
+        placement: toolbar
+        form:
+          fields:
+            - { name: name, label: Name, type: text, required: true, placeholder: "e.g. Morning run" }
+            - { name: duration_min, label: "Duration (min)", type: number, min: 0 }
+            - { name: intensity, label: Intensity, type: select, options: [low, medium, high], default: medium }
+            - { name: notes, label: Notes, type: textarea }
+        target:
+          kind: team_data
+          config:
+            sql: |
+              INSERT INTO workout (team_id, name, duration_min, intensity, notes)
+              VALUES (:team_id, :name, :duration_min, :intensity, :notes)
+      - id: delete-workout
+        kind: delete
+        label: Delete
+        placement: row
+        target:
+          kind: team_data
+          config:
+            sql: "DELETE FROM workout WHERE team_id = :team_id AND id = :id"
+        confirm: true

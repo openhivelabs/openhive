@@ -14,7 +14,7 @@ import path from 'node:path'
 import { getCredentialMeta, getCredentialValue } from '../credentials'
 import { getServer as getMcpServer } from '../mcp/config'
 import { callTool as mcpCallTool } from '../mcp/manager'
-import { dataDir, teamDir } from '../paths'
+import { companyFilesDir, dataDir, teamDir } from '../paths'
 import { runQuery } from '../team-data'
 
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -80,6 +80,8 @@ export async function execute(
       return execFile(config)
     case 'team_file':
       return execTeamFile(config, context)
+    case 'company_file':
+      return execCompanyFile(config, context)
     case 'static':
       return config.value
     default:
@@ -143,10 +145,16 @@ async function execTeamData(
   if (!SELECT_RE.test(sql)) {
     throw new SourceError('team_data source allows only SELECT/WITH (read-only)')
   }
-  if (!context.companySlug || !context.teamSlug) {
-    throw new SourceError('team_data source needs company_slug + team_slug context')
+  if (!context.companySlug) {
+    throw new SourceError('team_data source needs company_slug context')
   }
-  return runQuery(context.companySlug, context.teamSlug, sql)
+  // Auto-bind `:team_id` so panel SQL of the form
+  //   SELECT … FROM customer WHERE team_id = :team_id
+  // scopes to the installed team. Panels that omit the filter act as
+  // company-wide views (opt-in cross-team).
+  return runQuery(context.companySlug, sql, {
+    teamId: context.teamId,
+  })
 }
 
 async function execHttp(
@@ -229,6 +237,48 @@ function execTeamFile(
   const candidate = path.resolve(base, rel)
   if (candidate !== base && !candidate.startsWith(base + path.sep)) {
     throw new SourceError(`team_file path escapes team files dir: ${JSON.stringify(rel)}`)
+  }
+  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) {
+    throw new SourceError(`file not found: ${JSON.stringify(rel)}`)
+  }
+  const text = fs.readFileSync(candidate, 'utf8')
+  const format = String(config.format ?? inferFormat(candidate)).toLowerCase()
+  switch (format) {
+    case 'json':
+      try {
+        return JSON.parse(text)
+      } catch (e) {
+        throw new SourceError(`json parse: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    case 'csv':
+      return parseCsv(text)
+    case 'markdown':
+    case 'md':
+      return parseMarkdown(text)
+    default:
+      return text
+  }
+}
+
+/**
+ * company_file — sandboxed to the *company* `files/` directory (shared by
+ * every team). Mirrors {@link execTeamFile} otherwise. Use this for
+ * reference data the whole company should see the same way (org chart,
+ * product catalog, policies).
+ */
+function execCompanyFile(
+  config: Record<string, unknown>,
+  context: SourceContext,
+): unknown {
+  const rel = String(config.path ?? '')
+  if (!rel) throw new SourceError('company_file source requires path')
+  if (!context.companySlug) {
+    throw new SourceError('company_file source needs company_slug context')
+  }
+  const base = path.resolve(companyFilesDir(context.companySlug))
+  const candidate = path.resolve(base, rel)
+  if (candidate !== base && !candidate.startsWith(base + path.sep)) {
+    throw new SourceError(`company_file path escapes company files dir: ${JSON.stringify(rel)}`)
   }
   if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) {
     throw new SourceError(`file not found: ${JSON.stringify(rel)}`)

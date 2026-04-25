@@ -158,7 +158,7 @@ export async function composeOnce(input: {
     row_count: number
   }[] = []
   try {
-    teamTables = describeSchema(slugs.companySlug, slugs.teamSlug).tables.map((t) => ({
+    teamTables = describeSchema(slugs.companySlug, { teamId: input.teamId }).tables.map((t) => ({
       name: t.name,
       columns: t.columns.map((c) => ({ name: c.name, type: c.type })),
       row_count: t.row_count,
@@ -256,9 +256,10 @@ export async function composeOnce(input: {
             .split(/;\s*\n/)
             .map((s) => s.trim())
             .filter(Boolean)) {
-            runExec(slugs.companySlug, slugs.teamSlug, stmt, {
+            runExec(slugs.companySlug, stmt, {
               source: `recipe:${recipe.id}`,
               note: 'setup_sql',
+              teamId: input.teamId,
             })
           }
         } catch (e) {
