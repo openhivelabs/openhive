@@ -32,7 +32,7 @@ describe('db-skill end-to-end', () => {
   })
 
   it('bootstrap empty → design schema → insert → query → EXPLAIN → destructive gated DROP', async () => {
-    const tools = teamDataTools(['acme', 'sales'], fullManifest)
+    const tools = teamDataTools('acme', 'team-sales', fullManifest)
     const describe = tools.find((t) => t.name === 'db_describe')!
     const exec = tools.find((t) => t.name === 'db_exec')!
     const query = tools.find((t) => t.name === 'db_query')!

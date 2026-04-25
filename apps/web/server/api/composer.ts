@@ -39,7 +39,7 @@ composer.get('/catalog', async (c) => {
   let teamFiles: string[] = []
   if (slugs) {
     try {
-      teamTables = describeSchema(slugs.companySlug, slugs.teamSlug).tables
+      teamTables = describeSchema(slugs.companySlug, { teamId }).tables
     } catch (e) {
       teamTables = [{ error: e instanceof Error ? e.message : String(e) }]
     }
@@ -65,7 +65,7 @@ composer.get('/describe-table', (c) => {
   const slugs = resolveTeamSlugs(teamId)
   if (!slugs) return c.json({ detail: 'team not found' }, 404)
   try {
-    return c.json(describeTable(slugs.companySlug, slugs.teamSlug, table))
+    return c.json(describeTable(slugs.companySlug, table, { teamId }))
   } catch (e) {
     return c.json({ detail: e instanceof Error ? e.message : String(e) }, 400)
   }
@@ -106,9 +106,10 @@ composer.post('/install-recipe', async (c) => {
   if (recipe.setup_sql) {
     try {
       for (const stmt of recipe.setup_sql.split(/;\s*\n/).map((s) => s.trim()).filter(Boolean)) {
-        runExec(slugs.companySlug, slugs.teamSlug, stmt, {
+        runExec(slugs.companySlug, stmt, {
           source: `recipe:${recipe.id}`,
           note: 'setup_sql',
+          teamId: body.teamId,
         })
       }
     } catch (e) {

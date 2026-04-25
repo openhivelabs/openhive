@@ -17,7 +17,7 @@
  *     validated values map — AI cannot smuggle raw values from outside.
  */
 
-import { withTeamDb } from '../team-data'
+import { withCompanyDb } from '../team-data'
 import { callTool as mcpCallTool } from '../mcp/manager'
 import { getCredentialValue } from '../credentials'
 import { logPanelAction } from './audit'
@@ -196,18 +196,37 @@ function execTeamDataAction(
   if (sql.includes(';') && !/;\s*$/.test(sql)) {
     throw new ActionError('team_data action must be a single statement')
   }
+  // Safety: writes must carry team_id so teams can't clobber each other's
+  // rows through the shared company DB. INSERT must mention the column;
+  // UPDATE/DELETE must filter on it. We require an explicit `:team_id`
+  // binding in the SQL — auto-rewriting is too fragile to be worth it.
+  const head = sql.slice(0, 12).toUpperCase()
+  if (head.startsWith('INSERT')) {
+    if (!/\bteam_id\b/i.test(sql)) {
+      throw new ActionError(
+        'INSERT must include a team_id column bound to :team_id',
+      )
+    }
+  } else if (head.startsWith('UPDATE') || head.startsWith('DELETE')) {
+    if (!/\bteam_id\s*=\s*:team_id\b/i.test(sql)) {
+      throw new ActionError(
+        `${head.split(' ')[0]} must filter on team_id = :team_id in the WHERE clause`,
+      )
+    }
+  }
   // Collect all :name references in the SQL. Fill missing params with null so
   // optional form fields (e.g. an empty date) insert as NULL instead of
-  // crashing the statement.
+  // crashing the statement. `team_id` is auto-bound from the action context.
   const paramNames = Array.from(sql.matchAll(/:([A-Za-z_][A-Za-z0-9_]*)/g)).map(
     (m) => m[1] as string,
   )
-  const bound: Record<string, unknown> = {}
+  const bound: Record<string, unknown> = { team_id: ctx.teamId }
   for (const n of paramNames) {
+    if (n === 'team_id') continue
     const v = values[n]
     bound[n] = v === undefined || v === '' ? null : v
   }
-  return withTeamDb(ctx.companySlug, ctx.teamSlug, (conn) => {
+  return withCompanyDb(ctx.companySlug, (conn) => {
     const stmt = conn.prepare(sql)
     const info = stmt.run(bound)
     return info.changes

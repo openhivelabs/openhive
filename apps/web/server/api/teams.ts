@@ -91,7 +91,7 @@ teams.post('/:teamId/exec', async (c) => {
     return c.json({ detail: 'sql required' }, 400)
   }
   try {
-    return c.json(runExec(r.companySlug, r.teamSlug, body.sql, { source: 'manual' }))
+    return c.json(runExec(r.companySlug, body.sql, { source: 'manual', teamId }))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ detail: message }, 400)
@@ -181,7 +181,7 @@ teams.post('/:teamId/query', async (c) => {
     return c.json({ detail: 'sql required' }, 400)
   }
   try {
-    return c.json(runQuery(r.companySlug, r.teamSlug, body.sql))
+    return c.json(runQuery(r.companySlug, body.sql, { teamId }))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ detail: message }, 400)
@@ -194,7 +194,7 @@ teams.get('/:teamId/schema', (c) => {
   const teamId = c.req.param('teamId')
   const r = resolveTeamSlugs(teamId)
   if (!r) return c.json(teamNotFound(teamId), 404)
-  return c.json(describeSchema(r.companySlug, r.teamSlug))
+  return c.json(describeSchema(r.companySlug, { teamId }))
 })
 
 // ---------- /:teamId/snapshot ----------
@@ -249,10 +249,17 @@ teams.get('/:teamId/table/:tableName', (c) => {
     Math.min(1000, Number.parseInt(c.req.query('limit') ?? '100', 10) || 100),
   )
   const offset = Math.max(0, Number.parseInt(c.req.query('offset') ?? '0', 10) || 0)
-  const pageSql = `SELECT * FROM ${tableName} ORDER BY rowid DESC LIMIT ${limit} OFFSET ${offset}`
-  const page = runQuery(r.companySlug, r.teamSlug, pageSql)
-  const countSql = `SELECT COUNT(*) AS c FROM ${tableName}`
-  const countRes = runQuery(r.companySlug, r.teamSlug, countSql)
+  // Scope by team_id when the table carries the column (typical for user
+  // tables post team→company merge). Schema-less tables (legacy) fall back
+  // to the unscoped view so the inspector still works.
+  const schema = describeSchema(r.companySlug)
+  const hasTeamId =
+    schema.tables.find((t) => t.name === tableName)?.columns.some((col) => col.name === 'team_id') ?? false
+  const whereClause = hasTeamId ? 'WHERE team_id = :team_id' : ''
+  const pageSql = `SELECT * FROM ${tableName} ${whereClause} ORDER BY rowid DESC LIMIT ${limit} OFFSET ${offset}`
+  const page = runQuery(r.companySlug, pageSql, hasTeamId ? { teamId } : {})
+  const countSql = `SELECT COUNT(*) AS c FROM ${tableName} ${whereClause}`
+  const countRes = runQuery(r.companySlug, countSql, hasTeamId ? { teamId } : {})
   const total = Number((countRes.rows[0] ?? { c: 0 }).c ?? 0)
   return c.json({
     columns: page.columns,
@@ -278,7 +285,7 @@ teams.post('/:teamId/templates/install', async (c) => {
     return c.json({ detail: 'template name required' }, 400)
   }
   try {
-    return c.json(installTemplate(r.companySlug, r.teamSlug, body.template))
+    return c.json(installTemplate(r.companySlug, body.template, { teamId }))
   } catch (err) {
     const code = (err as { code?: string }).code
     const message = err instanceof Error ? err.message : String(err)

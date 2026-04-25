@@ -1,0 +1,45 @@
+id: total-count
+name: Total Count
+description: >-
+  Single-number tile showing how many rows exist in a chosen table.
+  Default reads the customer table — edit the SQL after install to point
+  at any other table.
+author: OpenHive
+category: kpi
+tags: [kpi, count, universal]
+
+# Size variants the user may pick from at install time. The first entry is
+# the default. Each value is a {colSpan, rowSpan} pair over the 4-column grid.
+sizes:
+  - { colSpan: 1, rowSpan: 1 }
+  - { colSpan: 2, rowSpan: 1 }
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS customer (
+    team_id    TEXT NOT NULL,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT,
+    email      TEXT,
+    stage      TEXT DEFAULT 'prospect',
+    value      REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: kpi
+  title: Total Count
+  subtitle: rows
+  colSpan: 1
+  rowSpan: 1
+  props:
+    hint: All records
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: "SELECT COUNT(*) AS n FROM customer WHERE team_id = :team_id"
+    map:
+      rows: "$.rows[*]"
+      value: n
+      aggregate: first
+    refresh_seconds: 300

@@ -63,6 +63,12 @@ RULES:
 - Keep SQL tight — name columns the panel will consume, avoid SELECT *.
 - Never invent tools or tables that aren't listed in the context.
 - refresh_seconds: 60 normal, 300 heavy, 30 fast-changing.
+- team_data DB is company-scoped with a \`team_id\` column on every user
+  table. EVERY team_data SELECT must include \`team_id = :team_id\` in its
+  WHERE clause — the server auto-binds \`:team_id\` to the installed team
+  so rows from other teams never leak in. INSERTs must list \`team_id\` as
+  a column and pass \`:team_id\` as its value; UPDATEs/DELETEs must carry
+  \`WHERE team_id = :team_id\` alongside any other predicate.
 - For team_data sources, the query result arrives as { columns, rows } — use
   \`map.rows: "$.rows[*]"\` (NOT "$[*]") unless you pass it through transforms.
 - For a kpi block when SQL already aggregates (COUNT/SUM/AVG in the query),
@@ -130,7 +136,7 @@ panelTemplates.post('/build', async (c) => {
 
   let schema: ReturnType<typeof describeSchema>
   try {
-    schema = describeSchema(resolved.companySlug, resolved.teamSlug)
+    schema = describeSchema(resolved.companySlug, { teamId: body.team_id })
   } catch {
     schema = { tables: [], recent_migrations: [] }
   }

@@ -33,7 +33,7 @@ describe('db_describe', () => {
   })
 
   it('reports empty: true + bootstrap hint for a new team', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const tools = teamDataTools('acme', 'team-sales', manifest())
     const describe = tools.find((t) => t.name === 'db_describe')!
     const out = JSON.parse((await describe.handler({})) as string)
     expect(out.empty).toBe(true)
@@ -44,7 +44,7 @@ describe('db_describe', () => {
 
 describe('db_query permissions', () => {
   it('returns read_denied when team_data_read is false', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest({ team_data_read: false }))
+    const tools = teamDataTools('acme', 'team-sales', manifest({ team_data_read: false }))
     const q = tools.find((t) => t.name === 'db_query')!
     const out = JSON.parse((await q.handler({ sql: 'SELECT 1' })) as string)
     expect(out.ok).toBe(false)
@@ -52,7 +52,7 @@ describe('db_query permissions', () => {
   })
 
   it('rejects non-SELECT with not_a_select', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const tools = teamDataTools('acme', 'team-sales', manifest())
     const q = tools.find((t) => t.name === 'db_query')!
     const out = JSON.parse((await q.handler({ sql: 'DELETE FROM x' })) as string)
     expect(out.ok).toBe(false)
@@ -72,7 +72,7 @@ describe('db_exec permissions + destructive gate', () => {
   })
 
   it('write_denied when write=false for non-DDL', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest({ team_data_write: false, team_data_ddl: true }))
+    const tools = teamDataTools('acme', 'team-sales', manifest({ team_data_write: false, team_data_ddl: true }))
     const exec = tools.find((t) => t.name === 'db_exec')!
     // bootstrap a table first with ddl only
     await exec.handler({ sql: 'CREATE TABLE t (x INT)' })
@@ -81,21 +81,21 @@ describe('db_exec permissions + destructive gate', () => {
   })
 
   it('ddl_denied when ddl=false for CREATE', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest({ team_data_ddl: false }))
+    const tools = teamDataTools('acme', 'team-sales', manifest({ team_data_ddl: false }))
     const exec = tools.find((t) => t.name === 'db_exec')!
     const out = JSON.parse((await exec.handler({ sql: 'CREATE TABLE t (x INT)' })) as string)
     expect(out.error_code).toBe('ddl_denied')
   })
 
   it('needs_approval when ddl="ask"', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest({ team_data_ddl: 'ask' }))
+    const tools = teamDataTools('acme', 'team-sales', manifest({ team_data_ddl: 'ask' }))
     const exec = tools.find((t) => t.name === 'db_exec')!
     const out = JSON.parse((await exec.handler({ sql: 'CREATE TABLE t (x INT)' })) as string)
     expect(out.error_code).toBe('needs_approval')
   })
 
   it('destructive_unconfirmed without confirm flag', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const tools = teamDataTools('acme', 'team-sales', manifest())
     const exec = tools.find((t) => t.name === 'db_exec')!
     await exec.handler({ sql: 'CREATE TABLE t (x INT)' })
     const out = JSON.parse((await exec.handler({ sql: 'DROP TABLE t' })) as string)
@@ -103,7 +103,7 @@ describe('db_exec permissions + destructive gate', () => {
   })
 
   it('runs destructive with confirm_destructive: true', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const tools = teamDataTools('acme', 'team-sales', manifest())
     const exec = tools.find((t) => t.name === 'db_exec')!
     await exec.handler({ sql: 'CREATE TABLE t (x INT)' })
     const out = JSON.parse(
@@ -114,7 +114,7 @@ describe('db_exec permissions + destructive gate', () => {
   })
 
   it('binds params', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const tools = teamDataTools('acme', 'team-sales', manifest())
     const exec = tools.find((t) => t.name === 'db_exec')!
     const q = tools.find((t) => t.name === 'db_query')!
     await exec.handler({ sql: 'CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)' })
@@ -126,7 +126,7 @@ describe('db_exec permissions + destructive gate', () => {
   })
 
   it('rejects multi_statement', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const tools = teamDataTools('acme', 'team-sales', manifest())
     const exec = tools.find((t) => t.name === 'db_exec')!
     const out = JSON.parse(
       (await exec.handler({ sql: 'CREATE TABLE a(x INT); CREATE TABLE b(y INT)' })) as string,
@@ -147,7 +147,7 @@ describe('db_explain', () => {
   })
 
   it('returns a plan for a SELECT', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const tools = teamDataTools('acme', 'team-sales', manifest())
     const exec = tools.find((t) => t.name === 'db_exec')!
     const explain = tools.find((t) => t.name === 'db_explain')!
     await exec.handler({ sql: 'CREATE TABLE t (id INTEGER PRIMARY KEY, x INT)' })
@@ -159,7 +159,7 @@ describe('db_explain', () => {
   })
 
   it('rejects non-SELECT', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const tools = teamDataTools('acme', 'team-sales', manifest())
     const explain = tools.find((t) => t.name === 'db_explain')!
     const out = JSON.parse(
       (await explain.handler({ sql: 'DELETE FROM t' })) as string,
@@ -190,14 +190,14 @@ describe('db_install_template', () => {
   })
 
   it('denies templates not in whitelist', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest({ team_data_templates: ['inbox'] }))
+    const tools = teamDataTools('acme', 'team-sales', manifest({ team_data_templates: ['inbox'] }))
     const t = tools.find((x) => x.name === 'db_install_template')!
     const out = JSON.parse((await t.handler({ template_name: 'crm' })) as string)
     expect(out.error_code).toBe('unknown_template')
   })
 
   it('installs whitelisted template', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest({ team_data_templates: ['crm'] }))
+    const tools = teamDataTools('acme', 'team-sales', manifest({ team_data_templates: ['crm'] }))
     const t = tools.find((x) => x.name === 'db_install_template')!
     const out = JSON.parse((await t.handler({ template_name: 'crm' })) as string)
     expect(out.ok).toBe(true)
@@ -207,7 +207,7 @@ describe('db_install_template', () => {
 
 describe('db_read_guide', () => {
   it('rejects unknown topic', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const tools = teamDataTools('acme', 'team-sales', manifest())
     const t = tools.find((x) => x.name === 'db_read_guide')!
     const out = JSON.parse((await t.handler({ topic: 'bogus' })) as string)
     expect(out.error_code).toBe('unknown_topic')
@@ -215,7 +215,7 @@ describe('db_read_guide', () => {
   })
 
   it('returns markdown for a known topic', async () => {
-    const tools = teamDataTools(['acme', 'sales'], manifest())
+    const tools = teamDataTools('acme', 'team-sales', manifest())
     const t = tools.find((x) => x.name === 'db_read_guide')!
     const out = JSON.parse((await t.handler({ topic: 'hybrid-schema' })) as string)
     expect(out.ok).toBe(true)

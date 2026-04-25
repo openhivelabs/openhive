@@ -1,0 +1,70 @@
+id: library-books
+name: Library Books
+description: >-
+  Personal library — track books you own with title, author, status.
+  Contains a `book` table. Intentionally does NOT try to merge with any
+  existing `customer`/`contact` table even though names look similar.
+author: OpenHive
+category: table
+tags: [table, library, personal]
+
+sizes:
+  - { colSpan: 2, rowSpan: 2 }
+  - { colSpan: 4, rowSpan: 2 }
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS book (
+    team_id  TEXT NOT NULL,
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    title    TEXT NOT NULL,
+    author   TEXT,
+    status   TEXT DEFAULT 'unread',
+    rating   INTEGER,
+    added_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: table
+  title: Library
+  colSpan: 2
+  rowSpan: 2
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT id, title, author, status, rating
+            FROM book
+           WHERE team_id = :team_id
+           ORDER BY added_at DESC
+           LIMIT 200
+    map:
+      rows: "$.rows[*]"
+      columns: [id, title, author, status, rating]
+      on_click: { kind: detail }
+    refresh_seconds: 30
+    actions:
+      - id: add-book
+        kind: create
+        label: Add book
+        placement: toolbar
+        form:
+          fields:
+            - { name: title, label: Title, type: text, required: true }
+            - { name: author, label: Author, type: text }
+            - { name: status, label: Status, type: select, options: [unread, reading, done, abandoned], default: unread }
+            - { name: rating, label: "Rating (1-5)", type: number, min: 1, max: 5 }
+        target:
+          kind: team_data
+          config:
+            sql: |
+              INSERT INTO book (team_id, title, author, status, rating)
+              VALUES (:team_id, :title, :author, :status, :rating)
+      - id: mark-done
+        kind: update
+        label: Mark as done
+        placement: row
+        target:
+          kind: team_data
+          config:
+            sql: "UPDATE book SET status = 'done' WHERE team_id = :team_id AND id = :id"

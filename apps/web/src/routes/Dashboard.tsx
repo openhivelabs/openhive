@@ -1,17 +1,13 @@
 import { AddPanelModal } from '@/components/dashboard/AddPanelModal'
-import { AiEditDrawer } from '@/components/dashboard/AiEditDrawer'
 import { Block } from '@/components/dashboard/Block'
 import { BoundPanel } from '@/components/dashboard/BoundPanel'
-import { DashboardAiDock } from '@/components/dashboard/DashboardAiDock'
-import { HistoryModal } from '@/components/dashboard/HistoryModal'
-import { RecipePickerModal } from '@/components/dashboard/RecipePickerModal'
+import { FrameMarketModal } from '@/components/modals/FrameMarketModal'
 import {
   type DashboardLayout,
   type PanelSpec,
   fetchDashboard,
   saveDashboard,
 } from '@/lib/api/dashboards'
-import { createSnapshot, discardSnapshot, restoreSnapshot } from '@/lib/api/snapshots'
 import {
   type QueryResult,
   type SchemaResponse,
@@ -20,13 +16,7 @@ import {
 } from '@/lib/api/teamData'
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
-import {
-  ClockCounterClockwise,
-  Package,
-  PencilSimple,
-  Plus,
-  Sparkle,
-} from '@phosphor-icons/react'
+import { Package, PencilSimple, Plus } from '@phosphor-icons/react'
 import { useCallback, useEffect, useState } from 'react'
 
 const STAGE_ORDER = ['prospect', 'qualified', 'proposal', 'won', 'lost'] as const
@@ -43,17 +33,17 @@ const DEFAULT_LAYOUT: DashboardLayout = { blocks: [] }
 export function Dashboard() {
   const t = useT()
   const teamId = useAppStore((s) => s.currentTeamId)
+  const companies = useAppStore((s) => s.companies)
+  const currentCompany =
+    companies.find((c) => c.teams.some((tm) => tm.id === teamId)) ?? null
   const [schema, setSchema] = useState<SchemaResponse | null>(null)
   const [customers, setCustomers] = useState<QueryResult | null>(null)
   const [layout, setLayout] = useState<DashboardLayout | null>(null)
   const [editing, setEditing] = useState(false)
-  const [aiOpen, setAiOpen] = useState(false)
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
-  const [addPanelOpen, setAddPanelOpen] = useState(false)
   const [editingPanelId, setEditingPanelId] = useState<string | null>(null)
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const [recipesOpen, setRecipesOpen] = useState(false)
+  const [marketOpen, setMarketOpen] = useState(false)
 
   useEffect(() => {
     if (!teamId) return
@@ -93,14 +83,6 @@ export function Dashboard() {
       if (teamId) await saveDashboard(teamId, next).catch(() => {})
     },
     [teamId],
-  )
-
-  const addBlock = useCallback(
-    (spec: PanelSpec) => {
-      const next = { blocks: [...(layout?.blocks ?? []), spec] }
-      void persist(next)
-    },
-    [layout, persist],
   )
 
   const removeBlock = useCallback(
@@ -145,43 +127,13 @@ export function Dashboard() {
     rows: customerRows.filter((r) => r.stage === stage),
   }))
 
-  const enterEdit = useCallback(async () => {
-    if (!teamId) return
-    try {
-      await createSnapshot(teamId)
-    } catch {
-      /* first-run — still allow editing */
-    }
+  const enterEdit = useCallback(() => {
     setEditing(true)
-  }, [teamId])
+  }, [])
 
-  const leaveEdit = useCallback(
-    async (discard: boolean) => {
-      setEditing(false)
-      setAiOpen(false)
-      if (!teamId) return
-      if (discard) await discardSnapshot(teamId)
-    },
-    [teamId],
-  )
-
-  const onRestoreSnapshot = useCallback(async () => {
-    if (!teamId) return
-    await restoreSnapshot(teamId)
-    const l = await fetchDashboard(teamId).catch(() => null)
-    if (l) setLayout(l)
-    const s = await fetchSchema(teamId).catch(() => null)
-    if (s) setSchema(s)
-    setAiOpen(false)
+  const leaveEdit = useCallback(() => {
     setEditing(false)
-  }, [teamId])
-
-  const onApplyEdit = useCallback(async () => {
-    if (!teamId) return
-    await discardSnapshot(teamId)
-    setAiOpen(false)
-    setEditing(false)
-  }, [teamId])
+  }, [])
 
   return (
     <div className="h-full flex overflow-hidden bg-neutral-50 dark:bg-neutral-950">
@@ -192,51 +144,19 @@ export function Dashboard() {
               <>
                 <button
                   type="button"
-                  onClick={() => setAddPanelOpen(true)}
-                  className="h-9 pl-3 pr-3.5 rounded-full bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 text-[13px] font-medium inline-flex items-center gap-1.5 shadow-sm hover:opacity-90 cursor-pointer"
+                  onClick={() => setMarketOpen(true)}
+                  className="inline-flex items-center justify-center gap-1.5 h-[34px] px-[20px] text-[13px] leading-none bg-neutral-900 text-white rounded-sm hover:bg-neutral-800 cursor-pointer"
                 >
                   <Plus weight="bold" className="w-3.5 h-3.5" />
                   {t('dashboard.addPanel')}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setRecipesOpen(true)}
-                  className="h-9 px-3 rounded-full bg-white dark:bg-neutral-900 ring-1 ring-neutral-200 dark:ring-neutral-800 text-[13px] font-medium text-neutral-700 dark:text-neutral-200 inline-flex items-center gap-1.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
+                  onClick={leaveEdit}
+                  className="inline-flex items-center justify-center gap-1 h-[34px] px-[20px] text-[13px] leading-none bg-white dark:bg-neutral-900 text-neutral-500 dark:text-neutral-400 ring-1 ring-neutral-200 dark:ring-neutral-800 rounded-sm hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
                 >
-                  <Package className="w-3.5 h-3.5" />
-                  {t('recipes.open')}
+                  {t('dashboard.done')}
                 </button>
-                <div className="inline-flex items-center h-9 rounded-full bg-white dark:bg-neutral-900 ring-1 ring-neutral-200 dark:ring-neutral-800 shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setAiOpen((v) => !v)}
-                    className={
-                      aiOpen
-                        ? 'h-full px-3 text-[13px] font-medium text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 inline-flex items-center gap-1.5 cursor-pointer'
-                        : 'h-full px-3 text-[13px] font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-800 inline-flex items-center gap-1.5 cursor-pointer'
-                    }
-                  >
-                    <Sparkle weight="fill" className="w-3.5 h-3.5 text-amber-500" />
-                    {t('dashboard.aiCustomize')}
-                  </button>
-                  <div className="w-px h-4 bg-neutral-200 dark:bg-neutral-800" />
-                  <button
-                    type="button"
-                    onClick={() => setHistoryOpen(true)}
-                    className="h-full px-3 text-[13px] font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-800 inline-flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <ClockCounterClockwise className="w-3.5 h-3.5" />
-                    {t('history.open')}
-                  </button>
-                  <div className="w-px h-4 bg-neutral-200 dark:bg-neutral-800" />
-                  <button
-                    type="button"
-                    onClick={() => leaveEdit(true)}
-                    className="h-full px-3 text-[13px] font-medium text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
-                  >
-                    {t('dashboard.done')}
-                  </button>
-                </div>
               </>
             ) : (
               <button
@@ -254,14 +174,7 @@ export function Dashboard() {
             {schema === null ? (
               <div className="h-full" aria-hidden="true" />
             ) : (layout?.blocks.length ?? 0) === 0 ? (
-              editing ? (
-                <EditEmptyState
-                  onAdd={() => setAddPanelOpen(true)}
-                  onAskAi={() => setAiOpen(true)}
-                />
-              ) : (
-                <EmptyState />
-              )
+              <EmptyState />
             ) : (
               <div className="grid grid-cols-4 auto-rows-[180px] gap-3">
                 {(layout?.blocks ?? []).map((spec) => (
@@ -288,49 +201,19 @@ export function Dashboard() {
         </div>
       </div>
       {teamId && (
-        <DashboardAiDock
-          teamId={teamId}
-          onApplied={async () => {
+        <FrameMarketModal
+          open={marketOpen}
+          onClose={() => setMarketOpen(false)}
+          allowedTabs={['panel']}
+          defaultCompanyId={currentCompany?.id ?? null}
+          defaultTeamId={teamId}
+          lockTarget
+          onPanelInstalled={async () => {
             const fresh = await fetchDashboard(teamId).catch(() => null)
             if (fresh) setLayout(fresh)
           }}
         />
       )}
-      {recipesOpen && teamId && (
-        <RecipePickerModal
-          teamId={teamId}
-          onClose={() => setRecipesOpen(false)}
-          onInstalled={async () => {
-            const fresh = await fetchDashboard(teamId).catch(() => null)
-            if (fresh) setLayout(fresh)
-          }}
-        />
-      )}
-      {historyOpen && teamId && (
-        <HistoryModal
-          teamId={teamId}
-          onClose={() => setHistoryOpen(false)}
-          onRestored={async () => {
-            const fresh = await fetchDashboard(teamId).catch(() => null)
-            if (fresh) setLayout(fresh)
-          }}
-        />
-      )}
-      <AiEditDrawer
-        open={aiOpen}
-        onClose={() => setAiOpen(false)}
-        onApply={onApplyEdit}
-        onRestore={onRestoreSnapshot}
-      />
-      <AddPanelModal
-        open={addPanelOpen}
-        teamId={teamId}
-        onClose={() => setAddPanelOpen(false)}
-        onAdd={(spec) => {
-          addBlock(spec)
-          setAddPanelOpen(false)
-        }}
-      />
       <AddPanelModal
         open={editingPanelId !== null}
         teamId={teamId}
@@ -637,56 +520,3 @@ function EmptyState() {
   )
 }
 
-function EditEmptyState({
-  onAdd,
-  onAskAi,
-}: {
-  onAdd: () => void
-  onAskAi: () => void
-}) {
-  const t = useT()
-  return (
-    <div className="h-full max-w-[1400px] mx-auto">
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={onAdd}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            onAdd()
-          }
-        }}
-        className="group relative h-full rounded-2xl border border-dashed border-neutral-300 dark:border-neutral-700 hover:border-neutral-400 dark:hover:border-neutral-600 bg-white/40 dark:bg-neutral-900/30 hover:bg-white/70 dark:hover:bg-neutral-900/50 transition-colors cursor-pointer flex flex-col items-center justify-center gap-6 p-10 overflow-hidden"
-        style={{
-          backgroundImage:
-            'radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)',
-          backgroundSize: '18px 18px',
-        }}
-      >
-        <div className="w-14 h-14 rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-neutral-200 dark:ring-neutral-800 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_6px_20px_rgba(0,0,0,0.06)] flex items-center justify-center transition-transform group-hover:-translate-y-0.5">
-          <Plus weight="bold" className="w-6 h-6 text-neutral-700 dark:text-neutral-200" />
-        </div>
-        <div className="text-center">
-          <div className="text-[16px] font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
-            {t('dashboard.emptyEdit.title')}
-          </div>
-          <p className="text-[13px] text-neutral-500 dark:text-neutral-400 mt-1.5 max-w-[380px] mx-auto leading-relaxed">
-            {t('dashboard.emptyEdit.desc')}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onAskAi()
-          }}
-          className="h-8 px-3 rounded-full bg-white dark:bg-neutral-900 ring-1 ring-amber-300/70 dark:ring-amber-400/30 text-[13px] font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
-        >
-          <Sparkle weight="fill" className="w-3.5 h-3.5 text-amber-500" />
-          {t('dashboard.emptyEdit.askAi')}
-        </button>
-      </div>
-    </div>
-  )
-}

@@ -16,7 +16,7 @@ import {
   isDestructiveSql,
   runExec,
   runQuery,
-  withTeamDb,
+  withCompanyDb,
 } from '../team-data'
 import type { Tool } from './base'
 
@@ -69,10 +69,13 @@ function errorCodeOf(e: unknown): string | null {
 }
 
 export function teamDataTools(
-  teamSlugs: [string, string],
+  companySlug: string,
+  teamId: string,
   manifest: ToolsManifest,
 ): Tool[] {
-  const [companySlug, teamSlug] = teamSlugs
+  // DB is company-scoped; `teamId` becomes a bound `:team_id` param so the
+  // AI's SELECTs/INSERTs stay within its own team's rows unless it writes
+  // an explicit cross-team query.
   const tools: Tool[] = []
 
   tools.push({
@@ -96,7 +99,7 @@ export function teamDataTools(
         )
       }
       try {
-        const schema = describeSchema(companySlug, teamSlug)
+        const schema = describeSchema(companySlug, { teamId })
         const empty = schema.tables.length === 0
         return JSON.stringify({
           ok: true,
@@ -126,10 +129,14 @@ export function teamDataTools(
   tools.push({
     name: 'db_query',
     description:
-      "Run one read-only SQL statement (SELECT or WITH) against this team's data.db. " +
-      'Always use ? placeholders with the `params` array — never string-concat user data. ' +
-      'Returns {columns, rows, truncated, elapsed_ms}. Results are capped at `limit` ' +
-      '(default 500, max 5000). Call `db_explain` first if the query may touch >1k rows.',
+      "Run one read-only SQL statement (SELECT or WITH) against the company's data.db. " +
+      'Tables are shared across the company but carry a `team_id` column — include ' +
+      '`WHERE team_id = :team_id` in every query to stay scoped to the current team. ' +
+      "(Drop the filter only when you explicitly want a cross-team view.) The server " +
+      'auto-binds `:team_id`. Use `?` placeholders with the `params` array for any other ' +
+      'literals — never string-concat user data. Returns {columns, rows, truncated, ' +
+      'elapsed_ms}. Results are capped at `limit` (default 500, max 5000). Call ' +
+      '`db_explain` first if the query may touch >1k rows.',
     parameters: {
       type: 'object',
       properties: {
@@ -183,8 +190,9 @@ export function teamDataTools(
       const wrapped = /\blimit\b/i.test(sql) ? sql : `SELECT * FROM (${sql}) LIMIT ${limit + 1}`
       const started = Date.now()
       try {
-        const res = runQuery(companySlug, teamSlug, wrapped, {
+        const res = runQuery(companySlug, wrapped, {
           params: paramsFromArgs(args),
+          teamId,
         })
         const truncated = res.rows.length > limit
         const rows = truncated ? res.rows.slice(0, limit) : res.rows
@@ -214,12 +222,16 @@ export function teamDataTools(
   tools.push({
     name: 'db_exec',
     description:
-      "Run one write or DDL statement against this team's data.db (INSERT/UPDATE/DELETE/" +
-      'CREATE/ALTER/DROP). Use ? placeholders + `params`. DDL is auto-logged to ' +
-      'schema_migrations. Destructive operations (DROP TABLE, TRUNCATE, DELETE/UPDATE ' +
-      'without WHERE) require `confirm_destructive: true` — explain the blast radius to ' +
-      'the user before setting this. Prefer ALTER over DROP, and the `data` JSON column ' +
-      'for ad-hoc fields before adding a new column.',
+      "Run one write or DDL statement against the company's data.db (INSERT/UPDATE/DELETE/" +
+      'CREATE/ALTER/DROP). Every user table carries a `team_id` column. ' +
+      'INSERTs must list `team_id` as a column and pass `:team_id` as its value. ' +
+      'UPDATEs/DELETEs must include `WHERE team_id = :team_id` in the WHERE clause. ' +
+      'CREATE TABLE must declare `team_id TEXT NOT NULL` as the first column. ' +
+      'The server auto-binds `:team_id` to the current team. Use `?` placeholders + ' +
+      '`params` for any other literals. DDL is auto-logged to schema_migrations. ' +
+      'Destructive ops (DROP TABLE, TRUNCATE, WHERE-less DELETE/UPDATE) require ' +
+      '`confirm_destructive: true` — explain the blast radius first. Prefer ALTER over ' +
+      'DROP, and the `data` JSON column for ad-hoc fields before adding a new column.',
     parameters: {
       type: 'object',
       properties: {
@@ -277,10 +289,11 @@ export function teamDataTools(
       }
       const started = Date.now()
       try {
-        const res = runExec(companySlug, teamSlug, sql, {
+        const res = runExec(companySlug, sql, {
           source: 'ai',
           note: typeof args.note === 'string' ? args.note : null,
           params: paramsFromArgs(args),
+          teamId,
         })
         return JSON.stringify({ ...res, ok: true, elapsed_ms: Date.now() - started })
       } catch (exc) {
@@ -331,7 +344,7 @@ export function teamDataTools(
       }
       try {
         const bindings = paramsFromArgs(args)
-        const rows = withTeamDb(companySlug, teamSlug, (conn) => {
+        const rows = withCompanyDb(companySlug, (conn) => {
           const stmt = conn.prepare(`EXPLAIN QUERY PLAN ${sql}`)
           return (bindings.length > 0 ? stmt.all(...bindings) : stmt.all()) as Record<
             string,
@@ -387,7 +400,7 @@ export function teamDataTools(
         )
       }
       try {
-        const res = installTemplate(companySlug, teamSlug, name)
+        const res = installTemplate(companySlug, name, { teamId })
         return JSON.stringify({ ...res, ok: true })
       } catch (exc) {
         const code = errorCodeOf(exc) ?? 'internal'

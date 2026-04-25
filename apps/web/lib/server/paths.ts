@@ -46,8 +46,26 @@ export function teamDir(companySlug: string, teamSlug: string): string {
   return path.join(companyDir(companySlug), 'teams', teamSlug)
 }
 
+/**
+ * @deprecated Team-scoped DBs are being merged into a single company-scoped
+ * `data.db`. This helper is retained only for the one-shot migration script;
+ * runtime code should use {@link companyDataDbPath} and carry `team_id` as a
+ * bound parameter.
+ */
 export function teamDataDbPath(companySlug: string, teamSlug: string): string {
   return path.join(teamDir(companySlug, teamSlug), 'data.db')
+}
+
+/** Company-scoped domain DB. Holds all teams' user tables with a `team_id`
+ *  column as the soft namespace. Resolves to `companies/<c>/data.db`. */
+export function companyDataDbPath(companySlug: string): string {
+  return path.join(companyDir(companySlug), 'data.db')
+}
+
+/** Company-scoped shared files pool (readable by any team). Team-private
+ *  files continue to live under {@link teamDir}/files/. */
+export function companyFilesDir(companySlug: string): string {
+  return path.join(companyDir(companySlug), 'files')
 }
 
 export function artifactsRoot(): string {

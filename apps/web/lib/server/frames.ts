@@ -18,7 +18,7 @@ import yaml from 'js-yaml'
 import { companyDir, packagesRoot, teamYamlPath } from './paths'
 import { saveTeam, type TeamDict } from './companies'
 import { loadDashboard, saveDashboard } from './dashboards'
-import { teamDbPath, withTeamDb } from './team-data'
+import { companyDbPath, withCompanyDb } from './team-data'
 import { CLAUDE_CODE_MODELS, CODEX_MODELS } from './providers/models'
 
 function defaultModelFor(providerId: string): string {
@@ -133,13 +133,20 @@ function bundlePersonaFiles(pathRef: string): Record<string, string> {
   return out
 }
 
-function extractSchema(companySlug: string, teamSlug: string): string[] {
-  const dbFile = teamDbPath(companySlug, teamSlug)
+function extractSchema(companySlug: string, teamId: string): string[] {
+  // Company DB holds every team's DDL history. Filter the schema_migrations
+  // stream to rows tagged with this team plus any company-wide rows (null
+  // team_id) so the exported frame ships a complete schema snapshot.
+  const dbFile = companyDbPath(companySlug)
   if (!fs.existsSync(dbFile)) return []
-  return withTeamDb(companySlug, teamSlug, (conn) => {
+  return withCompanyDb(companySlug, (conn) => {
     const rows = conn
-      .prepare('SELECT sql FROM schema_migrations ORDER BY id ASC')
-      .all() as { sql: string | null }[]
+      .prepare(
+        `SELECT sql FROM schema_migrations
+          WHERE team_id = :team_id OR team_id IS NULL
+          ORDER BY id ASC`,
+      )
+      .all({ team_id: teamId }) as { sql: string | null }[]
     return rows
       .map((r) => (r.sql ?? '').trim())
       .filter((s) => s.length > 0)
@@ -211,7 +218,9 @@ export function buildFrame(companySlug: string, teamSlug: string): Frame {
   }
 
   const dashboard = loadDashboard(companySlug, teamSlug)
-  const dataSchema = extractSchema(companySlug, teamSlug)
+  const teamIdForSchema =
+    typeof team.id === 'string' && team.id ? team.id : teamSlug
+  const dataSchema = extractSchema(companySlug, teamIdForSchema)
 
   const skillsRequired = new Set<string>()
   const providersRequired = new Set<string>()
@@ -519,20 +528,22 @@ export function installFrame(
     saveDashboard(targetCompanySlug, teamSlug, dashboard as Record<string, unknown>)
   }
 
-  // Data schema — replay each DDL block. Each block becomes one migration row.
+  // Data schema — replay each DDL block against the company DB. Each block
+  // becomes one migration row tagged with the team we're installing into so
+  // the schema origin is traceable post-merge.
   const schemaErrors: string[] = []
   for (const sql of (fObj.data_schema as unknown[] | undefined) ?? []) {
     if (typeof sql !== 'string' || !sql.trim()) continue
     try {
-      withTeamDb(targetCompanySlug, teamSlug, (conn) => {
+      withCompanyDb(targetCompanySlug, (conn) => {
         const tx = conn.transaction(() => {
           conn.exec(sql)
           conn
             .prepare(
-              `INSERT INTO schema_migrations (applied_at, source, sql, note)
-               VALUES (?, ?, ?, ?)`,
+              `INSERT INTO schema_migrations (applied_at, source, sql, note, team_id)
+               VALUES (?, ?, ?, ?, ?)`,
             )
-            .run(Date.now(), 'frame_install', sql, null)
+            .run(Date.now(), 'frame_install', sql, null, teamId)
         })
         tx()
       })

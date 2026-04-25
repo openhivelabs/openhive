@@ -1,20 +1,25 @@
 /**
- * Per-team domain data DB (~/.openhive/companies/{c}/teams/{t}/data.db).
- * Ports apps/server/openhive/persistence/team_data.py.
+ * Company-scoped domain data DB (~/.openhive/companies/{c}/data.db).
+ *
+ * Every user-created table carries a `team_id` column as the soft namespace.
+ * Panel SQL binds `:team_id` at execution time so each team sees only its
+ * own rows; panels that intentionally omit the filter act as cross-team
+ * views.
  *
  * This DB is SEPARATE from the engine system DB:
- *   - openhive.db       = engine runtime (shared via lib/server/db.ts)
- *   - data.db (per team) = user domain data, AI-writable, JSON1 hybrid
+ *   - openhive.db               = engine runtime (shared via lib/server/db.ts)
+ *   - companies/<c>/data.db     = user domain data, AI-writable, JSON1 hybrid
  *
  * Runtime DDL is allowed here (CREATE TABLE / ALTER TABLE). Every schema-
- * changing statement is logged in `schema_migrations` for traceability.
+ * changing statement is logged in `schema_migrations` for traceability; the
+ * log carries the `team_id` responsible for the change (NULL = company-wide).
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import type { Database as BetterSqliteDatabase } from 'better-sqlite3'
-import { packagesRoot, teamDir } from './paths'
+import { companyDir, packagesRoot, teamDir } from './paths'
 
 const BOOTSTRAP_SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -22,13 +27,27 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at  INTEGER NOT NULL,
   source      TEXT NOT NULL,
   sql         TEXT NOT NULL,
-  note        TEXT
+  note        TEXT,
+  team_id     TEXT
 );
 `
 
-export function teamDbPath(companySlug: string, teamSlug: string): string {
+export function companyDbPath(companySlug: string): string {
   // Honor OPENHIVE_DATA_DIR env directly so tests that swap tmp dirs per-test
   // don't get pinned to the cached getSettings() value.
+  const envRoot = process.env.OPENHIVE_DATA_DIR
+  const dir = envRoot
+    ? path.join(envRoot, 'companies', companySlug)
+    : companyDir(companySlug)
+  fs.mkdirSync(dir, { recursive: true })
+  return path.join(dir, 'data.db')
+}
+
+/**
+ * @deprecated Kept only for the one-shot team→company DB migration. Runtime
+ * code must use {@link companyDbPath}.
+ */
+export function teamDbPath(companySlug: string, teamSlug: string): string {
   const envRoot = process.env.OPENHIVE_DATA_DIR
   const dir = envRoot
     ? path.join(envRoot, 'companies', companySlug, 'teams', teamSlug)
@@ -38,27 +57,39 @@ export function teamDbPath(companySlug: string, teamSlug: string): string {
 }
 
 /**
- * Open/close per call — team data DBs can be numerous and mostly idle. Still
- * cheap enough that we don't bother pooling. Callers should use short-lived
+ * Open/close per call — company data DBs are long-lived but still cheap
+ * enough that we don't bother pooling. Callers should use short-lived
  * handles and avoid crossing request boundaries.
  */
-function openTeamDb(companySlug: string, teamSlug: string): BetterSqliteDatabase {
-  const file = teamDbPath(companySlug, teamSlug)
+function openCompanyDb(companySlug: string): BetterSqliteDatabase {
+  const file = companyDbPath(companySlug)
   const conn = new Database(file)
   conn.pragma('journal_mode = WAL')
   conn.pragma('foreign_keys = ON')
   const busyMs = Number.parseInt(process.env.OPENHIVE_DB_BUSY_TIMEOUT_MS ?? '5000', 10)
   conn.pragma(`busy_timeout = ${Number.isFinite(busyMs) && busyMs > 0 ? busyMs : 5000}`)
   conn.exec(BOOTSTRAP_SCHEMA)
+  // Forward-compat: ensure the team_id column exists on pre-existing
+  // schema_migrations tables that were bootstrapped before this column was
+  // added. SQLite ignores ADD COLUMN IF NOT EXISTS, so emulate.
+  try {
+    const cols = conn
+      .prepare('PRAGMA table_info(schema_migrations)')
+      .all() as { name: string }[]
+    if (!cols.some((c) => c.name === 'team_id')) {
+      conn.exec('ALTER TABLE schema_migrations ADD COLUMN team_id TEXT')
+    }
+  } catch {
+    /* ignore — migration will log if something is genuinely wrong */
+  }
   return conn
 }
 
-export function withTeamDb<T>(
+export function withCompanyDb<T>(
   companySlug: string,
-  teamSlug: string,
   fn: (conn: BetterSqliteDatabase) => T,
 ): T {
-  const conn = openTeamDb(companySlug, teamSlug)
+  const conn = openCompanyDb(companySlug)
   const timeoutMs = Number.parseInt(
     process.env.OPENHIVE_DB_QUERY_TIMEOUT_MS ?? '10000',
     10,
@@ -111,6 +142,7 @@ export interface MigrationRow {
   source: string
   sql: string
   note: string | null
+  team_id: string | null
 }
 
 export interface SchemaDescription {
@@ -121,19 +153,20 @@ export interface SchemaDescription {
 /**
  * Describe a single table with schema + row count + up to N sample rows.
  * Used by the AI composer so the model can write SQL against a real shape
- * instead of guessing. Samples are always limited and never include `deleted_at`-
- * marked rows (when that convention is present) so they stay representative.
+ * instead of guessing. When `teamId` is passed, samples + row_count are
+ * scoped to that team (so the AI doesn't leak rows from peer teams into
+ * its few-shot examples). Without `teamId`, returns the company-wide view.
  */
 export function describeTable(
   companySlug: string,
-  teamSlug: string,
   tableName: string,
-  sampleLimit = 3,
+  opts: { teamId?: string; sampleLimit?: number } = {},
 ): TableInfo & { samples: Record<string, unknown>[] } {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) {
     throw new Error(`invalid table name: ${JSON.stringify(tableName)}`)
   }
-  return withTeamDb(companySlug, teamSlug, (conn) => {
+  const sampleLimit = opts.sampleLimit ?? 3
+  return withCompanyDb(companySlug, (conn) => {
     const rawCols = conn.prepare(`PRAGMA table_info(${tableName})`).all() as {
       name: string
       type: string
@@ -149,12 +182,27 @@ export function describeTable(
       notnull: !!c.notnull,
       pk: !!c.pk,
     }))
-    const countRow = conn.prepare(`SELECT COUNT(*) AS n FROM ${tableName}`).get() as { n: number }
+    const hasTeamIdCol = rawCols.some((c) => c.name === 'team_id')
     const hasSoftDelete = rawCols.some((c) => c.name === 'deleted_at')
-    const where = hasSoftDelete ? 'WHERE deleted_at IS NULL' : ''
-    const samples = conn
-      .prepare(`SELECT * FROM ${tableName} ${where} LIMIT ?`)
-      .all(Math.max(1, Math.min(10, sampleLimit))) as Record<string, unknown>[]
+    const whereParts: string[] = []
+    if (hasSoftDelete) whereParts.push('deleted_at IS NULL')
+    if (hasTeamIdCol && opts.teamId) whereParts.push('team_id = :team_id')
+    const where = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : ''
+    const binds: Record<string, unknown> = {}
+    if (hasTeamIdCol && opts.teamId) binds.team_id = opts.teamId
+    const countStmt = conn.prepare(
+      `SELECT COUNT(*) AS n FROM ${tableName} ${where}`,
+    )
+    const countRow = (Object.keys(binds).length > 0
+      ? countStmt.get(binds)
+      : countStmt.get()) as { n: number }
+    const sampleStmt = conn.prepare(
+      `SELECT * FROM ${tableName} ${where} LIMIT :__limit`,
+    )
+    const samples = sampleStmt.all({
+      ...binds,
+      __limit: Math.max(1, Math.min(10, sampleLimit)),
+    }) as Record<string, unknown>[]
     return {
       name: tableName,
       columns,
@@ -166,9 +214,9 @@ export function describeTable(
 
 export function describeSchema(
   companySlug: string,
-  teamSlug: string,
+  opts: { teamId?: string } = {},
 ): SchemaDescription {
-  return withTeamDb(companySlug, teamSlug, (conn) => {
+  return withCompanyDb(companySlug, (conn) => {
     const tableRows = conn
       .prepare(
         `SELECT name FROM sqlite_master
@@ -193,17 +241,34 @@ export function describeSchema(
         notnull: !!c.notnull,
         pk: !!c.pk,
       }))
-      const countRow = conn
-        .prepare(`SELECT COUNT(*) AS n FROM ${r.name}`)
-        .get() as { n: number }
+      const hasTeamIdCol = rawCols.some((c) => c.name === 'team_id')
+      const countStmt =
+        hasTeamIdCol && opts.teamId
+          ? conn.prepare(
+              `SELECT COUNT(*) AS n FROM ${r.name} WHERE team_id = :team_id`,
+            )
+          : conn.prepare(`SELECT COUNT(*) AS n FROM ${r.name}`)
+      const countRow = (hasTeamIdCol && opts.teamId
+        ? countStmt.get({ team_id: opts.teamId })
+        : countStmt.get()) as { n: number }
       tables.push({ name: r.name, columns, row_count: countRow.n })
     }
-    const migrations = conn
-      .prepare(
-        `SELECT id, applied_at, source, sql, note FROM schema_migrations
-          ORDER BY id DESC LIMIT 10`,
-      )
-      .all() as MigrationRow[]
+    const migrationStmt =
+      opts.teamId
+        ? conn.prepare(
+            `SELECT id, applied_at, source, sql, note, team_id
+               FROM schema_migrations
+              WHERE team_id = :team_id OR team_id IS NULL
+              ORDER BY id DESC LIMIT 10`,
+          )
+        : conn.prepare(
+            `SELECT id, applied_at, source, sql, note, team_id
+               FROM schema_migrations
+              ORDER BY id DESC LIMIT 10`,
+          )
+    const migrations = (opts.teamId
+      ? migrationStmt.all({ team_id: opts.teamId })
+      : migrationStmt.all()) as MigrationRow[]
     return { tables, recent_migrations: migrations }
   })
 }
@@ -338,12 +403,47 @@ export interface QueryResult {
 export type SqlParam = string | number | bigint | null | Uint8Array
 
 export interface RunQueryOptions {
-  params?: SqlParam[]
+  /** Either a positional array (bound as `?1..?N`) or a named map (`:name`
+   *  in SQL). When `teamId` is set alongside a named map, the map is
+   *  augmented with `team_id`. Positional arrays don't get auto-binding —
+   *  callers that also want team_id must use named params. */
+  params?: Record<string, SqlParam> | SqlParam[]
+  /** When set, bound as `:team_id` in the query — convention for panel SQL
+   *  that scopes reads to a single team. */
+  teamId?: string
+}
+
+type PreparedBinds =
+  | { kind: 'positional'; values: SqlParam[] }
+  | { kind: 'named'; values: Record<string, SqlParam> }
+  | null
+
+function mergeBinds(
+  opts: { params?: Record<string, SqlParam> | SqlParam[]; teamId?: string },
+): PreparedBinds {
+  if (Array.isArray(opts.params)) {
+    return opts.params.length > 0
+      ? { kind: 'positional', values: opts.params }
+      : null
+  }
+  const out: Record<string, SqlParam> = { ...(opts.params ?? {}) }
+  if (opts.teamId !== undefined) out.team_id = opts.teamId
+  return Object.keys(out).length > 0
+    ? { kind: 'named', values: out }
+    : null
+}
+
+function applyBinds<T>(
+  run: (args?: SqlParam[] | Record<string, SqlParam>) => T,
+  binds: PreparedBinds,
+): T {
+  if (!binds) return run()
+  if (binds.kind === 'positional') return run(binds.values)
+  return run(binds.values)
 }
 
 export function runQuery(
   companySlug: string,
-  teamSlug: string,
   sql: string,
   opts: RunQueryOptions = {},
 ): QueryResult {
@@ -355,7 +455,7 @@ export function runQuery(
   if (!SELECT_RE.test(sql)) {
     throw new Error('run_query accepts only SELECT/WITH statements')
   }
-  return withTeamDb(companySlug, teamSlug, (conn) => {
+  return withCompanyDb(companySlug, (conn) => {
     const stmt = conn.prepare(sql)
     let columns: string[] = []
     try {
@@ -363,9 +463,16 @@ export function runQuery(
     } catch {
       /* not a SELECT with columns */
     }
-    const rows = (opts.params && opts.params.length > 0
-      ? stmt.all(...opts.params)
-      : stmt.all()) as Record<string, unknown>[]
+    const binds = mergeBinds(opts)
+    const rows = applyBinds(
+      (args) =>
+        (args === undefined
+          ? stmt.all()
+          : Array.isArray(args)
+            ? stmt.all(...args)
+            : stmt.all(args)) as Record<string, unknown>[],
+      binds,
+    )
     if (columns.length === 0 && rows.length > 0) {
       columns = Object.keys(rows[0] ?? {})
     }
@@ -382,12 +489,14 @@ export interface ExecResult {
 export interface RunExecOptions {
   source?: string
   note?: string | null
-  params?: SqlParam[]
+  params?: Record<string, SqlParam> | SqlParam[]
+  /** Recorded into schema_migrations.team_id when DDL runs. Also bound as
+   *  `:team_id` if the SQL references it. */
+  teamId?: string
 }
 
 export function runExec(
   companySlug: string,
-  teamSlug: string,
   sql: string,
   opts: RunExecOptions = {},
 ): ExecResult {
@@ -399,19 +508,27 @@ export function runExec(
   const isDdl = DDL_RE.test(sql)
   const source = opts.source ?? 'ai'
   const note = opts.note ?? null
-  return withTeamDb(companySlug, teamSlug, (conn) => {
+  const teamId = opts.teamId ?? null
+  return withCompanyDb(companySlug, (conn) => {
     const tx = conn.transaction(() => {
       const stmt = conn.prepare(sql)
-      const info = opts.params && opts.params.length > 0
-        ? stmt.run(...opts.params)
-        : stmt.run()
+      const binds = mergeBinds(opts)
+      const info = applyBinds(
+        (args) =>
+          args === undefined
+            ? stmt.run()
+            : Array.isArray(args)
+              ? stmt.run(...args)
+              : stmt.run(args),
+        binds,
+      )
       if (isDdl) {
         conn
           .prepare(
-            `INSERT INTO schema_migrations (applied_at, source, sql, note)
-             VALUES (?, ?, ?, ?)`,
+            `INSERT INTO schema_migrations (applied_at, source, sql, note, team_id)
+             VALUES (?, ?, ?, ?, ?)`,
           )
-          .run(Date.now(), source, sql, note)
+          .run(Date.now(), source, sql, note, teamId)
       }
       return info.changes
     })
@@ -434,8 +551,8 @@ export interface InstallTemplateResult {
 
 export function installTemplate(
   companySlug: string,
-  teamSlug: string,
   templateName: string,
+  opts: { teamId?: string | null } = {},
 ): InstallTemplateResult {
   const file = path.join(templatesRoot(), templateName, 'install.sql')
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
@@ -444,7 +561,7 @@ export function installTemplate(
     throw err
   }
   const script = fs.readFileSync(file, 'utf8')
-  return withTeamDb(companySlug, teamSlug, (conn) => {
+  return withCompanyDb(companySlug, (conn) => {
     const listTables = (): Set<string> =>
       new Set(
         (
@@ -461,10 +578,10 @@ export function installTemplate(
       conn.exec(script)
       conn
         .prepare(
-          `INSERT INTO schema_migrations (applied_at, source, sql, note)
-           VALUES (?, ?, ?, ?)`,
+          `INSERT INTO schema_migrations (applied_at, source, sql, note, team_id)
+           VALUES (?, ?, ?, ?, ?)`,
         )
-        .run(Date.now(), `template:${templateName}`, script, null)
+        .run(Date.now(), `template:${templateName}`, script, null, opts.teamId ?? null)
     })
     tx()
     const after = listTables()

@@ -6,6 +6,7 @@ description: "팀 data.db 의 deals 테이블을 테이블 패널로 표시. 추
 requires: {}
 setup_sql: |
   CREATE TABLE IF NOT EXISTS deals (
+    team_id TEXT NOT NULL,
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     amount REAL DEFAULT 0,
@@ -21,7 +22,7 @@ panel:
     source:
       kind: team_data
       config:
-        sql: "SELECT id, title, amount, status FROM deals WHERE deleted_at IS NULL ORDER BY id DESC LIMIT 100"
+        sql: "SELECT id, title, amount, status FROM deals WHERE team_id = :team_id AND deleted_at IS NULL ORDER BY id DESC LIMIT 100"
     map:
       columns: [id, title, amount, status]
       on_click:
@@ -50,7 +51,7 @@ panel:
         target:
           kind: team_data
           config:
-            sql: "INSERT INTO deals (title, amount, status) VALUES (:title, :amount, :status)"
+            sql: "INSERT INTO deals (team_id, title, amount, status) VALUES (:team_id, :title, :amount, :status)"
         confirm: false
       - id: delete-deal
         kind: delete
@@ -59,7 +60,7 @@ panel:
         target:
           kind: team_data
           config:
-            sql: "UPDATE deals SET deleted_at = datetime('now') WHERE id = :id"
+            sql: "UPDATE deals SET deleted_at = datetime('now') WHERE team_id = :team_id AND id = :id"
         confirm: true
       - id: update-status
         kind: update
@@ -69,4 +70,4 @@ panel:
         target:
           kind: team_data
           config:
-            sql: "UPDATE deals SET status = :status WHERE id = :id"
+            sql: "UPDATE deals SET status = :status WHERE team_id = :team_id AND id = :id"
