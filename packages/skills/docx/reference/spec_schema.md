@@ -3,7 +3,7 @@
 ```jsonc
 {
   "meta": {
-    "title": "...",          // 문서 제목 (metadata)
+    "title": "...",          // document title (metadata)
     "author": "...",
     "subject": "...",
     "theme": "default",      // default | formal | report | minimal
@@ -19,21 +19,21 @@
 
 ### heading
 ```jsonc
-{"type": "heading", "level": 1, "text": "제목"}
+{"type": "heading", "level": 1, "text": "Heading"}
 ```
 
 ### paragraph
 ```jsonc
-{"type": "paragraph", "text": "...", "align": "justify"}   // align 옵션
+{"type": "paragraph", "text": "...", "align": "justify"}   // align option
 ```
 
 ### bullets / numbered
 ```jsonc
 {"type": "bullets", "items": [
-  "첫 번째",
-  "두 번째",
-  ["자식 1", "자식 2"],
-  "세 번째"
+  "First",
+  "Second",
+  ["Child 1", "Child 2"],
+  "Third"
 ]}
 ```
 
@@ -73,7 +73,7 @@
 
 ### toc
 ```jsonc
-{"type": "toc", "levels": 3}    // 표시 레벨 1..9
+{"type": "toc", "levels": 3}    // displayed levels 1..9
 ```
 
 ### kpi_row
@@ -94,9 +94,9 @@
 
 ## Theme overrides
 
-`meta.theme_overrides` 에서 Theme 의 개별 필드 덮어쓰기 가능. 색은 `[R,G,B]` (0..255). 주요 필드:
+`meta.theme_overrides` can override individual Theme fields. Colors are `[R,G,B]` (0..255). Common fields:
 
-| 필드 | 타입 | 예시 |
+| Field | Type | Example |
 |---|---|---|
 | `fg`, `heading`, `accent`, `muted`, `code_bg` | RGB | `[29, 78, 216]` |
 | `heading_font`, `body_font`, `mono_font` | string | `"Georgia"` |

@@ -16,8 +16,8 @@ Existing: `customer.value TEXT`
 Incoming: `customer.value REAL`
 
 → **standalone** with confidence ≤ 0.7. SQLite is loose but `SUM(value)`
-over mixed types is unreliable. Brief to the user: "기존 customer의
-value 타입과 맞지 않아 별도 테이블로 만듭니다."
+over mixed types is unreliable. Brief to the user: "The existing customer
+value type is incompatible, so this will be installed as a separate table."
 
 If the user really wants to merge, they'll say "Keep separate" then
 manually ALTER later. Your job is not to clobber their data.
@@ -28,8 +28,9 @@ Existing: `event` (calendar events: title, start_at, location)
 Incoming: `event` (audit log: actor, action, target, ts)
 
 → **standalone**. You can't merge two different entities that happened
-to pick the same name. Brief should hint: "기존 event는 일정 테이블입니다.
-별도 이름으로 만들 수 있지만 지금은 그대로 설치합니다."
+to pick the same name. Brief should hint: "The existing event table stores
+calendar events. This can be installed under a separate name, but for now it
+will be installed as-is."
 
 If the server's CREATE IF NOT EXISTS silently no-ops (SQLite ignores
 redefinition), the panel will try to SELECT columns that don't exist and

@@ -304,10 +304,17 @@ async function consumeStream(
         })
       }
     }
-  } catch {
+  } catch (e) {
     // Stream closed (abort, HMR, network blip). Do NOT demote status — the
     // backend session keeps going server-side and the next reattach replays.
     if (abort.signal.aborted) return
+    if (e instanceof Error && e.message.includes('(404)')) {
+      get().removeSession(session.id)
+      void import('./useTasksStore').then(({ useTasksStore }) => {
+        useTasksStore.getState().removeSession(session.id)
+      })
+      return
+    }
     return
   } finally {
     activeAborts.delete(session.id)

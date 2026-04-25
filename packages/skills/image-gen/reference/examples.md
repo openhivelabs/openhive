@@ -1,6 +1,6 @@
 # image-gen examples
 
-## 1. YouTube 썸네일 — bold text
+## 1. YouTube thumbnail — bold text
 
 ```json
 {
@@ -16,7 +16,7 @@
 }
 ```
 
-## 2. 분기 실적 카드
+## 2. Quarterly performance card
 
 ```json
 {
@@ -32,7 +32,7 @@
 }
 ```
 
-## 3. 보고서 커버
+## 3. Report cover
 
 ```json
 {
@@ -46,7 +46,7 @@
 }
 ```
 
-## 4. 인용구
+## 4. Quote
 
 ```json
 {
@@ -60,7 +60,7 @@
 }
 ```
 
-## 5. Freeform — 특이 레이아웃
+## 5. Freeform — unusual layout
 
 ```json
 {

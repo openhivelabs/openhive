@@ -2,7 +2,7 @@
 name: text-file
 description: Write a UTF-8 text file (markdown, code, plain text, CSV, JSON…) into the run's artifact directory. Use when you need to produce a file the user can download.
 triggers:
-  keywords: [markdown, csv, json, txt, 텍스트, 마크다운, 파일, file, 저장]
+  keywords: [markdown, csv, json, txt, text, file, save, write]
   patterns: ['\.(md|markdown|csv|txt|json|tsv|yaml|yml)\b']
 runtime: python
 entrypoint: scripts/run.py

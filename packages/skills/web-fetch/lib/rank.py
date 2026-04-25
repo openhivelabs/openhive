@@ -12,7 +12,7 @@ import math
 import re
 from collections import Counter
 
-_TOK_RE = re.compile(r"[^\w가-힣]+", re.UNICODE)
+_TOK_RE = re.compile(r"[^\w\uac00-\ud7a3]+", re.UNICODE)
 
 
 def _tokenize(s: str) -> list[str]:

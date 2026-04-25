@@ -45,7 +45,7 @@ export function delegateToGuidance(): string {
     '## Every `task` MUST contain',
     '',
     '- **Goal** — outcome in one sentence.',
-    '- **Context** — concrete facts/numbers/paths/constraints (you carry the synthesis, not the worker).',
+    '- **Context** — concrete domain facts the worker needs to do the job: numbers, paths, file URIs, prior findings, format constraints. NOT orchestration meta — never tell a worker "you are running in parallel", "your result will be combined with X", "the user asked for fan-out". Workers do not coordinate; they execute their own scope. Such meta wastes tokens and risks confusing the worker into looking for siblings that aren\'t theirs to know about.',
     "- **Deliverable** — for research/verify: exact questions to answer + required format of the prose report. For produce: filename, page/length, structure, required sections. **One file per produce delegation** — if you want PDF + PPTX, that's two produce delegations with different filenames.",
     '- **Scope fence** — what NOT to do. Subordinates cannot call ask_user and must not expand scope.',
     '',

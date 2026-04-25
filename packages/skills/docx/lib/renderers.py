@@ -346,7 +346,7 @@ def render_toc(doc, block: dict, theme: Theme) -> None:
     fldChar2.set(qn("w:fldCharType"), "end")
     # placeholder paragraph shown until F9
     note_p = doc.add_paragraph()
-    note_run = note_p.add_run("(목차는 Word 에서 F9 로 갱신)")
+    note_run = note_p.add_run("(Refresh TOC with F9 in Word)")
     _style_run(note_run, font=theme.body_font, size=theme.size_small,
                color=theme.muted, italic=True)
 

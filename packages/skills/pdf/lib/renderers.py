@@ -311,7 +311,7 @@ def render_toc(block: dict, theme: Theme, ctx: Ctx) -> list:
     ]
     header_style = ctx.style_body(size=theme.size_h2, bold=True, color=theme.heading)
     return [
-        Paragraph("목차", header_style),
+        Paragraph("Table of contents", header_style),
         Spacer(1, 6),
         toc,
         Spacer(1, 12),

@@ -38,7 +38,7 @@ Every slide object has `type` (required, enum) and optional `notes` (speaker not
 Divider between major parts of the deck. Accent stripe on the left.
 
 ```jsonc
-{ "type": "section", "title": "1. 배경", "subtitle": "왜 지금인가" }
+{ "type": "section", "title": "1. Background", "subtitle": "Why now" }
 ```
 
 ## bullets
@@ -48,12 +48,12 @@ Top-aligned title + bullet list. Nesting: immediately follow a string with an ar
 ```jsonc
 {
   "type": "bullets",
-  "title": "왜 지금인가",
+  "title": "Why now",
   "bullets": [
-    "LLM 이 스키마와 UI 를 런타임에 만든다",
-    "사용자 = 대화",
-    ["하위 포인트 1", "하위 포인트 2"],
-    "로컬 퍼스트"
+    "LLMs create schema and UI at runtime",
+    "User = conversation",
+    ["Subpoint 1", "Subpoint 2"],
+    "Local-first"
   ]
 }
 ```
@@ -65,7 +65,7 @@ Two columns sharing a title. Each side has its own `kind`: `text` | `bullets` | 
 ```jsonc
 {
   "type": "two_column",
-  "title": "아키텍처 한눈에",
+  "title": "Architecture at a glance",
   "left":  { "kind": "bullets", "content": ["engine", "tools", "skills"] },
   "right": { "kind": "image", "content": "/path/to/arch.png", "fit": "contain" }
 }
@@ -88,7 +88,7 @@ Two columns sharing a title. Each side has its own `kind`: `text` | `bullets` | 
 ```jsonc
 {
   "type": "table",
-  "title": "스킬 로스터",
+  "title": "Skill roster",
   "headers": ["Skill", "Engine", "Status"],
   "rows": [
     ["text-file", "builtin", "done"],
@@ -102,7 +102,7 @@ Two columns sharing a title. Each side has its own `kind`: `text` | `bullets` | 
 ```jsonc
 {
   "type": "chart",
-  "title": "분기별 ARR",
+  "title": "Quarterly ARR",
   "kind": "column",                      // bar | column | line | pie | area | scatter
   "categories": ["Q1", "Q2", "Q3", "Q4"],
   "series": [
@@ -120,10 +120,10 @@ Two columns sharing a title. Each side has its own `kind`: `text` | `bullets` | 
 ```jsonc
 {
   "type": "comparison",
-  "title": "옵션 비교",
+  "title": "Option comparison",
   "columns": [
-    { "header": "Option A", "points": ["싸다", "느리다"] },
-    { "header": "Option B", "points": ["빠르다", "비싸다"] }
+    { "header": "Option A", "points": ["Cheap", "Slow"] },
+    { "header": "Option B", "points": ["Fast", "Expensive"] }
   ]
 }
 ```
@@ -135,8 +135,8 @@ Two columns sharing a title. Each side has its own `kind`: `text` | `bullets` | 
 ```jsonc
 {
   "type": "quote",
-  "quote": "소프트웨어의 해자는 스키마와 UI.",
-  "attribution": "OpenHive 팀"
+  "quote": "Software moats are schema and UI.",
+  "attribution": "OpenHive team"
 }
 ```
 
@@ -147,11 +147,11 @@ Numbered circles on a connecting line, 3–5 phases.
 ```jsonc
 {
   "type": "steps",
-  "title": "유저 여정",
+  "title": "User journey",
   "steps": [
-    { "title": "설치",     "description": "openhive serve" },
-    { "title": "설계",     "description": "에이전트 + 보고 라인" },
-    { "title": "실행",     "description": "챗/크론/웹훅" }
+    { "title": "Install",  "description": "openhive serve" },
+    { "title": "Design",   "description": "agents + reporting lines" },
+    { "title": "Run",      "description": "chat/cron/webhook" }
   ]
 }
 ```
@@ -163,7 +163,7 @@ Hero stats arranged horizontally.
 ```jsonc
 {
   "type": "kpi",
-  "title": "현재 지표",                    // optional
+  "title": "Current metrics",              // optional
   "stats": [
     { "value": "42%",  "label": "conversion", "delta": "+3pp" },
     { "value": "$1.2M","label": "ARR",         "delta": "+18%" },
@@ -179,7 +179,7 @@ Hero stats arranged horizontally.
 Thank-you / Q&A slide. If `title` is omitted, uses "Thank you".
 
 ```jsonc
-{ "type": "closing", "title": "고맙습니다", "subtitle": "github.com/openhivelabs/openhive" }
+{ "type": "closing", "title": "Thank you", "subtitle": "github.com/openhivelabs/openhive" }
 ```
 
 ---

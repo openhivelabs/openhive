@@ -27,7 +27,7 @@ Output:
 ```json
 {
   "decision": "reuse",
-  "brief": "기존 customer 테이블을 그대로 사용합니다.",
+  "brief": "Use the existing customer table as-is.",
   "target_table": "customer",
   "alter_sql": [],
   "skip_create_tables": ["customer"],
@@ -49,7 +49,7 @@ Output:
 ```json
 {
   "decision": "standalone",
-  "brief": "deal 테이블을 새로 만들고 customer.id를 참조합니다.",
+  "brief": "Create a new deal table and reference customer.id.",
   "target_table": "customer",
   "alter_sql": [],
   "skip_create_tables": [],
@@ -76,7 +76,7 @@ Output:
 ```json
 {
   "decision": "extend",
-  "brief": "기존 task에 customer_id 컬럼을 추가해 연결합니다.",
+  "brief": "Add a customer_id column to the existing task table and connect it.",
   "target_table": "task",
   "alter_sql": [
     "ALTER TABLE task ADD COLUMN customer_id INTEGER"
@@ -101,7 +101,7 @@ Output:
 ```json
 {
   "decision": "standalone",
-  "brief": "기존 데이터와 무관한 새 invoice 테이블을 만듭니다.",
+  "brief": "Create a new invoice table unrelated to the existing data.",
   "target_table": null,
   "alter_sql": [],
   "skip_create_tables": [],
@@ -123,7 +123,7 @@ Output:
 ```json
 {
   "decision": "reuse",
-  "brief": "기존 contact 테이블을 customer로 사용할 수 있습니다.",
+  "brief": "The existing contact table can be used as customer.",
   "target_table": "contact",
   "alter_sql": [
     "ALTER TABLE contact ADD COLUMN stage TEXT"

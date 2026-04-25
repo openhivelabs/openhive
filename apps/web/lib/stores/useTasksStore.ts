@@ -87,6 +87,7 @@ interface TasksState {
   selectRun: (taskId: string, sessionId: string) => void
 
   addRun: (taskId: string, session: Session) => void
+  removeSession: (sessionId: string) => void
   updateRun: (taskId: string, sessionId: string, patch: Partial<Session>) => void
   markRunViewed: (taskId: string, sessionId: string) => void
   addRunMessage: (taskId: string, sessionId: string, msg: Message) => void
@@ -313,6 +314,11 @@ async function consumeRunStream(
       // The backend session keeps going; a later reattach will sync up.
       return
     }
+    if (e instanceof Error && e.message.includes('(404)')) {
+      get().removeSession(localSessionId)
+      useSessionsStore.getState().removeSession(backendSessionId)
+      return
+    }
     // Network errors (browser navigation killing fetch, SSE disconnects, HMR
     // reloads) must NOT demote the session to failed — they routinely happen on
     // page refreshes while the engine is fine server-side. Only status events
@@ -433,6 +439,22 @@ export const useTasksStore = create<TasksState>((set, get) => ({
       ),
     }))
     schedulePersist(() => get().tasks.find((t) => t.id === taskId), taskId)
+  },
+
+  removeSession: (sessionId) => {
+    const touched = new Set<string>()
+    set((s) => ({
+      tasks: s.tasks.map((t) => {
+        if (!t.sessions.some((r) => r.id === sessionId)) return t
+        touched.add(t.id)
+        return { ...t, sessions: t.sessions.filter((r) => r.id !== sessionId) }
+      }),
+      selectedSessionId: s.selectedSessionId === sessionId ? null : s.selectedSessionId,
+    }))
+    for (const taskId of touched) {
+      const task = get().tasks.find((t) => t.id === taskId)
+      if (task) persistNow(task)
+    }
   },
 
   updateRun: (taskId, sessionId, patch) => {

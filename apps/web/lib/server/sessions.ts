@@ -625,9 +625,16 @@ export function buildTranscript(
   // Pre-index tool_result events by tool_call_id so we can attach parsed
   // sources to the corresponding tool_call entry without an O(n^2) scan.
   const resultByCallId = new Map<string, StoredEventRow>()
+  // Pre-index delegation_opened by tool_call_id so we can hand the
+  // engine-stamped `sibling_group_id` back to the matching
+  // delegate_parallel tool_called row — the call event itself doesn't
+  // carry it, only the opening event does.
+  const openedByCallId = new Map<string, StoredEventRow>()
   for (const ev of events) {
     if (ev.kind === 'tool_result' && ev.tool_call_id) {
       resultByCallId.set(ev.tool_call_id, ev)
+    } else if (ev.kind === 'delegation_opened' && ev.tool_call_id) {
+      openedByCallId.set(ev.tool_call_id, ev)
     }
   }
   for (const ev of events) {
@@ -645,17 +652,49 @@ export function buildTranscript(
       lines.push({ kind: 'user_message', ts: ev.ts, text: ev.data.text })
     } else if (ev.kind === 'tool_called') {
       // Lead-level (depth=0) tool calls always surface. Sub-agent tool calls
-      // normally stay in events.jsonl only, EXCEPT for `web-search` and
-      // `web-fetch` — these are information-gathering steps the user wants
-      // visible even when a sub-agent did them. Both paths attach parsed
-      // `sources` when the tool is a web one.
+      // normally stay in events.jsonl only, EXCEPT for the few tools the
+      // user wants visible regardless of who called them:
+      //   - `web-search` / `web-fetch` — research steps the user reads.
+      //   - `delegate_to` / `delegate_parallel` — sub-agents handing off
+      //     their own work; the FE's nesting pass needs every link in the
+      //     chain to render the call tree, otherwise grandchildren escape
+      //     to the root level (looks like the Lead did it directly).
       const isWeb =
         ev.tool_name === 'web-search' || ev.tool_name === 'web-fetch'
-      if (ev.depth !== 0 && !isWeb) continue
+      const isDelegate =
+        ev.tool_name === 'delegate_to' || ev.tool_name === 'delegate_parallel'
+      if (ev.depth !== 0 && !isWeb && !isDelegate) continue
       const result =
         isWeb && ev.tool_call_id ? resultByCallId.get(ev.tool_call_id) : null
       const sources =
         isWeb && result ? extractSources(ev.tool_name ?? '', result) : null
+      // Surface delegate_parallel sibling metadata so the FE can disambiguate
+      // children of N concurrent same-role instances (they all share a
+      // node_id, so depth+nodeId alone can't tell which instance owned a
+      // given web-fetch).
+      //   * For nested tool_called events, the engine stamps
+      //     sibling_group_id / sibling_index on `data` directly.
+      //   * For the parallel call ITSELF, the call's data only has
+      //     `arguments`; the engine emits the group id on the matching
+      //     `delegation_opened` event. Fall back to that when the call
+      //     event is the parent of the fan-out.
+      let siblingGroupId =
+        typeof ev.data?.sibling_group_id === 'string'
+          ? (ev.data.sibling_group_id as string)
+          : undefined
+      const siblingIndex =
+        typeof ev.data?.sibling_index === 'number'
+          ? (ev.data.sibling_index as number)
+          : undefined
+      if (
+        !siblingGroupId &&
+        ev.tool_name === 'delegate_parallel' &&
+        ev.tool_call_id
+      ) {
+        const opened = openedByCallId.get(ev.tool_call_id)
+        const v = opened?.data?.sibling_group_id
+        if (typeof v === 'string') siblingGroupId = v
+      }
       lines.push({
         kind: 'tool_call',
         ts: ev.ts,
@@ -664,6 +703,8 @@ export function buildTranscript(
         args: ev.data.arguments,
         sources: sources ?? undefined,
         depth: ev.depth,
+        sibling_group_id: siblingGroupId,
+        sibling_index: siblingIndex,
       })
     } else if (ev.kind === 'node_finished' && ev.depth === 0) {
       // Only Lead (depth=0) turns surface as assistant messages in the chat.

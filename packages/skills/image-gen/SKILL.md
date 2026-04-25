@@ -2,7 +2,7 @@
 name: image-gen
 description: Render PNG images from HTML. Two modes — `template` (pick a built-in preset + fill vars, ~hundreds of tokens) or `freeform` (provide full HTML, kB of tokens). Good for text-first graphics: YouTube thumbnails, report covers, stat cards. NOT a photo generator.
 triggers:
-  keywords: [이미지, 그림, 썸네일, 표지, cover, thumbnail, image, png, 배너, banner]
+  keywords: [image, picture, thumbnail, cover, png, banner, graphic, render]
   patterns: ['\.png\b']
 runtime: python
 entrypoint: scripts/run.py
@@ -39,33 +39,33 @@ parameters:
 ## Decision tree
 
 ```
-무엇을 만들 건가?
+What are you making?
 │
-├─ 유튜브 썸네일 / 표지 / 지표 카드 같이 정해진 레이아웃
-│   → template 모드. 카탈로그에서 고르고 vars 채움.
+├─ Fixed-layout graphic: YouTube thumbnail / cover / stat card
+│   → template mode. Pick from the catalog and fill vars.
 │
-└─ 카탈로그에 맞는 레이아웃이 없음 (독자적 디자인 필요)
-    → freeform 모드. 직접 HTML/CSS 작성 + width/height 명시.
-      reference/freeform-guide.md 먼저 읽기.
+└─ No catalog layout fits (custom design needed)
+    → freeform mode. Write HTML/CSS directly + set width/height.
+      Read reference/freeform-guide.md first.
 ```
 
-**기본은 template 모드.** freeform 은 토큰을 10배 이상 쓰니 템플릿이 안 맞을 때만.
+**Default to template mode.** Freeform uses 10x+ tokens; use it only when templates do not fit.
 
-## 템플릿 카탈로그
+## Template catalog
 
-| name | size | 용도 | 필수 vars |
+| name | size | Purpose | Required vars |
 | --- | --- | --- | --- |
-| `yt-bold-text` | 1280×720 | 큰 제목 + 부제, YouTube 썸네일 범용 | `title` |
-| `yt-split` | 1280×720 | 좌 텍스트 / 우 이미지 슬롯 | `title`, `image_path` |
-| `yt-quote` | 1280×720 | 인용구 + 저자 | `quote` |
-| `cover-minimal` | 1600×900 | 보고서/프레젠테이션 표지 | `title` |
-| `stat-card` | 1080×1080 | 큰 숫자 지표 카드 | `value`, `label` |
+| `yt-bold-text` | 1280×720 | Large title + subtitle, general YouTube thumbnail | `title` |
+| `yt-split` | 1280×720 | Left text / right image slot | `title`, `image_path` |
+| `yt-quote` | 1280×720 | Quote + author | `quote` |
+| `cover-minimal` | 1600×900 | Report/presentation cover | `title` |
+| `stat-card` | 1080×1080 | Big-number stat card | `value`, `label` |
 
-각 템플릿의 전체 입력 스키마는 `templates/<name>/template.yaml` 참조.
+For each template's full input schema, see `templates/<name>/template.yaml`.
 
-## Input 예시
+## Input examples
 
-### template 모드
+### template mode
 ```json
 {
   "mode": "template",
@@ -75,7 +75,7 @@ parameters:
 }
 ```
 
-### freeform 모드
+### freeform mode
 ```json
 {
   "mode": "freeform",
@@ -88,26 +88,26 @@ parameters:
 
 ## Output envelope
 
-성공:
+Success:
 ```json
 {"ok": true, "files": [{"name": "thumbnail.png", "path": "/abs/...", "mime": "image/png", "size": 73412}], "warnings": []}
 ```
 
-실패 (`error_code` 값):
-- `validation` — vars 가 스키마에 안 맞음. `message` 에 경로 + 사유.
-- `template_not_found` — 존재하지 않는 템플릿.
-- `invalid_mode` — mode 가 template/freeform 이 아님.
-- `size_out_of_range` — 100~4096 벗어남.
-- `output_sanity` — 렌더 결과 PNG 가 너무 작음 (보통 빈 HTML).
-- `invalid_filename` — 파일명에 `/` 또는 `..` 포함.
+Failure (`error_code` values):
+- `validation` — vars do not match schema. `message` includes path + reason.
+- `template_not_found` — template does not exist.
+- `invalid_mode` — mode is not template/freeform.
+- `size_out_of_range` — outside 100-4096.
+- `output_sanity` — rendered PNG is too small (usually empty HTML).
+- `invalid_filename` — filename contains `/` or `..`.
 
-## 주의사항
+## Limits & caveats
 
-- 로컬 이미지 경로를 `image_path` 등에 넘길 땐 `file:///abs/path` 또는 http(s) URL.
-- 외부 폰트/이미지 로딩 실패 시 10s 타임아웃 뒤 현 상태로 스크린샷 — 폰트 미로드 시 시스템 기본 폰트로 보일 수 있음.
-- 최초 호출에서 Chromium 바이너리를 자동 다운로드 (~170MB, 한 번만). 이후는 즉시 실행.
-- 이 skill 은 photo-realistic 이미지를 만들지 않는다. 인물/제품 사진이 필요하면 다른 수단.
+- Pass local images to `image_path` etc. as `file:///abs/path` or http(s) URLs.
+- If external font/image loading fails, screenshot current state after a 10s timeout — missing fonts may render as system defaults.
+- First call auto-downloads the Chromium binary (~170MB, once). Later calls run immediately.
+- This skill does not create photo-realistic images. Use another path for people/product photos.
 
 ## Python deps
 
-`requirements.txt`: `jinja2`, `jsonschema`, `playwright`, `pyyaml`. 런타임이 해당 패키지를 import 가능한 python3 를 쓸 수 있어야 한다 (프로젝트 venv 또는 시스템 파이썬에 설치).
+`requirements.txt`: `jinja2`, `jsonschema`, `playwright`, `pyyaml`. Runtime needs a python3 that can import those packages (project venv or system Python).

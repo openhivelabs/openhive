@@ -48,7 +48,15 @@ export function NewChatPage() {
         // blank flash between navigation and the first SSE refetch. Keyed by
         // sessionId and cleared as soon as the real user_message arrives.
         try {
-          sessionStorage.setItem(`openhive:pending:${session.id}`, body)
+          const keepKey = `openhive:pending:${session.id}`
+          for (let i = 0; i < sessionStorage.length; i += 1) {
+            const key = sessionStorage.key(i)
+            if (key?.startsWith('openhive:pending:') && key !== keepKey) {
+              sessionStorage.removeItem(key)
+              i -= 1
+            }
+          }
+          sessionStorage.setItem(keepKey, body)
         } catch {
           /* sessionStorage unavailable — non-fatal */
         }

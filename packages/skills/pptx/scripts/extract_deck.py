@@ -123,7 +123,7 @@ def analyze_slide(pkg, slide_part) -> dict:
 
     # single-line title-only slide → title or closing
     if len(texts) == 1 and "\n" not in title:
-        if any(k in title.lower() for k in ["thank", "q&a", "감사", "고맙", "끝"]):
+        if any(k in title.lower() for k in ["thank", "q&a", "\uac10\uc0ac", "\uace0\ub9d9", "\ub05d"]):
             return {"type": "closing", "title": title}
         return {"type": "title", "title": title}
 

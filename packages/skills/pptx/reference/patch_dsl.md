@@ -27,7 +27,7 @@ Each entry of `operations` is one op:
 ### set_text
 
 ```json
-{"op": "set_text", "target": "slide:2 > title", "value": "새 제목"}
+{"op": "set_text", "target": "slide:2 > title", "value": "New title"}
 ```
 Replaces the full text of the targeted shape (or bullet paragraph). Preserves the first run's font/size/colour when possible.
 
@@ -45,7 +45,7 @@ Rebuilds the entire body of a bullets slide. A list immediately after a string b
 ### set_notes
 
 ```json
-{"op": "set_notes", "target": "slide:2", "value": "발표자 노트..."}
+{"op": "set_notes", "target": "slide:2", "value": "Speaker notes..."}
 ```
 Updates speaker notes. Fails if the slide has no notes part yet.
 
@@ -127,8 +127,8 @@ Ops are applied in sequence to an in-memory Package. If op N fails, ops 0..N-1 a
     {"op": "delete_slide", "target": "slide:7"},
     {"op": "delete_slide", "target": "slide:6"},
     {"op": "insert_slide", "position": 6, "slide": {
-      "type": "closing", "title": "요약",
-      "subtitle": "질의응답으로 넘어갑니다"
+      "type": "closing", "title": "Summary",
+      "subtitle": "Move to Q&A"
     }}
   ]
 }

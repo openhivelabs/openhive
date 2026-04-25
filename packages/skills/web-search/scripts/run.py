@@ -3,7 +3,7 @@
 
 stdin JSON: {query, count?, region?}
 stdout JSON (success): {ok: true, query, count_requested, count_returned,
-                         source: "duckduckgo-html", results: [...]}
+                         source: "duckduckgo-lite", results: [...]}
 stdout JSON (failure): {ok: false, error, status?}
 """
 
@@ -51,7 +51,7 @@ def main() -> int:
                 "query": query,
                 "count_requested": count_requested,
                 "count_returned": 0,
-                "source": "duckduckgo-html",
+                "source": "duckduckgo-lite",
                 "results": [],
                 "warning": "no results parsed — try a different query or region",
             }
@@ -63,7 +63,7 @@ def main() -> int:
             "query": query,
             "count_requested": count_requested,
             "count_returned": len(results),
-            "source": "duckduckgo-html",
+            "source": "duckduckgo-lite",
             "results": results,
         }
     )

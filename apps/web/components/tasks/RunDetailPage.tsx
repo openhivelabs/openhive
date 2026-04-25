@@ -1,6 +1,9 @@
 import {
+  ArrowBendDownRight,
   ArrowLeft,
+  ArrowSquareOut,
   ArrowUp,
+  Article,
   CaretDown,
   Check,
   CircleNotch,
@@ -84,6 +87,13 @@ interface TranscriptEntry {
    *  specific tools because research happens in sub-agents but users still
    *  want to see "what was searched / fetched" in the main chat. */
   depth?: number
+  /** delegate_parallel correlation — same group id across all N concurrent
+   *  siblings + a per-instance index 0..N-1. Engine sets these on every
+   *  tool_called emitted inside a parallel sibling so the FE can
+   *  disambiguate which instance owned a given child call (all N share
+   *  the same node_id). */
+  sibling_group_id?: string
+  sibling_index?: number
 }
 
 interface SessionSummary {
@@ -104,6 +114,14 @@ interface SessionSummary {
     questions: unknown[]
     agentRole?: string
   } | null
+  /** Frozen team snapshot taken when the session started. Authoritative
+   *  for resolving `delegate_to(assignee)` against the agent ids that
+   *  actually ran — `useCurrentTeam` can drift if the user edits the
+   *  team or switches teams while viewing an old session. */
+  team_snapshot?: {
+    id?: string
+    agents?: { id: string; role: string; label?: string }[]
+  }
 }
 
 function fmtK(n: number): string {
@@ -129,6 +147,52 @@ function agentLabel(
   return a?.role ?? a?.label ?? nodeId
 }
 
+/** Items that can appear nested under a delegate chip's dropdown — what a
+ *  subordinate did while serving the delegation. Same `tool` / `sources`
+ *  shapes as the top-level stream, including the recursive `children`
+ *  field so a sub-agent's own delegations stack one level deeper. */
+type NestableChild =
+  | {
+      kind: 'tool'
+      id: string
+      author: string
+      tool: string
+      summary: string
+      depth: number
+      /** node_id of the agent that EMITTED this tool_call. Used by the
+       *  nesting pass to disambiguate sibling delegates: if the Lead
+       *  fan-outs delegate_to(Researcher) + delegate_to(Member) in the
+       *  same turn, both delegates share depth=0, but their children's
+       *  node_ids (a-122bbb vs a-1mm0vs) tell us who did what. */
+      nodeId: string
+      /** delegate_parallel correlation — same id across all N concurrent
+       *  siblings, distinct index per instance. Set on every tool_call
+       *  emitted inside a parallel sibling AND on each virtual chip we
+       *  expand a delegate_parallel into. Lets the nesting pass match
+       *  N same-node siblings 1:1 with their N children groups. */
+      siblingGroupId?: string
+      siblingIndex?: number
+      delegate?: { mode: string; tasks: string[] }
+      /** Resolved node_id of the sub-agent THIS delegate spawned —
+       *  populated only for delegate_to/delegate_parallel chips so the
+       *  nesting pass knows which children belong here. Looked up from
+       *  the team snapshot via the `assignee` arg. */
+      expectedChildNode?: string
+      children?: NestableChild[]
+    }
+  | {
+      kind: 'sources'
+      id: string
+      author: string
+      variant: 'search' | 'fetch'
+      query: string
+      sources: ChatSource[]
+      depth: number
+      nodeId: string
+      siblingGroupId?: string
+      siblingIndex?: number
+    }
+
 type ChatItem =
   | { kind: 'user'; id: string; text: string; pending?: boolean }
   | {
@@ -147,7 +211,34 @@ type ChatItem =
       kind: 'tool'
       id: string
       author: string
+      /** Raw tool name (`delegate_to`, `web-search`, …) — kept so the
+       *  renderer can pick a tool-specific icon instead of using the
+       *  generic wrench for everything. */
+      tool: string
       summary: string
+      /** Stack depth this tool_call ran at — 0 = Lead, 1 = direct
+       *  subordinate, 2 = sub-sub. Used by the nesting pass to attach
+       *  depth ≥ 1 items as children of the most recent delegate. */
+      depth: number
+      /** node_id of the agent that emitted this tool_call (see
+       *  NestableChild for full rationale). */
+      nodeId: string
+      /** delegate_parallel correlation (see NestableChild). */
+      siblingGroupId?: string
+      siblingIndex?: number
+      /** Delegation-specific payload — populated for `delegate_to` /
+       *  `delegate_parallel` so the chip can drop down and show the
+       *  actual task brief the Lead sent to the subordinate. Not all
+       *  tool chips have one. `tasks` is an array even for `delegate_to`
+       *  (single element) so the renderer can iterate uniformly. */
+      delegate?: { mode: string; tasks: string[] }
+      /** Resolved node_id of the sub-agent this delegate spawned. */
+      expectedChildNode?: string
+      /** Tool / source items the subordinate called while serving this
+       *  delegation — populated by the nesting pass so the delegate
+       *  chip's dropdown can show the actual work the sub-agent did,
+       *  not just the brief. Empty / absent for non-delegation chips. */
+      children?: NestableChild[]
     }
   | {
       // web-search / web-fetch rendered as a Claude-style source card:
@@ -156,16 +247,53 @@ type ChatItem =
       id: string
       author: string
       variant: 'search' | 'fetch'
+      /** Original query for web-search, or fetched URL for web-fetch. Shown
+       *  on the collapsed chip so the user can see what was searched
+       *  without opening the source list. */
+      query: string
       sources: ChatSource[]
+      depth: number
+      nodeId: string
+      siblingGroupId?: string
+      siblingIndex?: number
     }
   | {
-      // 2+ consecutive tool steps fold into one expandable bar. Rendered as
-      // "진행 내역 N개 ∨" when collapsed, expands into the original tool
-      // chip list when clicked. Prevents long research turns from burying
-      // the actual answer under 20 vertical tool rows.
+      // 2+ consecutive tool / sources steps fold into one expandable bar.
+      // Rendered as "진행 내역 N개 ∨" when collapsed, expands into the
+      // original chip + source-card list when clicked. Mixing sources into
+      // the group (not just plain tool chips) ensures a web-search turn
+      // collapses as a single unit — otherwise "Searched the web" cards
+      // escape the group and linger on screen when the user collapses it.
       kind: 'tool_group'
       id: string
-      items: { id: string; author: string; summary: string }[]
+      items: (
+        | {
+            kind: 'tool'
+            id: string
+            author: string
+            tool: string
+            summary: string
+            depth: number
+            nodeId: string
+            siblingGroupId?: string
+            siblingIndex?: number
+            delegate?: { mode: string; tasks: string[] }
+            expectedChildNode?: string
+            children?: NestableChild[]
+          }
+        | {
+            kind: 'sources'
+            id: string
+            author: string
+            variant: 'search' | 'fetch'
+            query: string
+            sources: ChatSource[]
+            depth: number
+            nodeId: string
+            siblingGroupId?: string
+            siblingIndex?: number
+          }
+      )[]
     }
   | {
       kind: 'ask'
@@ -271,7 +399,190 @@ function summarizeTool(
   if (tool === 'read_artifact') {
     return t('session.tool.readArtifact')
   }
+  if (tool === 'web-search') {
+    const query = String(e.args?.query ?? '').trim()
+    return query ? `web-search "${truncate(query, 60)}"` : 'web-search'
+  }
+  if (tool === 'web-fetch') {
+    const url = String(e.args?.url ?? '').trim()
+    return url ? `web-fetch ${truncate(url, 60)}` : 'web-fetch'
+  }
   return t('session.tool.generic', { tool })
+}
+
+function truncate(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max - 1)}…`
+}
+
+/** Pull the task brief out of a delegate_to / delegate_parallel call's
+ *  args so the chip can drop down and show what the Lead actually
+ *  dispatched. Returns undefined for non-delegation tools or when the
+ *  args are malformed (defensive — transcripts come from disk and
+ *  could be old / partially written during a crash). */
+/** Resolve a delegate_to / delegate_parallel `assignee` value (a role
+ *  name, optionally `Role#id` for disambiguation) to the spawned
+ *  sub-agent's node_id. Used by the nesting pass to match a delegate
+ *  chip with its actual children when sibling delegates share a depth.
+ *  Returns undefined if the team snapshot doesn't carry the role —
+ *  caller falls back to depth-only matching. */
+function resolveAssigneeNode(
+  agents: { id: string; role: string }[] | undefined,
+  assignee: unknown,
+): string | undefined {
+  const raw = String(assignee ?? '').trim()
+  if (!raw || !agents || agents.length === 0) return undefined
+  if (raw.includes('#')) {
+    const [role, id] = raw.split('#', 2) as [string, string]
+    const exact = agents.find((a) => a.id === id && a.role === role)
+    if (exact) return exact.id
+  }
+  const byRole = agents.find((a) => a.role === raw)
+  return byRole?.id
+}
+
+function extractDelegatePayload(
+  tool: string,
+  args: Record<string, unknown> | undefined,
+): { mode: string; tasks: string[] } | undefined {
+  if (!args) return undefined
+  if (tool === 'delegate_to') {
+    const task = String(args.task ?? '').trim()
+    if (!task) return undefined
+    return { mode: String(args.mode ?? ''), tasks: [task] }
+  }
+  if (tool === 'delegate_parallel') {
+    const raw = Array.isArray(args.tasks) ? (args.tasks as unknown[]) : []
+    const tasks = raw
+      .map((t) => String(t ?? '').trim())
+      .filter((t) => t.length > 0)
+    if (tasks.length === 0) return undefined
+    return { mode: String(args.mode ?? ''), tasks }
+  }
+  return undefined
+}
+
+/** Tool chip — generic step-stream row used for both inline (inside a
+ *  ToolGroupBar) and standalone renderings. For delegations carries an
+ *  expand affordance: clicking drops down the actual task brief the
+ *  Lead sent to the subordinate, indented under a left rail so it
+ *  visually nests under the chip. Non-delegation chips render as plain
+ *  text rows with no interaction. */
+function ToolChip({
+  tool,
+  summary,
+  delegate,
+  children,
+}: {
+  tool: string
+  summary: string
+  delegate?: { mode: string; tasks: string[] }
+  children?: NestableChild[]
+}) {
+  const Icon = iconForTool(tool)
+  const [expanded, setExpanded] = useState(false)
+  const hasChildren = !!children && children.length > 0
+  const expandable = !!delegate || hasChildren
+  const baseRow = (
+    <span className="inline-flex max-w-full items-center gap-2 text-[12.5px] text-neutral-500 dark:text-neutral-400 font-mono">
+      <Icon className="w-3 h-3 shrink-0 opacity-60" />
+      <span className="truncate text-neutral-600 dark:text-neutral-300">
+        {summary}
+      </span>
+      {expandable && (
+        <CaretDown
+          className={`w-3 h-3 shrink-0 opacity-50 transition-transform duration-150 ${
+            expanded ? 'rotate-180' : ''
+          }`}
+        />
+      )}
+    </span>
+  )
+  if (!expandable) return baseRow
+  return (
+    <div className="max-w-full">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        className="inline-flex max-w-full items-center hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors"
+      >
+        {baseRow}
+      </button>
+      {expanded && (
+        <div className="mt-2 ml-[7px] pl-3 border-l border-neutral-200 dark:border-neutral-800 space-y-2">
+          {delegate?.tasks.map((task, i) => (
+            <div
+              key={`task-${i}`}
+              className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-900/40 px-3 py-2.5"
+            >
+              {(delegate.tasks.length > 1 || delegate.mode) && (
+                <div className="flex items-center gap-2 mb-1.5 text-[11px] uppercase tracking-wide text-neutral-400 dark:text-neutral-500 font-mono">
+                  {delegate.tasks.length > 1 && (
+                    <span>
+                      task {i + 1}/{delegate.tasks.length}
+                    </span>
+                  )}
+                  {delegate.mode && (
+                    <span className="rounded-full border border-neutral-200 dark:border-neutral-700 px-1.5 py-px text-neutral-500 dark:text-neutral-400 normal-case tracking-normal">
+                      {delegate.mode}
+                    </span>
+                  )}
+                </div>
+              )}
+              <div className="text-[12.5px] text-neutral-700 dark:text-neutral-200 leading-relaxed whitespace-pre-wrap font-sans">
+                {task}
+              </div>
+            </div>
+          ))}
+          {hasChildren && (
+            <ul className="space-y-1.5 pt-1">
+              {children!.map((c) => (
+                <li key={c.id} className="flex">
+                  <NestedChild item={c} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Render a child step inside a delegate dropdown — same chip shape as
+ *  the top-level stream so the user reads "what the sub-agent did" with
+ *  the exact same visual grammar (icon + mono text, web-search pill,
+ *  web-fetch link row). Nested delegates recurse via ToolChip. */
+function NestedChild({ item }: { item: NestableChild }) {
+  if (item.kind === 'tool') {
+    return (
+      <ToolChip
+        tool={item.tool}
+        summary={item.summary}
+        delegate={item.delegate}
+        children={item.children}
+      />
+    )
+  }
+  return (
+    <SourceCard
+      variant={item.variant}
+      query={item.query}
+      sources={item.sources}
+    />
+  )
+}
+
+/** Icon to use on a tool chip. Delegations get the ↘ arrow (matches the
+ *  hand-off semantics and the textual `↘ delegating to …` prefix used
+ *  elsewhere); everything else falls back to the generic wrench. */
+function iconForTool(tool: string) {
+  if (tool === 'delegate_to' || tool === 'delegate_parallel') {
+    return ArrowBendDownRight
+  }
+  if (tool === 'web-search') return MagnifyingGlass
+  if (tool === 'web-fetch') return Article
+  return Wrench
 }
 
 /**
@@ -354,15 +665,77 @@ function buildChat(
             id,
             author: agentLabel(team, e.node_id, e.agent_role ?? 'agent'),
             variant: tool === 'web-search' ? 'search' : 'fetch',
+            query: String(
+              tool === 'web-search' ? e.args?.query ?? '' : e.args?.url ?? '',
+            ).trim(),
             sources: e.sources,
+            depth: typeof e.depth === 'number' ? e.depth : 0,
+            nodeId: String(e.node_id ?? ''),
+            siblingGroupId: e.sibling_group_id,
+            siblingIndex: e.sibling_index,
+          })
+          break
+        }
+        const author = agentLabel(team, e.node_id, e.agent_role ?? 'agent')
+        const depth = typeof e.depth === 'number' ? e.depth : 0
+        const nodeId = String(e.node_id ?? '')
+        const childNode =
+          tool === 'delegate_to' || tool === 'delegate_parallel'
+            ? resolveAssigneeNode(
+                // Prefer the session's frozen snapshot — it has the
+                // exact agent ids that ran. Fall back to the live
+                // team store only if the snapshot is missing (older
+                // sessions written before the snapshot field landed).
+                summary.team_snapshot?.agents ?? team?.agents,
+                e.args?.assignee,
+              )
+            : undefined
+        // Expand `delegate_parallel` into N independent chips — one per
+        // task — so the user sees three "delegating to Member" rows
+        // instead of one chip with three task boxes inside. Each virtual
+        // chip carries (siblingGroupId, siblingIndex) matching what the
+        // engine stamps on every nested tool_called inside that sibling,
+        // so `nestUnderDelegates` can attach grandchildren 1:1.
+        if (tool === 'delegate_parallel') {
+          const tasks = Array.isArray(e.args?.tasks)
+            ? (e.args!.tasks as unknown[]).map((x) => String(x ?? '').trim())
+            : []
+          // The engine stamps `sibling_group_id` on the delegate_parallel
+          // event itself (and on every nested tool_called), surfaced by
+          // the transcript builder as `e.sibling_group_id`. NOT under
+          // `args` — `args` is only the call's `arguments`.
+          const groupId = e.sibling_group_id ?? `g-${id}`
+          const mode = String(e.args?.mode ?? '')
+          const assignee = String(e.args?.assignee ?? '?')
+          tasks.forEach((task, idx) => {
+            out.push({
+              kind: 'tool',
+              id: `${id}-${idx}`,
+              author,
+              tool: 'delegate_to',
+              summary: t('session.tool.delegate', { assignee }),
+              depth,
+              nodeId,
+              siblingGroupId: groupId,
+              siblingIndex: idx,
+              delegate: { mode, tasks: [task] },
+              expectedChildNode: childNode,
+            })
           })
           break
         }
         out.push({
           kind: 'tool',
           id,
-          author: agentLabel(team, e.node_id, e.agent_role ?? 'agent'),
+          author,
+          tool,
           summary: summarizeTool(e, t),
+          depth,
+          nodeId,
+          siblingGroupId: e.sibling_group_id,
+          siblingIndex: e.sibling_index,
+          delegate: extractDelegatePayload(tool, e.args),
+          expectedChildNode: childNode,
         })
         break
       }
@@ -437,22 +810,159 @@ function buildChat(
   // Collapse consecutive tool steps (≥2) into a single expandable group.
   // User asked for a Claude-Desktop-style "N steps ∨" bar — raw chip
   // stream gets visually noisy once a turn runs 10+ tools.
-  return collapseToolRuns(out)
+  return collapseToolRuns(nestUnderDelegates(out))
+}
+
+/** Move depth ≥ 1 tool/sources items into the `children` array of the
+ *  most recent ancestor `delegate_to` / `delegate_parallel`, so the chat
+ *  stream only shows the Lead's actions at the top level — the sub-
+ *  agent's actions live inside their delegate chip's dropdown.
+ *
+ *  Approach: linear pass with a stack of currently-open delegates keyed
+ *  by their CHILD depth (`item.depth + 1`). For each tool/sources item,
+ *  pop until the stack top's child depth ≤ item.depth, then either
+ *  attach to that top (depth match) or leave at root. New delegates push
+ *  themselves onto the stack so subsequent deeper items nest under them.
+ *  Non-tool / non-sources items reset the stack — an assistant message
+ *  always closes any open delegations from the user's POV. */
+function nestUnderDelegates(items: ChatItem[]): ChatItem[] {
+  const out: ChatItem[] = []
+  type Frame = {
+    item: NestableChild & { kind: 'tool' }
+    childDepth: number
+    /** node_id of the sub-agent THIS delegate spawned. Children whose
+     *  `nodeId` matches attach here. Multiple sibling delegates at the
+     *  same depth are disambiguated primarily by this field. */
+    expectedChildNode?: string
+    /** delegate_parallel siblings share `expectedChildNode` (same role),
+     *  so we additionally match by sibling group + index to route each
+     *  N children groups to its correct N parents. */
+    siblingGroupId?: string
+    siblingIndex?: number
+  }
+  const stack: Frame[] = []
+
+  // Find the open frame that owns this child. Matching priority:
+  //   1. exact (depth, nodeId, siblingGroupId, siblingIndex) — both the
+  //      child and frame name the same parallel-sibling slot.
+  //   2. (depth, nodeId) — non-parallel parent with matching agent.
+  //   3. (depth) with no expectedChildNode — legacy fallback.
+  const findOwner = (
+    depth: number,
+    nodeId: string,
+    siblingGroupId: string | undefined,
+    siblingIndex: number | undefined,
+  ): Frame | undefined => {
+    if (siblingGroupId !== undefined && siblingIndex !== undefined) {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        const f = stack[i]!
+        if (f.childDepth !== depth) continue
+        if (f.expectedChildNode && f.expectedChildNode !== nodeId) continue
+        if (
+          f.siblingGroupId === siblingGroupId &&
+          f.siblingIndex === siblingIndex
+        ) {
+          return f
+        }
+      }
+    }
+    for (let i = stack.length - 1; i >= 0; i--) {
+      const f = stack[i]!
+      if (f.childDepth !== depth) continue
+      // Skip parallel-sibling frames when the child has no sibling info —
+      // we can't tell which slot it belongs to, falling through avoids
+      // arbitrarily attaching to the first sibling's bucket.
+      if (f.siblingGroupId && siblingGroupId === undefined) continue
+      if (f.expectedChildNode && f.expectedChildNode === nodeId) return f
+    }
+    for (let i = stack.length - 1; i >= 0; i--) {
+      const f = stack[i]!
+      if (f.childDepth === depth && !f.expectedChildNode && !f.siblingGroupId)
+        return f
+    }
+    return undefined
+  }
+
+  for (const it of items) {
+    if (it.kind === 'tool' || it.kind === 'sources') {
+      // No pop based on depth — sibling delegates share `childDepth` with
+      // parents in nested cases AND with each other in fan-out cases.
+      // `nodeId` + `siblingGroupId/Index` matching in `findOwner`
+      // disambiguates correctly. Stale frames clear naturally on the
+      // next assistant_message reset (end of Lead's turn).
+      const owner = findOwner(
+        it.depth,
+        it.nodeId,
+        it.siblingGroupId,
+        it.siblingIndex,
+      )
+      if (owner) {
+        if (!owner.item.children) owner.item.children = []
+        owner.item.children.push(it as NestableChild)
+      } else {
+        // depth=0, or no matching open delegate — root level.
+        out.push(it)
+      }
+      if (
+        it.kind === 'tool' &&
+        (it.tool === 'delegate_to' || it.tool === 'delegate_parallel')
+      ) {
+        stack.push({
+          item: it,
+          childDepth: it.depth + 1,
+          expectedChildNode: it.expectedChildNode,
+          siblingGroupId: it.siblingGroupId,
+          siblingIndex: it.siblingIndex,
+        })
+      }
+      continue
+    }
+    // Non-tool item (assistant, user, ask, error) — close any open
+    // delegations and emit at root.
+    stack.length = 0
+    out.push(it)
+  }
+  return out
 }
 
 function collapseToolRuns(items: ChatItem[]): ChatItem[] {
   const out: ChatItem[] = []
-  let run: Extract<ChatItem, { kind: 'tool' }>[] = []
+  type Groupable = Extract<ChatItem, { kind: 'tool' } | { kind: 'sources' }>
+  let run: Groupable[] = []
   const flush = () => {
     if (run.length >= 2) {
       out.push({
         kind: 'tool_group',
         id: `g-${run[0]!.id}`,
-        items: run.map((r) => ({
-          id: r.id,
-          author: r.author,
-          summary: r.summary,
-        })),
+        items: run.map((r) =>
+          r.kind === 'tool'
+            ? {
+                kind: 'tool',
+                id: r.id,
+                author: r.author,
+                tool: r.tool,
+                summary: r.summary,
+                depth: r.depth,
+                nodeId: r.nodeId,
+                siblingGroupId: r.siblingGroupId,
+                siblingIndex: r.siblingIndex,
+                delegate: r.delegate,
+                expectedChildNode: r.expectedChildNode,
+                children: r.children,
+              }
+            : {
+                kind: 'sources',
+                id: r.id,
+                author: r.author,
+                variant: r.variant,
+                query: r.query,
+                sources: r.sources,
+                depth: r.depth,
+                nodeId: r.nodeId,
+                siblingGroupId: r.siblingGroupId,
+                siblingIndex: r.siblingIndex,
+              },
+        ),
       })
     } else if (run.length === 1) {
       out.push(run[0]!)
@@ -460,7 +970,7 @@ function collapseToolRuns(items: ChatItem[]): ChatItem[] {
     run = []
   }
   for (const it of items) {
-    if (it.kind === 'tool') {
+    if (it.kind === 'tool' || it.kind === 'sources') {
       run.push(it)
     } else {
       flush()
@@ -538,6 +1048,7 @@ export function RunDetailPage() {
     let refetchTimer: ReturnType<typeof setTimeout> | null = null
     let inflight = false
     let viewedMarked = false
+    let missing = false
     // If events arrive while a fetch is inflight, set this so we kick off
     // one more fetch when the current one resolves — otherwise late events
     // (tokens after the first refetch started) never get reflected.
@@ -556,10 +1067,22 @@ export function RunDetailPage() {
         const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`)
         if (!res.ok) {
           if (!cancelled) {
-            if (res.status === 404) setNotFound(true)
+            if (res.status === 404) {
+              missing = true
+              setNotFound(true)
+              // Purge stale references so the sidebar / task list don't keep
+              // showing this dead session. SSE-stream 404s have their own
+              // purge, but a direct deep-link visit never reaches that path.
+              useSessionsStore.getState().removeSession(id)
+              const owner = useTasksStore
+                .getState()
+                .tasks.find((t) => t.sessions.some((r) => r.id === id))
+              if (owner) useTasksStore.getState().removeSession(id)
+            }
           }
           return
         }
+        missing = false
         const data = (await res.json()) as SessionSummary
         if (!cancelled) {
           setSummary(data)
@@ -600,7 +1123,7 @@ export function RunDetailPage() {
     setNotFound(false)
 
     void fetchSummary().then(() => {
-      if (cancelled) return
+      if (cancelled || missing) return
       es = new EventSource(`/api/sessions/${encodeURIComponent(id)}/stream`)
       es.onmessage = (ev) => {
         if (ev.data === '[DONE]') {
@@ -834,6 +1357,19 @@ export function RunDetailPage() {
   const backHref = params
     ? `/${params.companySlug}/${params.teamSlug}/tasks`
     : '/'
+  const teamHomeHref = params
+    ? `/${params.companySlug}/${params.teamSlug}/team`
+    : '/'
+
+  useEffect(() => {
+    if (!notFound || !id) return
+    useSessionsStore.getState().removeSession(id)
+    useTasksStore.getState().removeSession(id)
+    const timer = setTimeout(() => {
+      navigate(teamHomeHref, { replace: true })
+    }, 3000)
+    return () => clearTimeout(timer)
+  }, [id, navigate, notFound, teamHomeHref])
 
   if (loading && !summary) {
     return <div className="h-full w-full bg-neutral-50 dark:bg-neutral-950" />
@@ -841,15 +1377,19 @@ export function RunDetailPage() {
 
   if (notFound || !summary) {
     return (
-      <div className="h-full w-full flex flex-col items-center justify-center gap-3 text-neutral-500 text-[14px]">
-        <div>해당 실행 기록을 찾을 수 없습니다.</div>
-        <button
-          type="button"
-          onClick={() => navigate(backHref)}
-          className="text-neutral-900 underline"
-        >
-          태스크 목록으로
-        </button>
+      <div className="h-full w-full flex items-center justify-center bg-neutral-50 dark:bg-neutral-950 px-4">
+        <div className="w-full max-w-sm rounded-lg border border-neutral-200 bg-white p-5 text-center shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+          <div className="text-[14px] font-medium text-neutral-900 dark:text-neutral-100">
+            이 세션은 더 이상 존재하지 않습니다.
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate(teamHomeHref, { replace: true })}
+            className="mt-4 inline-flex h-9 items-center justify-center rounded bg-neutral-900 px-4 text-[14px] font-medium text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300"
+          >
+            새 채팅
+          </button>
+        </div>
       </div>
     )
   }
@@ -894,7 +1434,7 @@ export function RunDetailPage() {
           className="flex-1 min-w-0 flex flex-col transition-[padding]"
           style={{ paddingLeft: chatColOffsetPx }}
         >
-          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-quiet">
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain scrollbar-quiet">
             <div className="max-w-[760px] mx-auto px-6 pt-6 pb-4 space-y-4">
               <VerifiedUrlsContext.Provider value={verifiedUrls}>
               {chat.map((item) => {
@@ -935,7 +1475,7 @@ export function RunDetailPage() {
 
         {/* Artifacts column */}
         <aside className="w-[272px] shrink-0 flex flex-col min-h-0">
-          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-quiet px-3 py-4 space-y-3">
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain scrollbar-quiet px-3 py-4 space-y-3">
             {/* Artifacts — hide sidecar helpers (e.g. pdf's .spec.json)
              *  so the count/list match what the user actually cares about. */}
             {(() => {
@@ -1094,7 +1634,7 @@ function SidePanel({
         )}
       </header>
       {expanded && (
-        <div className="max-h-[320px] overflow-y-auto scrollbar-quiet">
+        <div className="max-h-[320px] overflow-y-auto overscroll-contain scrollbar-quiet">
           {children}
         </div>
       )}
@@ -1194,7 +1734,7 @@ function ToolGroupBar({
   const [expanded, setExpanded] = useState(false)
   const label = t('session.tool.groupLabel', { count: group.items.length })
   return (
-    <div className="px-4">
+    <div>
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -1216,12 +1756,22 @@ function ToolGroupBar({
         <ul className="mt-2 ml-[7px] pl-3 border-l border-neutral-200 dark:border-neutral-800 flex flex-col gap-1.5">
           {group.items.map((it) => (
             <li key={it.id} className="flex">
-              <span className="inline-flex items-center gap-2 rounded-full border border-neutral-200 dark:border-neutral-800 bg-neutral-100/60 dark:bg-neutral-900/60 px-2.5 py-1 text-[12px] text-neutral-500 font-mono w-fit">
-                <Wrench className="w-3 h-3" />
-                <span className="text-neutral-700 dark:text-neutral-300">
-                  {it.summary}
-                </span>
-              </span>
+              {it.kind === 'tool' ? (
+                <ToolChip
+                  tool={it.tool}
+                  summary={it.summary}
+                  delegate={it.delegate}
+                  children={it.children}
+                />
+              ) : (
+                <div className="w-full">
+                  <SourceCard
+                    variant={it.variant}
+                    query={it.query}
+                    sources={it.sources}
+                  />
+                </div>
+              )}
             </li>
           ))}
         </ul>
@@ -1230,79 +1780,116 @@ function ToolGroupBar({
   )
 }
 
-/** Source card for web-search (10 collapsed rows) / web-fetch (single row).
- *  Mirrors Claude's "웹 검색됨 · 결과 N개" pattern: collapsed header with an
- *  icon + label + count badge, expandable into a list of favicon-titled rows
- *  each linking to the source URL in a new tab. */
+/** Source pill for web-search / web-fetch — visually the same compact
+ *  tool-chip shape as a failed `web-search` (wrench pill), but with a caret
+ *  indicating it's expandable. Click to drop a list of favicon-titled rows
+ *  below the pill, each linking to the source URL in a new tab. Keeping the
+ *  collapsed pill identical to the tool-chip shape makes the chat feel like
+ *  one consistent "step" stream rather than a mix of pills + bordered cards. */
+/** Source pill for web-search / web-fetch.
+ *
+ *  - `web-search` renders as a pill chip identical to the other step
+ *    chips (same border, same `font-mono` text, same height). Clicking
+ *    expands the result list under a left-rail indent.
+ *  - `web-fetch` renders as a single clickable URL row — no "web-fetch"
+ *    prefix, no count, no dropdown. Web-fetch always has exactly one
+ *    source (the page itself), so the dropdown adds no value; we just
+ *    show the link directly with favicon + URL + domain + external icon.
+ *
+ *  Layout details for the search pill:
+ *  - Pill stays on ONE line — query is truncated with `min-w-0 truncate`.
+ *    Count badge and caret are `shrink-0` so they never wrap below the
+ *    query.
+ *  - `inline-flex` + `max-w-full` so the pill grows to fit short queries
+ *    but never overflows the chat column on long ones. */
 function SourceCard({
   variant,
+  query,
   sources,
 }: {
   variant: 'search' | 'fetch'
+  query: string
   sources: ChatSource[]
 }) {
   const t = useT()
-  // Fetch is a single row — always "expanded". Search collapses by default;
-  // the count badge signals how many are hidden.
-  const collapsible = variant === 'search' && sources.length > 1
-  const [expanded, setExpanded] = useState(!collapsible)
-  const label = t(
-    variant === 'search'
-      ? 'session.sources.searchLabel'
-      : 'session.sources.fetchLabel',
-  )
+  const [expanded, setExpanded] = useState(false)
   const count = sources.length
-  const Icon = variant === 'search' ? MagnifyingGlass : Globe
+
+  if (variant === 'fetch') {
+    // web-fetch === one source. Render the source row inline as a clickable
+    // link, matching the other step chips' visual weight (no big card).
+    const s = sources[0]
+    if (!s) return null
+    return (
+      <a
+        href={s.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="group inline-flex max-w-full items-center gap-2 text-[12.5px] font-mono hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors"
+      >
+        <SourceFavicon domain={s.domain} />
+        <span className="text-neutral-600 dark:text-neutral-300 truncate min-w-0">
+          {s.url}
+        </span>
+        {s.domain && (
+          <span className="text-neutral-400 dark:text-neutral-500 shrink-0">
+            {s.domain}
+          </span>
+        )}
+        <ArrowSquareOut className="w-3 h-3 shrink-0 opacity-40 group-hover:opacity-80 transition-opacity" />
+      </a>
+    )
+  }
+
+  const toolName = 'web-search'
   return (
-    <div className="px-4">
-      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-900/40 overflow-hidden">
-        {collapsible ? (
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            aria-expanded={expanded}
-            className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100/50 dark:hover:bg-neutral-900/60 transition-colors"
-          >
-            <Icon className="w-3.5 h-3.5 shrink-0 opacity-70" />
-            <span className="font-medium">{label}</span>
-            <span className="text-[11.5px] text-neutral-400 dark:text-neutral-500 ml-auto mr-1">
-              {t('session.sources.count', { count })}
-            </span>
-            <CaretDown
-              className={`w-3 h-3 transition-transform duration-150 ${
-                expanded ? 'rotate-180' : ''
-              }`}
-            />
-          </button>
-        ) : (
-          <div className="flex items-center gap-2 px-3 py-2 text-[13px] text-neutral-600 dark:text-neutral-300">
-            <Icon className="w-3.5 h-3.5 shrink-0 opacity-70" />
-            <span className="font-medium">{label}</span>
-          </div>
+    <div className="max-w-full">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        className="inline-flex max-w-full items-center gap-2 text-[12.5px] text-neutral-500 dark:text-neutral-400 font-mono hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors"
+      >
+        <MagnifyingGlass className="w-3 h-3 shrink-0 opacity-60" />
+        <span className="text-neutral-600 dark:text-neutral-300 shrink-0">
+          {toolName}
+        </span>
+        {query && (
+          <span className="text-neutral-600 dark:text-neutral-300 truncate min-w-0">
+            {variant === 'search' ? `"${query}"` : query}
+          </span>
         )}
-        {expanded && (
-          <ul className="divide-y divide-neutral-200/70 dark:divide-neutral-800/70">
-            {sources.map((s, i) => (
-              <li key={`${i}-${s.url}`}>
-                <a
-                  href={s.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2.5 px-3 py-2 hover:bg-neutral-100/60 dark:hover:bg-neutral-900/60 transition-colors"
-                >
-                  <SourceFavicon domain={s.domain} />
-                  <span className="text-[13px] text-neutral-800 dark:text-neutral-200 truncate flex-1 min-w-0">
-                    {s.title}
-                  </span>
-                  <span className="text-[11.5px] text-neutral-400 dark:text-neutral-500 shrink-0 max-w-[40%] truncate">
-                    {s.domain}
-                  </span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+        <span className="text-neutral-400 dark:text-neutral-500 shrink-0">
+          · {t('session.sources.count', { count })}
+        </span>
+        <CaretDown
+          className={`w-3 h-3 shrink-0 opacity-50 transition-transform duration-150 ${
+            expanded ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+      {expanded && (
+        <ul className="mt-2 ml-[7px] pl-3 border-l border-neutral-200 dark:border-neutral-800 divide-y divide-neutral-200/70 dark:divide-neutral-800/70">
+          {sources.map((s, i) => (
+            <li key={`${i}-${s.url}`}>
+              <a
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2.5 px-2.5 py-2 hover:bg-neutral-100/60 dark:hover:bg-neutral-900/60 transition-colors"
+              >
+                <SourceFavicon domain={s.domain} />
+                <span className="text-[13px] text-neutral-800 dark:text-neutral-200 truncate flex-1 min-w-0">
+                  {s.title}
+                </span>
+                <span className="text-[11.5px] text-neutral-400 dark:text-neutral-500 shrink-0 max-w-[35%] truncate">
+                  {s.domain}
+                </span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
@@ -1815,21 +2402,25 @@ const ChatBubble = memo(
   }
   if (item.kind === 'tool') {
     return (
-      <div className="px-4">
-        <div className="inline-flex items-center gap-2 rounded-full border border-neutral-200 dark:border-neutral-800 bg-neutral-100/60 dark:bg-neutral-900/60 px-2.5 py-1 text-[12px] text-neutral-500 font-mono">
-          <Wrench className="w-3 h-3" />
-          <span className="text-neutral-700 dark:text-neutral-300">
-            {item.summary}
-          </span>
-        </div>
-      </div>
+      <ToolChip
+        tool={item.tool}
+        summary={item.summary}
+        delegate={item.delegate}
+        children={item.children}
+      />
     )
   }
   if (item.kind === 'tool_group') {
     return <ToolGroupBar group={item} />
   }
   if (item.kind === 'sources') {
-    return <SourceCard variant={item.variant} sources={item.sources} />
+    return (
+      <SourceCard
+        variant={item.variant}
+        query={item.query}
+        sources={item.sources}
+      />
+    )
   }
   if (item.kind === 'ask') {
     // Handled inline at the map site where submit/skip callbacks live.
@@ -1877,7 +2468,18 @@ const ChatBubble = memo(
     if (a.kind === 'tool_group' && b.kind === 'tool_group') {
       if (a.items.length !== b.items.length) return false
       for (let i = 0; i < a.items.length; i++) {
-        if (a.items[i]!.summary !== b.items[i]!.summary) return false
+        const ai = a.items[i]!
+        const bi = b.items[i]!
+        if (ai.kind !== bi.kind) return false
+        if (ai.kind === 'tool' && bi.kind === 'tool') {
+          if (ai.summary !== bi.summary) return false
+        } else if (ai.kind === 'sources' && bi.kind === 'sources') {
+          if (ai.variant !== bi.variant) return false
+          if (ai.sources.length !== bi.sources.length) return false
+          for (let j = 0; j < ai.sources.length; j++) {
+            if (ai.sources[j]!.url !== bi.sources[j]!.url) return false
+          }
+        }
       }
       return true
     }

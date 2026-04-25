@@ -455,8 +455,18 @@ sessions.patch('/:sessionId', async (c) => {
 })
 
 // DELETE /api/sessions/:sessionId — permanent
-sessions.delete('/:sessionId', (c) => {
+sessions.delete('/:sessionId', async (c) => {
   const sessionId = c.req.param('sessionId')
+  // Abort the run BEFORE wiping the directory so the engine doesn't
+  // keep emitting events into a vanishing path. `stop` triggers the
+  // session's AbortController; the chat loop observes it on the next
+  // tick and exits cleanly. We give it ~500ms to drain, then proceed
+  // even if it hasn't acknowledged — the event-writer's missing-dir
+  // guard catches any straggler writes.
+  if (isActive(sessionId)) {
+    await stop(sessionId)
+    await new Promise((r) => setTimeout(r, 500))
+  }
   const existed = deleteSession(sessionId)
   if (!existed) {
     return c.json({ detail: 'session not found' }, 404)

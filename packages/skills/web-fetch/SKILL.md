@@ -2,7 +2,7 @@
 name: web-fetch
 description: Fetch a web page and return clean markdown of its main content. Strips nav/ads/scripts, caches with ETag, and (if a query is given) returns only the most relevant chunks via BM25 — designed for maximum signal per token. Use whenever an agent needs to read a URL.
 triggers:
-  keywords: [url, 웹, 크롤, 크롤링, 스크랩, scrape, crawl, fetch, 링크]
+  keywords: [url, web, scrape, crawl, fetch, link, page, website]
   patterns: ['https?://']
 runtime: python
 entrypoint: scripts/run.py
@@ -42,68 +42,68 @@ Fetch a URL and hand the agent the **smallest possible useful text** — not raw
 ## Decision tree
 
 ```
-무엇이 필요해?
+What do you need?
 │
-├─ 페이지를 훑어보고 싶다 (검색어 없음)
-│   → url + max_chars. format=markdown (default). 토큰 초과면 max_chars 낮추기.
+├─ Skim the whole page (no query)
+│   → url + max_chars. format=markdown (default). Lower max_chars if over token budget.
 │
-├─ 이 페이지에서 특정 사실/답을 찾고 싶다
-│   → url + query="무엇을 찾는지". top_k로 몇 chunk 받을지 조절.
-│     전체 페이지 토큰의 1/5 ~ 1/10 수준으로 떨어짐.
+├─ Find a specific fact/answer on this page
+│   → url + query="what to find". Use top_k to control chunk count.
+│     Usually drops to 1/5-1/10 of full-page tokens.
 │
-├─ HTML 구조 자체를 파싱해야 함 (표, 데이터 스크래핑 등)
-│   → format=raw. 비쌈. 가능하면 query 로 먼저 좁혀서 쓰기.
+├─ Need to parse HTML structure itself (tables, data scraping, etc.)
+│   → format=raw. Expensive. Narrow with query first when possible.
 │
-└─ 최근에 이미 받은 URL 다시 볼 것 같다
-    → 그냥 호출해. 캐시가 자동으로 ETag 재검증.
-      강제로 새로 받으려면 no_cache=true.
+└─ Likely revisiting a recently fetched URL
+    → just call it. Cache automatically revalidates with ETag.
+      Force a fresh fetch with no_cache=true.
 ```
 
-## 출력 형식
+## Output format
 
-성공 시 stdout에 JSON 한 줄:
+On success, one JSON line on stdout:
 
 ```json
 {
   "ok": true,
-  "url": "<최종 URL (리다이렉트 반영)>",
+  "url": "<final URL after redirects>",
   "status": 200,
   "from_cache": false,
-  "title": "<문서 제목 (있으면)>",
+  "title": "<document title, if any>",
   "content": "<extracted markdown/text>",
   "chars": 1834,
   "truncated": false,
-  "chunks_returned": 4,      // query 썼을 때만
-  "total_chunks": 23,        // query 썼을 때만
+  "chunks_returned": 4,      // only when query is set
+  "total_chunks": 23,        // only when query is set
   "fetched_at": "2026-04-21T12:34:56Z"
 }
 ```
 
-실패 시:
+On failure:
 
 ```json
 {"ok": false, "error": "...", "status": 404}
 ```
 
-## 경계·제약
+## Limits & caveats
 
-- **정적 파싱만.** JS 렌더링 필요한 SPA는 본문 비어 올 수 있음. 그럴 때는 응답 JSON이 `"warning": "empty_content_likely_spa"` 를 달아 돌려줍니다. Playwright 지원은 v2.
-- **http(s) 만.** file://, ftp:// 등은 400.
-- **사이즈 제한.** 응답 본문 > 8 MB 면 `413` 취급하고 거부. 큰 파일은 web-fetch 의 몫이 아님.
-- **타임아웃.** 기본 20초, 도달 불가하면 실패.
-- **robots.txt 는 확인하지 않음.** 에이전트 사용자(= 사람 한 명) 컨텍스트라서 브라우저와 동급으로 취급. 크롤러용도 아님.
-- **캐시는 24h TTL.** 이후는 자동으로 재검증. `no_cache=true` 로 강제 우회.
+- **Static parsing only.** SPAs that need JS rendering may return empty content. Response JSON then includes `"warning": "empty_content_likely_spa"`. Playwright support is v2.
+- **http(s) only.** file://, ftp://, etc. return 400.
+- **Size limit.** Response body > 8 MB is rejected as `413`. Large files are not web-fetch's job.
+- **Timeout.** Default 20s; unreachable targets fail.
+- **robots.txt is not checked.** This runs in an agent user (= one human) context, treated like a browser. Not for crawler workloads.
+- **Cache is 24h TTL.** After that, it revalidates automatically. Force bypass with `no_cache=true`.
 
-## 파일 구조
+## File layout
 
 ```
 web-fetch/
 ├── scripts/
-│   └── run.py         # 엔트리포인트 — stdin JSON 받아 stdout JSON 반환
+│   └── run.py         # entrypoint — reads stdin JSON, writes stdout JSON
 ├── lib/
-│   ├── fetch.py       # httpx 호출 + 디스크 캐시 + ETag 재검증
-│   ├── extract.py     # trafilatura 로 본문 추출 → markdown
-│   └── rank.py        # BM25 청크 랭킹 (query 있을 때)
+│   ├── fetch.py       # httpx call + disk cache + ETag revalidation
+│   ├── extract.py     # main-content extraction with trafilatura → markdown
+│   └── rank.py        # BM25 chunk ranking (when query is set)
 └── reference/
-    └── examples.md    # 호출 예시 / 토큰 절약 비교
+    └── examples.md    # call examples / token-savings comparison
 ```

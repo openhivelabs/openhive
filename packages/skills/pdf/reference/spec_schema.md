@@ -15,35 +15,35 @@
 }
 ```
 
-## Block types (docx 와 동일 + 2개 PDF 전용)
+## Block types (same as docx + 2 PDF-only types)
 
-### title (PDF 전용)
+### title (PDF-only)
 ```jsonc
-{"type": "title", "text": "문서 큰 제목"}
+{"type": "title", "text": "Large document title"}
 ```
-큰 중앙 정렬 제목. Cover page 용.
+Large centered title. For cover pages.
 
-### spacer (PDF 전용)
+### spacer (PDF-only)
 ```jsonc
 {"type": "spacer", "height": 40}
 ```
-수직 여백 (pt 단위).
+Vertical spacing (pt units).
 
 ### heading, paragraph, bullets, numbered, table, image, page_break, quote, code, horizontal_rule, toc, kpi_row, two_column
 
-docx spec 과 동일. `packages/skills/docx/reference/spec_schema.md` 참조.
+Same as docx spec. See `packages/skills/docx/reference/spec_schema.md`.
 
 ## Theme
 
-docx 와 같은 테마 이름: `default`, `formal`, `report`, `minimal`.
-폰트는 reportlab 내장 폰트 — `Helvetica`, `Times-Roman`, `Courier`.
+Same theme names as docx: `default`, `formal`, `report`, `minimal`.
+Fonts are ReportLab built-ins — `Helvetica`, `Times-Roman`, `Courier`.
 
 ## Theme overrides
 
-색은 `[R,G,B]` (0..255). 마진은 **포인트 단위** (docx 는 inch, PDF 는 pt) — 주의.
+Colors are `[R,G,B]` (0..255). Margins are **point units** (docx uses inch, PDF uses pt) — watch this.
 
-| 필드 | 타입 | 기본값 |
+| Field | Type | Default |
 |---|---|---|
 | `margin_top/bottom/left/right` | float (pt) | 54/54/60/60 |
-| `size_*` | int (pt) | `size_body=11` 등 |
-| `*_font` | string | `Helvetica` 등 (reportlab 내장) |
+| `size_*` | int (pt) | e.g. `size_body=11` |
+| `*_font` | string | e.g. `Helvetica` (ReportLab built-in) |

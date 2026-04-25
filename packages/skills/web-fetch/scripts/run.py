@@ -90,6 +90,18 @@ def main() -> int:
         content = "\n\n---\n\n".join(c for _, _, c in picked)
         chunks_returned = len(picked)
 
+    # Strip ASCII control characters (other than tab/newline/CR) so the
+    # downstream JSON.parse on the engine side can't choke on raw bytes
+    # that some pages emit inside script blocks, malformed UTF-8 fallback
+    # sequences, or binary smuggled into HTML. Without this, a single
+    # stray \x00 / \x08 / \x1F in the page body produces a
+    # tool_result whose `content` is unparseable JSON, which the
+    # transcript builder then drops on the floor — the LLM sees a "no
+    # sources" web-fetch and the UI falls back to a plain wrench chip.
+    content = "".join(
+        ch for ch in content if ch >= " " or ch in ("\n", "\t", "\r")
+    )
+
     truncated = False
     if len(content) > max_chars:
         cut = content[:max_chars]
