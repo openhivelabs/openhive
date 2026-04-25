@@ -88,4 +88,33 @@ export type StreamDelta =
       cache_read_tokens?: number
       cache_write_tokens?: number
     }
+  | {
+      /** Provider-side hosted tool progress (e.g. Codex `web_search`,
+       *  Anthropic `web_search_20250305`). These are NOT engine function
+       *  calls — the provider runs them itself and folds results into
+       *  the assistant turn — but surfacing the lifecycle to the UI is
+       *  important: without it, a 30-150s search burst looks identical
+       *  to a frozen session. The engine emits a `native_tool` event
+       *  per delta so the timeline shows "🔍 web_search • searching" /
+       *  "✓ web_search • completed" instead of nothing. */
+      kind: 'native_tool'
+      tool: string
+      phase: 'in_progress' | 'searching' | 'completed' | 'failed'
+      itemId?: string
+      /** Provider-supplied query string when available (Codex puts it in
+       *  `output_item.added.item.action.query`; Anthropic in
+       *  `server_tool_use.input.query`). Without it the UI can only show
+       *  a generic chip — adding the real query lets users distinguish
+       *  e.g. "GPT-5.5 release April 2026" from "Anthropic Opus 4.7
+       *  release date" in a long timeline. */
+      query?: string
+      /** Citations the provider attached to the assistant text — Codex
+       *  emits them as `response.output_text.annotation.added` events
+       *  with `url_citation` shape. Aggregated per stream and surfaced
+       *  on the synthesized `phase: 'completed'` delta so the UI can
+       *  render one sources card per agent turn (same renderer as the
+       *  function-shaped `web-search` skill output, but without a
+       *  separate query chip). */
+      sources?: Array<{ title?: string; url: string; domain?: string }>
+    }
   | { kind: 'stop'; reason?: string }

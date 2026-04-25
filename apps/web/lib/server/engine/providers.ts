@@ -35,6 +35,12 @@ export interface StreamOpts {
    *  `previous_response_id` chaining store so concurrent sessions don't
    *  clobber each other's state. */
   sessionId?: string
+  /** Enable the provider's hosted server-side web_search builtin
+   *  (Codex `web_search`, Anthropic `web_search_20250305`). The flag is
+   *  per-call so callers that explicitly want to disable it (regression
+   *  tests, deterministic eval runs) can override the engine default.
+   *  Copilot lacks hosted-tool support and ignores this flag. */
+  nativeWebSearch?: boolean
 }
 
 export async function* stream(
@@ -48,12 +54,23 @@ export async function* stream(
     yield* streamCopilot(model, messages, tools, opts?.temperature)
     return
   }
+  // Codex + Claude support a hosted server-side web_search tool. Default
+  // to ON unless the caller explicitly opted out — failures fall back to
+  // our function-shaped `web-search` skill since both stay registered
+  // simultaneously and the model picks per-call.
+  const nativeWebSearch = opts?.nativeWebSearch ?? true
   if (providerId === 'claude-code') {
-    yield* streamClaude(model, messages, tools, opts)
+    yield* streamClaude(model, messages, tools, { ...opts, nativeWebSearch })
     return
   }
   if (providerId === 'codex') {
-    yield* streamCodex(model, messages, tools, opts?.sessionId)
+    yield* streamCodex(
+      model,
+      messages,
+      tools,
+      opts?.sessionId,
+      nativeWebSearch,
+    )
     return
   }
   throw new Error(
@@ -147,7 +164,7 @@ async function* streamClaude(
   model: string,
   messages: ChatMessage[],
   tools: ToolSpec[] | undefined,
-  opts?: StreamOpts,
+  opts?: StreamOpts & { nativeWebSearch?: boolean },
 ): AsyncIterable<StreamDelta> {
   // Content-block index → tool_use ordinal (engine keeps dense keys).
   const toolOrdinal = new Map<number, number>()
@@ -163,6 +180,7 @@ async function* streamClaude(
     tools,
     useExactTools: opts?.useExactTools,
     overrideSystem: opts?.overrideSystem,
+    nativeWebSearch: opts?.nativeWebSearch,
   })) {
     const t = (ev as { type?: string }).type
     if (t === 'message_start') {
@@ -183,6 +201,27 @@ async function* streamClaude(
           id: typeof block.id === 'string' ? block.id : undefined,
           name: typeof block.name === 'string' ? block.name : undefined,
           arguments_chunk: '',
+        }
+      } else if (block.type === 'server_tool_use') {
+        // Anthropic hosted-tool start (web_search). Surface lifecycle
+        // for the UI; no function round-trip needed.
+        yield {
+          kind: 'native_tool',
+          tool: typeof block.name === 'string' ? block.name : 'web_search',
+          phase: 'in_progress',
+          itemId: typeof block.id === 'string' ? block.id : undefined,
+        }
+      } else if (block.type === 'web_search_tool_result') {
+        // Hosted-tool completion — Anthropic delivers result content
+        // inline; we just mark the phase so the UI can show "completed".
+        yield {
+          kind: 'native_tool',
+          tool: 'web_search',
+          phase: 'completed',
+          itemId:
+            typeof (block as { tool_use_id?: unknown }).tool_use_id === 'string'
+              ? (block as { tool_use_id: string }).tool_use_id
+              : undefined,
         }
       }
     } else if (t === 'content_block_delta') {
@@ -241,17 +280,148 @@ async function* streamCodex(
   messages: ChatMessage[],
   tools: ToolSpec[] | undefined,
   sessionId: string | undefined,
+  nativeWebSearch: boolean,
 ): AsyncIterable<StreamDelta> {
   const toolOrd = new Map<string, number>()
   let nextToolIdx = 0
   let textStreamed = false
+  // Codex emits the actual search query inside `response.output_item.added`
+  // for `web_search_call` items (`item.action.query`), but the per-phase
+  // lifecycle events (`web_search_call.in_progress|searching|completed`)
+  // only carry the bare `item_id`. Buffer the query keyed by item_id so
+  // we can attach it to each native_tool delta — without this the UI
+  // chip can only show a generic placeholder and dozens of identical
+  // pills are useless to the user.
+  const nativeQueryByItemId = new Map<string, string>()
+  // url_citation annotations Codex attaches to the assistant text via
+  // `response.output_text.annotation.added`. Accumulated for the whole
+  // stream and flushed once at `response.completed` as a synthetic
+  // `native_tool` delta with `phase: 'completed'` + `sources: [...]` —
+  // the UI renders this as ONE consolidated sources card per agent turn
+  // (replaces the per-search placeholder chip the user found useless).
+  // Annotations from Codex aren't keyed back to the originating
+  // web_search_call, so per-search attribution isn't possible; one card
+  // per turn is the honest UX.
+  const nativeSources: { title?: string; url: string; domain?: string }[] = []
+  const seenSourceUrls = new Set<string>()
+  let sawNativeSearch = false
 
-  for await (const ev of codex.streamResponses({ model, messages, tools, sessionId })) {
+  for await (const ev of codex.streamResponses({
+    model,
+    messages,
+    tools,
+    sessionId,
+    nativeWebSearch,
+  })) {
     const t = (ev as { type?: string }).type
+    // Hosted-tool lifecycle. Codex emits these for `web_search` and any
+    // other provider-managed tool. We don't yield them as `tool_call`
+    // (no function-call round-trip needed) but surface them as
+    // `native_tool` deltas so the engine can log per-phase events for
+    // the UI — otherwise a 30-150s search burst is invisible.
+    if (
+      t === 'response.web_search_call.in_progress' ||
+      t === 'response.web_search_call.searching' ||
+      t === 'response.web_search_call.completed'
+    ) {
+      const phase =
+        t === 'response.web_search_call.in_progress'
+          ? 'in_progress'
+          : t === 'response.web_search_call.searching'
+            ? 'searching'
+            : 'completed'
+      const itemId = typeof (ev as { item_id?: unknown }).item_id === 'string'
+        ? (ev as { item_id: string }).item_id
+        : undefined
+      const query = itemId ? nativeQueryByItemId.get(itemId) : undefined
+      sawNativeSearch = true
+      yield { kind: 'native_tool', tool: 'web_search', phase, itemId, query }
+      continue
+    }
+    // Codex web_search splits one model "search" intent into multiple
+    // `web_search_call` items, each with a different action. Action
+    // shapes observed (probe `apps/web/scripts/probe-native-events.ts`):
+    //   - `output_item.added` → action is EMPTY (`{}`); the action is
+    //     resolved server-side after the call runs.
+    //   - `output_item.done`  → action is populated with one of:
+    //       `{ type: 'search',       query: '...' }`
+    //       `{ type: 'open_page',    url:   '...' }`
+    //       `{ type: 'find_in_page', url:   '...', pattern: '...' }`
+    // Codex does NOT emit `response.output_text.annotation.added`
+    // (verified). The `open_page` / `find_in_page` URLs ARE the
+    // citations. Capture them on `output_item.done` and also pick up
+    // queries here (the `added` handler below cannot — action is empty
+    // at that point). Dedup sources by URL.
+    if (t === 'response.output_item.done') {
+      const item = ((ev as { item?: Record<string, unknown> }).item ?? {}) as Record<string, unknown>
+      if (item.type === 'web_search_call') {
+        const action = (item.action ?? {}) as Record<string, unknown>
+        const aType = typeof action.type === 'string' ? action.type : ''
+        const url = typeof action.url === 'string' ? action.url : ''
+        if (
+          (aType === 'open_page' || aType === 'find_in_page') &&
+          url &&
+          !seenSourceUrls.has(url)
+        ) {
+          seenSourceUrls.add(url)
+          let domain: string | undefined
+          try {
+            domain = new URL(url).hostname.replace(/^www\./, '')
+          } catch {
+            /* ignore malformed urls */
+          }
+          nativeSources.push({
+            url,
+            title:
+              typeof action.title === 'string'
+                ? action.title
+                : typeof item.title === 'string'
+                  ? (item.title as string)
+                  : undefined,
+            domain,
+          })
+        }
+        if (aType === 'search') {
+          const query = typeof action.query === 'string' ? action.query : ''
+          const itemId = typeof item.id === 'string' ? item.id : ''
+          if (itemId && query) nativeQueryByItemId.set(itemId, query)
+        }
+      }
+    }
     if (t === 'response.output_text.delta') {
       const text = (ev as { delta?: unknown }).delta
       if (typeof text === 'string' && text) {
         textStreamed = true
+        // Codex's web_search results aren't always exposed as
+        // `open_page`/`find_in_page` action items — sometimes the model
+        // just runs a `search` action and embeds the citation URLs
+        // inline in the assistant text (verified via probe). Extract
+        // them so sources cards show the actual references the model
+        // used. Only scan when a web_search ran in this turn to avoid
+        // pulling URLs from regular non-search outputs (code samples,
+        // user-provided links echoed back, etc.). Dedup with the same
+        // Set used by `output_item.done` capture.
+        if (sawNativeSearch) {
+          for (const m of text.matchAll(/https?:\/\/[^\s)\]<>"'`]+/g)) {
+            let url = m[0].replace(/[.,;:!?]+$/, '')
+            // Drop trailing parens that aren't balanced inside the URL.
+            const opens = (url.match(/\(/g) ?? []).length
+            const closes = (url.match(/\)/g) ?? []).length
+            while (closes > opens && url.endsWith(')')) {
+              url = url.slice(0, -1)
+            }
+            if (!seenSourceUrls.has(url)) {
+              seenSourceUrls.add(url)
+              let domain: string | undefined
+              try {
+                domain = new URL(url).hostname.replace(/^www\./, '')
+              } catch {
+                continue
+              }
+              nativeSources.push({ url, domain })
+            }
+          }
+        }
         yield { kind: 'text', text }
       }
     } else if (t === 'response.output_item.added') {
@@ -273,6 +443,20 @@ async function* streamCodex(
           name: typeof item.name === 'string' ? item.name : undefined,
           arguments_chunk: '',
         }
+      } else if (item.type === 'web_search_call') {
+        // Capture the query before any phase event fires for this item.
+        // Codex shape (verified via probe): `item.action.query` carries the
+        // model-chosen search string. Some Codex variants instead surface
+        // it under `item.query` directly — fall back to that. Without this
+        // capture every native chip in the UI shows an identical generic
+        // placeholder.
+        const itemId = typeof item.id === 'string' ? item.id : ''
+        const action = (item.action ?? {}) as Record<string, unknown>
+        const query =
+          (typeof action.query === 'string' && action.query) ||
+          (typeof item.query === 'string' && (item.query as string)) ||
+          ''
+        if (itemId && query) nativeQueryByItemId.set(itemId, query)
       }
     } else if (t === 'response.function_call_arguments.delta') {
       const itemId = typeof (ev as { item_id?: unknown }).item_id === 'string'
@@ -314,6 +498,19 @@ async function* streamCodex(
         const recovered = extractCompletedMessageText(outs)
         if (recovered) {
           yield { kind: 'text', text: recovered }
+        }
+      }
+      // Flush accumulated url_citations as the final native_tool delta
+      // for the turn. Only emit when at least one web_search_call ran
+      // this stream — empty/unrelated streams shouldn't push a chip.
+      // The transcript builder uses this delta to render one sources
+      // card per agent turn.
+      if (sawNativeSearch) {
+        yield {
+          kind: 'native_tool',
+          tool: 'web_search',
+          phase: 'completed',
+          sources: nativeSources,
         }
       }
       yield { kind: 'stop', reason: sawTool ? 'tool_calls' : 'stop' }

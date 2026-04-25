@@ -444,16 +444,276 @@ def _try_endpoint(
     return None
 
 
+MOJEEK_URL = "https://www.mojeek.com/search"
+
+# Mojeek SERP markers — each result is wrapped in `<!--rs-->...<!--re-->`,
+# the title link uses `<a class="title" href="...">`, and the snippet is in
+# `<p class="s">`. Markup is stable enough that regex extraction is cleaner
+# than a full HTMLParser state machine here.
+_MOJEEK_BLOCK_RE = re.compile(r"<!--rs-->(.+?)<!--re-->", re.S)
+_MOJEEK_TITLE_RE = re.compile(
+    r'<a\s+class="title"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S
+)
+_MOJEEK_SNIPPET_RE = re.compile(r'<p\s+class="s"[^>]*>(.*?)</p>', re.S)
+_TAG_STRIP_RE = re.compile(r"<[^>]+>")
+
+
+def _mojeek_search(
+    query: str,
+    region: str,
+    timeout: float,
+    deadline_monotonic: float,
+) -> list[dict]:
+    """Fetch + parse Mojeek SERP. Mojeek is an independent index (own
+    crawl, no Google/Bing dependency) that — as of this rewrite — serves
+    SERP HTML to plain HTTP clients without an anomaly/captcha gate.
+    Used as the primary backend after DDG started gating every request
+    behind `anomaly.js`. No API key, no auth, no per-IP rate cliff
+    observed in testing.
+
+    `region` is best-effort: Mojeek accepts an `arc` (region) param;
+    we map a few common DDG-style codes through and otherwise omit it
+    so Mojeek returns its global default."""
+    _budget_check(deadline_monotonic)
+    user_agent = random.choice(USER_AGENTS)
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    remaining = max(0.5, _remaining_ms(deadline_monotonic) / 1000.0)
+    effective_timeout = min(timeout, remaining)
+    params: dict[str, str] = {"q": query, "fmt": "html"}
+    arc = _mojeek_region(region)
+    if arc:
+        params["arc"] = arc
+    try:
+        with httpx.Client(
+            timeout=effective_timeout,
+            follow_redirects=True,
+            headers=headers,
+        ) as client:
+            resp = client.get(MOJEEK_URL, params=params)
+    except httpx.TimeoutException as exc:
+        raise SearchError(
+            f"mojeek timeout: {exc}", status=None, reason="transport"
+        )
+    except httpx.HTTPError as exc:
+        raise SearchError(
+            f"mojeek transport error: {exc}", status=None, reason="transport"
+        )
+    if resp.status_code != 200:
+        raise SearchError(
+            f"mojeek HTTP {resp.status_code}", status=resp.status_code
+        )
+    body = resp.text
+    low = body.lower()
+    if "captcha" in low or "are you human" in low or "verify you are" in low:
+        raise SearchError("mojeek anomaly gate", status=429)
+
+    raw: list[dict] = []
+    for block in _MOJEEK_BLOCK_RE.findall(body):
+        tm = _MOJEEK_TITLE_RE.search(block)
+        if not tm:
+            continue
+        href = html.unescape(tm.group(1)).strip()
+        title = html.unescape(_TAG_STRIP_RE.sub("", tm.group(2))).strip()
+        sm = _MOJEEK_SNIPPET_RE.search(block)
+        snippet = (
+            html.unescape(_TAG_STRIP_RE.sub("", sm.group(1))).strip()
+            if sm
+            else ""
+        )
+        if not (title and href.startswith(("http://", "https://"))):
+            continue
+        raw.append(
+            {"title": title, "href": href, "snippet": snippet, "display_url": ""}
+        )
+    return raw
+
+
+YAHOO_URL = "https://search.yahoo.com/search"
+
+# Yahoo SERP markers. Each result is `<a href="REDIRECT_URL"><...><h3 class="title..."><span>TITLE</span></h3>...</a>`,
+# where REDIRECT_URL embeds the real target URL inside `/RU=<percent-encoded>/`.
+# Snippet follows in a `<p class="fc-dustygray ...">` shortly after `</a>`.
+# This is the third backend added after Mojeek (2026-04-26 IP block) and DDG
+# (2026-04-26 anomaly.js gate). Yahoo (Bing-backed but with its own anti-bot
+# layer) currently serves SERPs to plain UA without captcha — verified by
+# direct probe against the same IPs that get 403/202 from Mojeek/DDG.
+_YAHOO_RESULT_RE = re.compile(
+    r'<a[^>]+href="(https?://r\.search\.yahoo\.com/[^"]+)"[^>]*>'
+    r'.*?<h3[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>\s*<span[^>]*>(.+?)</span>\s*</h3>'
+    r'.*?</a>',
+    re.S,
+)
+_YAHOO_SNIPPET_RES = (
+    re.compile(r'<p class="[^"]*fc-dustygray[^"]*"[^>]*>(.+?)</p>', re.S),
+    re.compile(r'<p class="[^"]*lh-22[^"]*"[^>]*>(.+?)</p>', re.S),
+    re.compile(r'<p class="[^"]*"[^>]*>(.+?)</p>', re.S),
+)
+_YAHOO_RU_RE = re.compile(r"/RU=([^/]+)/")
+
+
+def _yahoo_search(
+    query: str,
+    region: str,
+    timeout: float,
+    deadline_monotonic: float,
+) -> list[dict]:
+    """Fetch + parse a Yahoo Search SERP. Yahoo's SERP wraps each result
+    in a redirect anchor `r.search.yahoo.com/_ylt=.../RU=<percent-encoded
+    target>/RK=...` containing an `<h3 class="title…">` with the title;
+    the snippet lives in a `<p class="fc-dustygray…">` immediately after
+    the closing `</a>`.
+
+    Region is best-effort via the `vc=country=` param when set; Yahoo
+    otherwise serves a global SERP that already includes major non-US
+    sources for English queries."""
+    _budget_check(deadline_monotonic)
+    user_agent = random.choice(USER_AGENTS)
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    remaining = max(0.5, _remaining_ms(deadline_monotonic) / 1000.0)
+    effective_timeout = min(timeout, remaining)
+    params: dict[str, str] = {"p": query}
+    vc = _yahoo_region(region)
+    if vc:
+        params["vc"] = vc
+
+    try:
+        with httpx.Client(
+            timeout=effective_timeout,
+            follow_redirects=True,
+            headers=headers,
+        ) as client:
+            resp = client.get(YAHOO_URL, params=params)
+    except httpx.TimeoutException as exc:
+        raise SearchError(
+            f"yahoo timeout: {exc}", status=None, reason="transport"
+        )
+    except httpx.HTTPError as exc:
+        raise SearchError(
+            f"yahoo transport error: {exc}", status=None, reason="transport"
+        )
+    if resp.status_code != 200:
+        raise SearchError(
+            f"yahoo HTTP {resp.status_code}", status=resp.status_code
+        )
+    body = resp.text
+    low = body.lower()
+    # Yahoo's anti-bot page redirects to an interstitial with these markers.
+    if (
+        "are you a robot" in low
+        or "captcha" in low
+        or "consent.yahoo.com" in low
+    ):
+        raise SearchError("yahoo anomaly gate", status=429)
+
+    raw: list[dict] = []
+    for m in _YAHOO_RESULT_RE.finditer(body):
+        href, title_html = m.group(1), m.group(2)
+        if "video.search.yahoo" in href or "images.search.yahoo" in href:
+            continue
+        title = html.unescape(_TAG_STRIP_RE.sub("", title_html)).strip()
+        rm = _YAHOO_RU_RE.search(href)
+        real = unquote(rm.group(1)) if rm else href
+        if not real.startswith(("http://", "https://")):
+            continue
+        # Drop Yahoo's own properties — they're internal nav, not results.
+        if real.startswith(("https://www.yahoo.com", "https://yahoo.com")):
+            continue
+        end = m.end()
+        nearby = body[end : end + 2000]
+        snippet = ""
+        for sre in _YAHOO_SNIPPET_RES:
+            sm = sre.search(nearby)
+            if sm:
+                snippet = html.unescape(
+                    _TAG_STRIP_RE.sub("", sm.group(1))
+                ).strip()
+                if snippet:
+                    break
+        if not title:
+            continue
+        raw.append(
+            {
+                "title": title,
+                "href": real,
+                "snippet": snippet,
+                "display_url": "",
+            }
+        )
+    return raw
+
+
+def _yahoo_region(region: str) -> str:
+    """Map a DDG-style region code to Yahoo's `vc=country=XX` value.
+    Conservative: only emit when we have a confident mapping; otherwise
+    return empty so Yahoo serves its global default."""
+    r = (region or "").lower().strip()
+    if r in ("", "wt-wt"):
+        return ""
+    if r.startswith("kr"):
+        return "country=KR"
+    if r.startswith("us"):
+        return "country=US"
+    if r.startswith("uk") or r.startswith("gb"):
+        return "country=GB"
+    if r.startswith("jp"):
+        return "country=JP"
+    if r.startswith("de"):
+        return "country=DE"
+    if r.startswith("fr"):
+        return "country=FR"
+    return ""
+
+
+def _mojeek_region(region: str) -> str:
+    """Map a DDG-style region code (`wt-wt`, `kr-kr`, `us-en`, ...) to
+    Mojeek's `arc` param. Mojeek uses ISO country codes; only a small
+    map is needed for the regions we actually expose."""
+    r = (region or "").lower().strip()
+    if r in ("", "wt-wt"):
+        return ""
+    if r.startswith("kr"):
+        return "kr"
+    if r.startswith("us"):
+        return "us"
+    if r.startswith("uk") or r.startswith("gb"):
+        return "gb"
+    if r.startswith("jp"):
+        return "jp"
+    if r.startswith("de"):
+        return "de"
+    if r.startswith("fr"):
+        return "fr"
+    return ""
+
+
 def search(
     query: str,
     count: int = 10,
     region: str = "wt-wt",
     timeout: float = DEFAULT_TIMEOUT,
-) -> list[dict]:
-    """Return up to `count` results for `query`. Tries the lite endpoint
-    with retry first; on repeated 202 falls back to the legacy /html/
-    endpoint once per UA in the rotation. Non-retriable errors (4xx/5xx
-    other than 202) propagate immediately to avoid hammering DDG."""
+) -> tuple[list[dict], str]:
+    """Return `(results, source_label)` for `query`, where `source_label`
+    is one of `yahoo`, `mojeek`, `duckduckgo-lite`, or `duckduckgo-html`.
+
+    Backend order: Yahoo → Mojeek → DDG lite → DDG `/html/`. Yahoo is the
+    primary because, as of 2026-04-26, it serves SERPs to plain HTTP
+    clients without a captcha gate from IPs that Mojeek (403) and DDG
+    (anomaly.js) actively block. Mojeek and DDG remain as fallbacks for
+    when Yahoo eventually gates us too — diversifying the upstream set is
+    cheap insurance against any one provider flipping the switch.
+
+    The single wall-clock budget covers the entire chain — a slow upstream
+    attempt eats into the next fallback window, by design (we'd rather
+    fail fast than blow the engine's tool-call timeout). Non-retriable
+    HTTP errors short-circuit the chain to avoid hammering."""
     query = (query or "").strip()
     if not query:
         raise SearchError("query is empty")
@@ -464,27 +724,69 @@ def search(
     # can blow past the outer deadline.
     deadline_monotonic = time.monotonic() + (_BUDGET_MS / 1000.0)
 
-    # Cross-process throttle so concurrent sub-agent calls don't burst DDG.
-    # See `_enforce_rate_limit` for the lock-based mechanism.
+    # Cross-process throttle so concurrent sub-agent calls don't burst
+    # the upstream search engine. Same lock used regardless of backend
+    # since Mojeek is also a small-shop service that deserves spacing.
     _enforce_rate_limit(deadline_monotonic)
 
-    raw = _try_endpoint(
-        LITE_URL, query, region, timeout, _LiteResultParser, deadline_monotonic
-    )
+    raw: list[dict] | None = None
+    source = "yahoo"
+    primary_err: SearchError | None = None
+    try:
+        raw = _yahoo_search(query, region, timeout, deadline_monotonic)
+        if not raw:
+            # 200 but zero parsed results — markup drift or genuinely no
+            # hits. Treat as soft fail and try the next backend.
+            raw = None
+    except SearchError as exc:
+        primary_err = exc
+        raw = None
+
     if raw is None:
-        # Budget check before paying for an endpoint switch.
         _budget_check(deadline_monotonic)
-        # Lite kept 202'ing — try /html/ once with a single attempt.
-        raw = _try_endpoint(
-            HTML_URL, query, region, timeout, _HtmlResultParser, deadline_monotonic
-        )
+        try:
+            mojeek_raw = _mojeek_search(query, region, timeout, deadline_monotonic)
+            if mojeek_raw:
+                raw = mojeek_raw
+                source = "mojeek"
+        except SearchError as exc:
+            # Keep the more informative error to surface if every backend bounces.
+            if primary_err is None or primary_err.status in (None, 429):
+                primary_err = exc
+
     if raw is None:
-        raise SearchError("duckduckgo returned HTTP 202", status=202)
+        _budget_check(deadline_monotonic)
+        ddg_raw = _try_endpoint(
+            LITE_URL, query, region, timeout, _LiteResultParser, deadline_monotonic
+        )
+        if ddg_raw is not None:
+            raw = ddg_raw
+            source = "duckduckgo-lite"
+        else:
+            _budget_check(deadline_monotonic)
+            ddg_raw = _try_endpoint(
+                HTML_URL,
+                query,
+                region,
+                timeout,
+                _HtmlResultParser,
+                deadline_monotonic,
+            )
+            if ddg_raw is not None:
+                raw = ddg_raw
+                source = "duckduckgo-html"
+
+    if raw is None:
+        # Every backend bounced. Surface the most informative error.
+        if primary_err is not None and primary_err.status not in (None, 429):
+            raise primary_err
+        raise SearchError("all search backends returned 202/429/403", status=202)
 
     out: list[dict] = []
     for rank, r in enumerate(raw[:count], start=1):
-        url = _unwrap_ddg_redirect(r["href"])
-        # DDG sometimes injects internal ad links / empty hrefs — skip.
+        href = r["href"]
+        # DDG redirect unwrap is a no-op on Mojeek hrefs (already direct).
+        url = _unwrap_ddg_redirect(href)
         if not url.startswith(("http://", "https://")):
             continue
         out.append(
@@ -499,4 +801,4 @@ def search(
     # Re-rank after any skipped items so ranks are contiguous.
     for i, item in enumerate(out, start=1):
         item["rank"] = i
-    return out
+    return out, source

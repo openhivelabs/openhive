@@ -81,6 +81,7 @@ export interface AbandonedReason {
     | 'no_terminal_event'
     | 'provider_silent_exit'
     | 'skill_subprocess_hung'
+    | 'cancelled_by_user'
     | 'unknown'
   last_event_seq: number | null
   last_event_kind: string | null
@@ -1055,6 +1056,62 @@ export function buildTranscript(
         depth: ev.depth,
         sibling_group_id: siblingGroupId,
         sibling_index: siblingIndex,
+      })
+    } else if (ev.kind === 'native_tool') {
+      // Provider-side hosted tool (Codex `web_search`, Anthropic
+      // `web_search_20250305`). Surface only the first phase per
+      // tool-instance so the chat doesn't fill with three rows per
+      // search (in_progress + searching + completed). Render as a
+      // `web-search` tool_call entry — the existing UI chip already
+      // knows how to render that shape, and semantically it IS a web
+      // search; the only difference is the result set lives in the
+      // assistant text instead of a transcript-attached `sources`
+      // array. Without this, a 30-150s native search burst is
+      // invisible in the timeline and the run reads as "frozen".
+      // Provider-side native_tool flushes a `phase: 'completed'` event
+      // with a populated `sources` array at end-of-stream — that's the
+      // event we render. Per-search lifecycle events (in_progress /
+      // searching / per-call completed without sources) are skipped:
+      // user wants ONE consolidated sources card per turn, not noisy
+      // placeholder chips. Sibling stamps from runParallelDelegation
+      // are inherited so `nestUnderDelegates` attaches the card under
+      // the correct Member sibling.
+      const phase = String(ev.data?.phase ?? '')
+      const sourcesRaw = ev.data?.sources
+      if (phase !== 'completed' || !Array.isArray(sourcesRaw) || sourcesRaw.length === 0) {
+        continue
+      }
+      const sgid =
+        typeof ev.data?.sibling_group_id === 'string'
+          ? (ev.data.sibling_group_id as string)
+          : undefined
+      const sidx =
+        typeof ev.data?.sibling_index === 'number'
+          ? (ev.data.sibling_index as number)
+          : undefined
+      const cleanSources = (sourcesRaw as unknown[]).flatMap((s) => {
+        if (!s || typeof s !== 'object') return []
+        const o = s as Record<string, unknown>
+        const url = typeof o.url === 'string' ? o.url : ''
+        if (!url.startsWith('http')) return []
+        return [{
+          title: typeof o.title === 'string' ? o.title : url,
+          url,
+          domain: typeof o.domain === 'string' ? o.domain : '',
+        }]
+      })
+      if (cleanSources.length === 0) continue
+      lines.push({
+        kind: 'tool_call',
+        ts: ev.ts,
+        node_id: ev.node_id,
+        tool: 'web-search',
+        args: { query: '' },
+        sources: cleanSources,
+        depth: ev.depth,
+        sibling_group_id: sgid,
+        sibling_index: sidx,
+        native: true,
       })
     } else if (ev.kind === 'node_finished' && ev.depth === 0) {
       // Only Lead (depth=0) turns surface as assistant messages in the chat.

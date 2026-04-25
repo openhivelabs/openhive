@@ -262,6 +262,16 @@ export interface StreamOpts {
    *  concurrent sessions. Without it, parallel chats would share one
    *  global slot and clobber each other's reasoning anchors. */
   sessionId?: string
+  /** Expose Codex's server-side `web_search` builtin tool. When true,
+   *  appends `{type: "web_search"}` to the Responses API tools array so
+   *  the model can run searches on the ChatGPT backend's own infra
+   *  (no scraping, no IP block, no captcha). The model integrates
+   *  results directly into its output text — no extra round-trip on
+   *  our side. The matching `response.web_search_call.*` SSE events
+   *  are observable but not surfaced as engine tool_calls (they're
+   *  hosted-side, not function calls). Verified accepted by Codex
+   *  backend 2026-04-26 via `apps/web/scripts/probe-native-web-search.ts`. */
+  nativeWebSearch?: boolean
 }
 
 const cachingStrategy = new CodexCachingStrategy()
@@ -378,7 +388,16 @@ export async function* streamResponses(
   const providerId = opts.providerId ?? 'codex'
   const session = await getSession(providerId)
   const { system, items } = toResponsesInput(opts.messages)
-  const respTools = toolsToResponses(opts.tools)
+  let respTools = toolsToResponses(opts.tools)
+  // Inject Codex's hosted `web_search` builtin alongside our function
+  // tools. The model picks: native for typical search needs (faster,
+  // captcha-immune, runs on the provider's infra), our `web-search`
+  // function tool as a fallback when native errors out or for queries
+  // outside its policy. Position matters less than presence — Codex
+  // accepts builtin and function tools in any order.
+  if (opts.nativeWebSearch) {
+    respTools = [...(respTools ?? []), { type: 'web_search' }]
+  }
 
   const instructions =
     (system ?? '').trim() ||

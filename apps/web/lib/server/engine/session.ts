@@ -1296,7 +1296,7 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
   // Track the last delta kind so a provider mid-stream throw can report what
   // was happening when the iterator died. See Fix A — provider stream
   // exceptions surface as terminal events.
-  let lastDeltaKind: 'text' | 'tool_call' | 'usage' | 'stop' | null = null
+  let lastDeltaKind: 'text' | 'tool_call' | 'usage' | 'stop' | 'native_tool' | null = null
   try {
   for await (const delta of stream(node.provider_id, node.model, messages, openaiTools, streamOpts)) {
     if (delta.kind === 'text') {
@@ -1305,6 +1305,25 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       for (const chunk of emitStripped(delta.text)) {
         yield makeEvent('token', sessionId, { text: chunk }, { depth, node_id: node.id })
       }
+    } else if (delta.kind === 'native_tool') {
+      // Provider-side hosted tool lifecycle (Codex web_search, Anthropic
+      // server_tool_use). Surfaced to the UI as a discrete event so the
+      // user sees "🔍 web_search • searching" instead of a frozen turn.
+      // No round-trip needed — the provider folds results into the
+      // assistant text directly.
+      lastDeltaKind = 'native_tool'
+      yield makeEvent(
+        'native_tool',
+        sessionId,
+        {
+          tool: delta.tool,
+          phase: delta.phase,
+          item_id: delta.itemId ?? null,
+          query: delta.query ?? null,
+          sources: delta.sources ?? null,
+        },
+        { depth, node_id: node.id },
+      )
     } else if (delta.kind === 'tool_call') {
       lastDeltaKind = 'tool_call'
       let p = pending.get(delta.index)
@@ -1572,8 +1591,9 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
               if (subEv.kind === 'delegation_closed') {
                 const body = (subEv.data.result as string | undefined) ?? ''
                 const paths = subEv.data.artifact_paths as string[] | undefined
-                content = appendArtifactBlock(body, paths, sessionId)
+                const raw = appendArtifactBlock(body, paths, sessionId)
                 isError = !!subEv.data.error
+                content = isError ? raw : wrapDelegationResultForParent(raw)
               }
               yield subEv
             }
@@ -1589,8 +1609,9 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
               if (subEv.kind === 'delegation_closed' && subEv.data.group_final) {
                 const body = (subEv.data.result as string | undefined) ?? ''
                 const paths = subEv.data.artifact_paths as string[] | undefined
-                content = appendArtifactBlock(body, paths, sessionId)
+                const raw = appendArtifactBlock(body, paths, sessionId)
                 isError = !!subEv.data.error
+                content = isError ? raw : wrapDelegationResultForParent(raw)
               }
               yield subEv
             }
@@ -1835,6 +1856,19 @@ async function* streamTurnFork(opts: StreamTurnForkOpts): AsyncGenerator<Event> 
     if (delta.kind === 'text') {
       textBuf.push(delta.text)
       yield makeEvent('token', sessionId, { text: delta.text }, { depth, node_id: node.id })
+    } else if (delta.kind === 'native_tool') {
+      yield makeEvent(
+        'native_tool',
+        sessionId,
+        {
+          tool: delta.tool,
+          phase: delta.phase,
+          item_id: delta.itemId ?? null,
+          query: delta.query ?? null,
+          sources: delta.sources ?? null,
+        },
+        { depth, node_id: node.id },
+      )
     } else if (delta.kind === 'tool_call') {
       sawToolCall = true
     } else if (delta.kind === 'usage') {
@@ -3238,8 +3272,66 @@ function todayBlock(now: Date = new Date()): string {
     `about "latest" / "recent" / "current" content, anchor to ${year} — ` +
     `do NOT default to your training-cutoff year. If a query needs a year ` +
     `token, prefer ${year}; include earlier years only when you specifically ` +
-    `need historical context.\n`
+    `need historical context.\n\n` +
+    `Product / model version numbers from your training memory are ALSO ` +
+    `stale — newer versions almost certainly exist. When asked about the ` +
+    `"latest" version of a product (e.g. a model family, an app, a library), ` +
+    `do NOT hard-code the last version you remember into the search query. ` +
+    `First search with the product family name + "latest" / "newest" + ${year} ` +
+    `and NO version number; read the actual results to learn the current ` +
+    `version, then narrow with follow-up queries. Treat any version number ` +
+    `you "remember" as a guess that needs verification, not as a fact.\n\n` +
+    `# Search budget\n` +
+    `Web search (function \`web-search\` skill OR provider-side \`web_search\` ` +
+    `builtin) costs real money and time. Soft cap: AT MOST 10 web search ` +
+    `calls per turn for any single agent. Most well-scoped tasks need 3-6. ` +
+    `If you find yourself drafting a 7th query, STOP and ask: have I ` +
+    `already seen this fact in earlier results? If yes, synthesize from ` +
+    `what you have instead. Do not re-search the same topic from a slightly ` +
+    `different angle to "double-check" — that's how budgets blow up. The ` +
+    `cap is a discipline target, not a quota to fill.\n`
   )
+}
+
+/** Wrap a delegation result with synthesis-mode guidance before handing
+ *  it back to the parent as a tool_result. Without this, parents — and
+ *  especially Lead/Researcher roles after a parallel fan-out — reflexively
+ *  re-issue `web-search` for the SAME topics their subagents just covered.
+ *  The pattern observed in session 062d06b3 (2026-04-26): 3 Members ran
+ *  10 web-searches between them; Researcher then issued 3 duplicate
+ *  searches and Lead another 3 — every one of the parent searches hit
+ *  `cap reached` and produced nothing, while burning tool rounds and
+ *  cluttering the transcript. Root cause is purely behavioral: the parent's
+ *  default reflex is "verify by re-searching," and nothing in the prompt
+ *  tells it to stop. This guard is the cheapest fix — one note prepended
+ *  to every successful delegation result, no per-team config required.
+ *
+ *  Skipped when the delegation errored: in that case the parent needs raw
+ *  error text + freedom to recover (which may include a fresh search),
+ *  not a synthesis instruction. */
+function wrapDelegationResultForParent(body: string): string {
+  if (!body.trim()) return body
+  const note =
+    `[delegation result — synthesis-only mode]\n` +
+    `The findings below come from a subagent (or parallel fan-out of ` +
+    `subagents) that ALREADY ran web research for this task. Your job ` +
+    `from THIS point forward is synthesis ONLY — combine the subagent ` +
+    `outputs into your final answer.\n\n` +
+    `HARD RULES:\n` +
+    `1. Do NOT call any web search tool — neither the function-shaped ` +
+    `\`web-search\` skill NOR the provider-side \`web_search\` builtin. ` +
+    `The subagents already did this work; running the same searches at ` +
+    `your level is pure duplication.\n` +
+    `2. Do NOT re-delegate the same topic to a subagent under a slightly ` +
+    `different framing ("now do OpenAI separately", "now verify Gemini"). ` +
+    `If the previous delegation covered a scope, treat it as covered.\n` +
+    `3. Only call \`web-fetch\` on a SPECIFIC URL the subagent surfaced ` +
+    `if you need deeper detail from that exact page.\n\n` +
+    `EXCEPTION (rare): if the subagent explicitly flagged a gap it could ` +
+    `not cover (missing entity, missing time window, topic outside its ` +
+    `original scope) — and ONLY then — a single targeted follow-up search ` +
+    `is permitted. Default is "do not search again."\n\n---\n\n`
+  return note + body
 }
 
 /** One-line "when to use" hint for the system-prompt skill enumeration.

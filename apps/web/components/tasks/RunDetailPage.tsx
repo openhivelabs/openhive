@@ -1233,6 +1233,7 @@ export function RunDetailPage() {
             case 'node_started':
             case 'token':
             case 'tool_call':
+            case 'native_tool':
               setAiActive(true)
               break
             case 'turn_finished':

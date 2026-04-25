@@ -1,6 +1,6 @@
 ---
 name: web-search
-description: If this tool returns `ok:false` with `error_code:'search_rate_limited'` or `'search_unavailable'`, follow the `guidance` field — DO NOT continue research from training data alone. Search the web for candidate URLs+titles+snippets. Use BEFORE `web-fetch` when you don't know the URL. Anchor year tokens to `# Today`, not your training cutoff. Free DuckDuckGo HTML; default 10 results.
+description: FALLBACK web search via free SERP scraping. If your provider exposes a native server-side `web_search` tool (Codex / Claude do), PREFER THAT — it has no captcha, no IP-block risk, and integrates results into the assistant turn directly. Call this `web-search` skill only when (a) your provider has no native web_search (Copilot), or (b) the native one just errored / hit a rate limit. If this tool returns `ok:false` with `error_code:'search_rate_limited'` or `'search_unavailable'`, follow the `guidance` field — DO NOT continue research from training data alone. Use BEFORE `web-fetch` when you don't know the URL. Anchor year tokens to `# Today`, not your training cutoff. Yahoo primary backend, Mojeek + DuckDuckGo fallbacks; no API key; default 10 results.
 triggers:
   keywords: [search, find, look up, look for, query, lookup]
 runtime: python
@@ -10,7 +10,7 @@ parameters:
   properties:
     query:
       type: string
-      description: "Short keyword query, 4–8 words. Specific nouns + a year if recency matters. Do NOT stuff synonyms, quotes, OR operators, or site: filters — those make matching WORSE on DDG. Need a different angle? Make a SEPARATE web-search call. Good: 'Gemma 4 27B VRAM requirements 2025'. Bad: '\"Gemma 4\" 27B OR 26B \"VRAM\" site:ai.google.dev hardware specs 2026 official'."
+      description: "Short keyword query, 4–8 words. Specific nouns + a year if recency matters. Do NOT stuff synonyms, quotes, OR operators, or site: filters — those make matching WORSE on DDG. Need a different angle? Make a SEPARATE web-search call. Good: 'Gemma 4 27B VRAM requirements 2025'. Bad: '\"Gemma 4\" 27B OR 26B \"VRAM\" site:ai.google.dev hardware specs 2026 official'. ALSO: do NOT hard-code product/model version numbers you 'remember' (e.g. 'Gemini 2.5 Pro') into a 'latest version' query — your memory is stale. First search the product family + 'latest' + the year from `# Today` with NO version number, read the actual results, then narrow."
     count:
       type: integer
       description: "How many results to return. Default 10, max 20. Keep at 10 unless you have a reason — more ≠ better when the top 3 are usually the answer."
@@ -54,7 +54,8 @@ A good query is **4–8 words a human would actually type in the search box**. D
 - `"financials" "2023" "audit report" "official" company-name` ← quote bombing
 
 **Principles:**
-- **Specific nouns + numbers.** Keep model names, years, product codes; drop filler adverbs like "official" or "latest" — DDG already biases to fresh results.
+- **Specific nouns + numbers.** Keep model names, years, product codes; drop filler adverbs like "official" or "latest" — DDG already biases to fresh results. **Exception:** when you're asking *which* version is current, see the version-number rule below.
+- **Don't anchor product version numbers to memory.** When the question is "what's the latest X", do NOT bake the last version you remember into the query — it's stale by definition. Search the product family name + the year from `# Today`, with NO version number (e.g. `Google Gemini latest model 2026`, not `Google Gemini 2.5 Pro 2026`). Read the SERP titles/snippets to learn the *actual* current version, then issue a follow-up query that narrows on that real version. Same rule for app releases, libraries, hardware revisions — any "latest version" question. Treat remembered version numbers as guesses to verify, never as facts to filter on.
 - **Year only once.** No "2025 latest newest 2025"-style duplication.
 - **One angle per query.** If you need two angles, make two calls. The 5-per-turn cap is plenty.
 - **Match language to source.** Want Korean sources? Korean query + `region: 'kr-kr'`. Don't mix English and Korean tokens in one query.
@@ -70,7 +71,7 @@ On success, one JSON line on stdout:
   "query": "…",
   "count_requested": 10,
   "count_returned": 10,
-  "source": "duckduckgo-html",
+  "source": "yahoo",
   "results": [
     { "rank": 1, "title": "…", "url": "https://…", "domain": "example.com", "snippet": "…" }
   ]
@@ -93,8 +94,9 @@ On failure:
 
 ## Limits & caveats
 
-- **DuckDuckGo lite endpoint.** No API key, no billing. The trade-off for free is aggressive anti-scraping — heavy bursts get HTTP 202 challenges; the skill retries with backoff but a flagged IP can stay locked for minutes.
-- **Static HTML parsing.** No JS rendering. If DDG changes their markup the parser may briefly miss results — surfaced as `{ok: true, count_returned: 0, warning: "no results parsed — try a different query or region"}`.
+- **Yahoo primary, Mojeek + DuckDuckGo fallbacks.** No API key, no billing. The chain runs Yahoo → Mojeek → DDG `lite` → DDG `/html/`, stopping on the first success. Yahoo is primary because (as of 2026-04-26) it serves SERP HTML to plain HTTP clients without a captcha gate from IPs that DDG (anomaly.js) and Mojeek (HTTP 403) actively block. Diversifying upstreams is cheap insurance against any one provider flipping the switch — when Yahoo eventually gates us too, the next backend in the chain takes over silently. The `source` field on success tells you which one answered.
+- **Index coverage varies by backend.** Yahoo (Bing-backed) covers the major English-language web well, including breaking news. Mojeek and DDG have smaller, independent indexes that may miss long-tail or niche regional content. If a query returns `count_returned: 0`, reformulate (drop year, broaden nouns, change region) rather than assuming the topic doesn't exist.
+- **Static HTML parsing.** No JS rendering. If Mojeek (or the DDG fallback) changes their markup the parser may briefly miss results — surfaced as `{ok: true, count_returned: 0, warning: "no results parsed — try a different query or region"}`.
 - **Per-turn cap.** Engine caps `web-search` at **5 calls per turn** (`team.limits.max_web_search_per_turn`). On the 6th the skill returns `{ok: false, error: "cap reached"}` — stop looping and answer with what you have.
 - **No cache.** Each call re-fetches; SERPs go stale faster than page bodies, so we don't cache them.
 - **One query per call.** Need parallel angles? Call `web-search` multiple times (within the cap) instead of stuffing operators into one query.

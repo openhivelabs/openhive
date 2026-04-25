@@ -32,6 +32,11 @@ const ANTHROPIC_BETA = [
   'fast-mode-2026-02-01',
   'redact-thinking-2026-02-12',
   'token-efficient-tools-2026-03-28',
+  // Enable Anthropic's hosted server-side web search tool. Harmless when
+  // no `web_search_20250305` tool is attached to a request — it only
+  // activates when the agent opts in via `nativeWebSearch`. See
+  // `apps/web/scripts/probe-native-web-search.ts` for the live probe.
+  'web-search-2025-03-05',
 ].join(',')
 
 const ANTHROPIC_HEADERS: Record<string, string> = {
@@ -254,6 +259,14 @@ export interface StreamOpts {
    *  Any `role: 'system'` messages are stripped before splitting so they
    *  cannot double-inject. */
   overrideSystem?: string
+  /** Expose Anthropic's server-side `web_search_20250305` builtin tool.
+   *  When true, appends a hosted web_search tool (name=`web_search`,
+   *  max_uses=5) to the Messages API request. The model integrates
+   *  results directly into its assistant turn (no extra round-trip on
+   *  our side). When this errors out (rate-limited, scope blocked,
+   *  etc.) the model can still call our function-shaped `web-search`
+   *  skill as a fallback. */
+  nativeWebSearch?: boolean
 }
 
 export async function* streamMessages(
@@ -278,6 +291,22 @@ export async function* streamMessages(
     maxTokens: opts.maxTokens ?? 4096,
     useExactTools: opts.useExactTools,
   })
+
+  // Inject Anthropic's hosted `web_search_20250305` builtin alongside the
+  // function-shaped tools the caching strategy already mapped. Must run
+  // after the strategy because the strategy iterates `req.tools` (OpenAI
+  // shape) — the hosted tool has a different shape and isn't part of the
+  // engine's ToolSpec set. `max_uses` caps the model at 5 searches per
+  // turn (cheap insurance; Anthropic also enforces account-level limits).
+  if (opts.nativeWebSearch) {
+    const list = (payload as { tools?: unknown[] }).tools ?? []
+    list.push({
+      type: 'web_search_20250305',
+      name: 'web_search',
+      max_uses: 5,
+    })
+    ;(payload as { tools?: unknown[] }).tools = list
+  }
 
   const resp = await fetch(MESSAGES_URL, {
     method: 'POST',
