@@ -18,12 +18,33 @@ export interface MarketEntry {
   /** DDL the panel would run in blank form. Surfaced so the client can
    *  preview what connecting vs keeping separate would do. */
   setup_sql?: string
+  /** Static thumbnail spec for the Frame Market modal. Renderer-agnostic —
+   *  just describes what shape to draw with what dummy values. Lets new
+   *  panels ship with a preview without any app code change. */
+  preview?: PanelPreview
 }
 
 export interface PanelSize {
   colSpan: 1 | 2 | 3 | 4
   rowSpan: 1 | 2 | 3 | 4
 }
+
+export type PanelPreview =
+  | {
+      kind: 'line'
+      data: number[]
+      subtitle?: string
+      /** When set, LineChartPreview shows a right-aligned tab strip and tails
+       *  the data array to the chosen N. Mirrors the live panel UX. */
+      time_ranges?: number[]
+      default_range?: number
+    }
+  | { kind: 'area'; data: number[]; subtitle?: string }
+  | { kind: 'bar'; bars: { label: string; value: number }[]; subtitle?: string; format?: 'currency'; orientation?: 'vertical' | 'horizontal' }
+  | { kind: 'pie'; slices: { label: string; value: number }[]; subtitle?: string }
+  | { kind: 'kpi'; value: string; hint: string; tone?: 'positive' | 'negative'; subtitle?: string }
+  | { kind: 'kanban'; columns: { label: string; cards: string[] }[]; subtitle?: string }
+  | { kind: 'table'; columns: string[]; rows: string[][]; subtitle?: string }
 
 export interface MarketIndex {
   companies: MarketEntry[]

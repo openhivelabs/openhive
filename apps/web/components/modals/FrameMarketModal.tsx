@@ -13,6 +13,7 @@ import {
   Pulse,
   Robot,
   SquaresFour,
+  Storefront,
   Table as TableIcon,
   Users as UsersIcon,
   Warning,
@@ -27,6 +28,7 @@ import {
   type MarketEntry,
   type MarketIndex,
   type MarketType,
+  type PanelPreview,
   type PanelSize,
   aiBindPreview,
   applyPanelInstall,
@@ -35,12 +37,18 @@ import {
 } from '@/lib/api/market'
 import { PanelShape } from '@/components/dashboard/BoundPanel'
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Line,
   LineChart,
+  Pie,
+  PieChart,
   ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
 } from 'recharts'
@@ -404,7 +412,7 @@ export function FrameMarketModal({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-neutral-200 dark:border-neutral-800">
           <div className="flex items-center gap-2">
-            <Package className="w-4 h-4 text-neutral-500" />
+            <Storefront className="w-4 h-4 text-neutral-500" />
             <h2 className="text-base font-semibold">Frame Market</h2>
           </div>
           <button
@@ -572,7 +580,7 @@ export function FrameMarketModal({
             <div className="mb-4 rounded-md border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 px-3 py-2.5 text-[13px] text-amber-900 dark:text-amber-100 flex items-start gap-2">
               <CloudSlash className="w-4 h-4 mt-0.5 shrink-0" />
               <div className="space-y-1">
-                <div className="font-medium">Market unreachable</div>
+                <div className="font-medium">Catalog load failed</div>
                 {loadError && <div className="font-mono text-[12px]">{loadError}</div>}
                 {(index?.warnings ?? []).map((w) => (
                   <div key={w} className="font-mono text-[12px]">
@@ -580,8 +588,8 @@ export function FrameMarketModal({
                   </div>
                 ))}
                 <div className="text-amber-800 dark:text-amber-200">
-                  Set <code>OPENHIVE_MARKET_BASE_URL</code> to point at a
-                  different GitHub raw URL if you host your own catalog.
+                  Check that <code>packages/frame-market/</code> exists and
+                  contains a valid <code>index.json</code>.
                 </div>
               </div>
             </div>
@@ -642,10 +650,7 @@ export function FrameMarketModal({
             !selectedEntry && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {entries.map((entry) => {
-                const preview =
-                  entry.type === 'panel'
-                    ? PANEL_PREVIEWS[entry.id] ?? categoryFallback(entry.category)
-                    : null
+                const preview = entry.type === 'panel' ? entry.preview ?? null : null
                 const meta =
                   entry.type === 'team' && entry.agent_count !== undefined
                     ? `${entry.agent_count} agent${entry.agent_count === 1 ? '' : 's'}`
@@ -684,10 +689,10 @@ export function FrameMarketModal({
                     {preview && (
                       <div className="shrink-0 w-[180px] hidden md:flex flex-col rounded-md border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-950 overflow-hidden">
                         <div className="shrink-0 px-2.5 py-1 border-b border-neutral-200 dark:border-neutral-700 text-[11.5px] font-medium text-neutral-700 dark:text-neutral-200 truncate">
-                          {preview.title}
+                          {preview.subtitle ?? entry.name}
                         </div>
                         <div className="flex-1 min-h-[120px] bg-white dark:bg-neutral-900">
-                          {preview.render()}
+                          {renderPreview(preview, true)}
                         </div>
                       </div>
                     )}
@@ -1063,7 +1068,7 @@ function PreviewCard({
 }) {
   const UNIT = 110
   const GAP = 12
-  const preview = PANEL_PREVIEWS[entry.id] ?? categoryFallback(entry.category)
+  const preview = entry.preview
   const live = aiPreview && aiPreview.data != null
   return (
     <div
@@ -1084,7 +1089,7 @@ function PreviewCard({
             props={aiPreview.panel_props ?? undefined}
           />
         ) : preview ? (
-          preview.render()
+          renderPreview(preview)
         ) : (
           <div className="h-full flex items-center justify-center text-[12px] text-neutral-400">
             —
@@ -1161,12 +1166,11 @@ function PanelPreview({
   aiPreview?: AiBindPreview | null
 }) {
   const t = useT()
-  const preview = PANEL_PREVIEWS[entry.id] ?? categoryFallback(entry.category)
+  const preview = entry.preview
   const sizes: PanelSize[] =
     entry.sizes && entry.sizes.length > 0 ? entry.sizes : [DEFAULT_PREVIEW_SIZE]
   const [sizeIndex, setSizeIndex] = useState(0)
   if (!preview && !aiPreview) return null
-  // Entries can change (user navigates between cards) — clamp index.
   const safeIndex = sizeIndex % sizes.length
   const size = sizes[safeIndex]!
   const cardWidth = size.colSpan * PREVIEW_UNIT_W
@@ -1215,7 +1219,7 @@ function PanelPreview({
                   data={aiPreview.data}
                 />
               ) : preview ? (
-                preview.render()
+                renderPreview(preview)
               ) : null}
             </div>
           </div>
@@ -1235,124 +1239,29 @@ function PanelPreview({
   )
 }
 
-type PreviewDef = {
-  title: string
-  subtitle?: string
-  render: () => React.ReactElement
-}
-
-const PANEL_PREVIEWS: Record<string, PreviewDef> = {
-  'demo-total-count': {
-    title: 'Total Count',
-    subtitle: 'rows',
-    render: () => <KpiPreview value="128" hint="All records" />,
-  },
-  'demo-sum-metric': {
-    title: 'Sum',
-    subtitle: 'total value',
-    render: () => <KpiPreview value="$42,850" hint="Total value" />,
-  },
-  'demo-period-change': {
-    title: 'Week over Week',
-    subtitle: '% change in volume',
-    render: () => (
-      <KpiPreview value="+12.4%" hint="WoW change (count)" tone="positive" />
-    ),
-  },
-  'demo-trend-line': {
-    title: 'Daily Volume — 30 Days',
-    render: () => (
-      <LineChartPreview
-        data={[
-          4, 6, 5, 7, 8, 6, 9, 11, 9, 12, 14, 11, 13, 15, 14, 16, 18, 17, 19,
-          17, 20, 22, 19, 21, 23, 24, 22, 25, 27, 26,
-        ]}
-      />
-    ),
-  },
-  'demo-bar-by-category': {
-    title: 'Count by Stage',
-    render: () => (
-      <BarChartPreview
-        bars={[
-          { label: 'Prospect', value: 42 },
-          { label: 'Qualified', value: 28 },
-          { label: 'Proposal', value: 17 },
-          { label: 'Won', value: 9 },
-          { label: 'Lost', value: 6 },
-        ]}
-      />
-    ),
-  },
-  'demo-stacked-composition': {
-    title: 'Value by Stage',
-    render: () => (
-      <BarChartPreview
-        format="currency"
-        bars={[
-          { label: 'Prospect', value: 15400 },
-          { label: 'Qualified', value: 22100 },
-          { label: 'Proposal', value: 18600 },
-          { label: 'Won', value: 8200 },
-          { label: 'Lost', value: 3900 },
-        ]}
-      />
-    ),
-  },
-}
-
-function categoryFallback(category: string | undefined): PreviewDef | null {
-  if (category === 'kpi') {
-    return {
-      title: 'KPI',
-      render: () => <KpiPreview value="128" hint="Sample metric" />,
-    }
-  }
-  if (category === 'chart') {
-    return {
-      title: 'Chart',
-      render: () => (
-        <BarChartPreview
-          bars={[
-            { label: 'A', value: 6 },
-            { label: 'B', value: 9 },
-            { label: 'C', value: 4 },
-            { label: 'D', value: 11 },
-          ]}
+function renderPreview(p: PanelPreview, compact = false): React.ReactElement {
+  switch (p.kind) {
+    case 'line':
+      return (
+        <LineChartPreview
+          data={p.data}
+          timeRanges={compact ? undefined : p.time_ranges}
+          defaultRange={p.default_range}
         />
-      ),
-    }
+      )
+    case 'area':
+      return <AreaChartPreview data={p.data} />
+    case 'bar':
+      return <BarChartPreview bars={p.bars} format={p.format} orientation={p.orientation} compact={compact} />
+    case 'pie':
+      return <PieChartPreview slices={p.slices} compact={compact} />
+    case 'kpi':
+      return <KpiPreview value={p.value} hint={p.hint} tone={p.tone} />
+    case 'kanban':
+      return <KanbanPreview columns={p.columns} />
+    case 'table':
+      return <TablePreview columns={p.columns} rows={p.rows} />
   }
-  if (category === 'kanban') {
-    return {
-      title: 'Kanban',
-      render: () => (
-        <KanbanPreview
-          columns={[
-            { label: 'Todo', cards: ['Draft brief', 'Review specs'] },
-            { label: 'Doing', cards: ['Build proto'] },
-            { label: 'Done', cards: ['Kickoff'] },
-          ]}
-        />
-      ),
-    }
-  }
-  if (category === 'table') {
-    return {
-      title: 'Table',
-      render: () => (
-        <TablePreview
-          columns={['name', 'stage', 'value']}
-          rows={[
-            ['Acme', 'won', '$12k'],
-            ['Globex', 'proposal', '$8k'],
-            ['Initech', 'qualified', '$5k'],
-          ]}
-        />
-      ),
-    }
-  }
-  return null
 }
 
 function KpiPreview({
@@ -1381,22 +1290,102 @@ function KpiPreview({
   )
 }
 
-function LineChartPreview({ data }: { data: number[] }) {
-  const rows = data.map((y, i) => ({ x: i, y }))
+function LineChartPreview({
+  data,
+  timeRanges,
+  defaultRange,
+}: {
+  data: number[]
+  timeRanges?: number[]
+  defaultRange?: number
+}) {
+  const ranges = (timeRanges ?? []).filter((n) => Number.isFinite(n) && n > 0)
+  const fallback = ranges[ranges.length - 1] ?? null
+  // Compact mode (no tabs): tail the array to a sensible window so the
+  // thumbnail isn't a 90-point spaghetti — defaultRange wins, else 30.
+  const compactWindow = ranges.length === 0 ? (defaultRange ?? 30) : null
+  const init =
+    defaultRange != null && ranges.includes(defaultRange) ? defaultRange : fallback
+  const [range, setRange] = useState<number | null>(init)
+  const effectiveRange = compactWindow ?? range
+  const sliced = effectiveRange != null ? data.slice(-effectiveRange) : data
+  const rows = sliced.map((y, i) => ({ x: i, y }))
+  const tabs = ranges.length > 0 ? (
+    <div className="px-2 pt-1.5 flex items-center justify-end gap-0.5">
+      {ranges.map((n) => {
+        const active = n === range
+        return (
+          <button
+            key={n}
+            type="button"
+            onClick={() => setRange(n)}
+            className={
+              active
+                ? 'px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 cursor-pointer'
+                : 'px-1.5 py-0.5 rounded-sm text-[10px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer'
+            }
+          >
+            {n}d
+          </button>
+        )
+      })}
+    </div>
+  ) : null
+  const isCompact = ranges.length === 0
   return (
-    <div className="h-full w-full p-2 text-neutral-400 dark:text-neutral-500">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={rows} margin={{ top: 6, right: 6, bottom: 0, left: 0 }}>
-          <Line
-            type="monotone"
-            dataKey="y"
-            stroke="rgb(38 38 38)"
-            strokeWidth={1.5}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+    <div className="h-full w-full flex flex-col text-neutral-400 dark:text-neutral-500">
+      {tabs}
+      <div className={isCompact ? 'flex-1 min-h-0 p-1' : 'flex-1 min-h-0 p-2'}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={rows} margin={isCompact ? { top: 4, right: 4, bottom: 0, left: 0 } : { top: 6, right: 6, bottom: 4, left: 0 }}>
+            {!isCompact && (
+              <CartesianGrid strokeDasharray="2 4" stroke="currentColor" strokeOpacity={0.15} vertical={false} />
+            )}
+            <XAxis
+              dataKey="x"
+              stroke="currentColor"
+              tick={isCompact ? false : { fontSize: 9, fill: 'currentColor' }}
+              tickLine={false}
+              axisLine={isCompact ? false : { stroke: 'currentColor', strokeOpacity: 0.2 }}
+              interval="preserveStartEnd"
+              minTickGap={20}
+              tickCount={3}
+              hide={isCompact}
+            />
+            <YAxis
+              stroke="currentColor"
+              tick={isCompact ? false : { fontSize: 9, fill: 'currentColor' }}
+              tickLine={false}
+              axisLine={isCompact ? false : { stroke: 'currentColor', strokeOpacity: 0.2 }}
+              width={isCompact ? 0 : 22}
+              hide={isCompact}
+            />
+            <Tooltip
+              cursor={{ stroke: 'currentColor', strokeOpacity: 0.2 }}
+              contentStyle={{
+                background: 'white',
+                border: '1px solid rgb(229 229 229)',
+                borderRadius: 4,
+                fontSize: 11,
+                padding: '4px 8px',
+              }}
+              labelFormatter={() => ''}
+              formatter={(value) => [String(value), ''] as [string, string]}
+              separator=""
+              itemStyle={{ color: 'rgb(23 23 23)' }}
+            />
+            <Line
+              type="monotone"
+              dataKey="y"
+              stroke="rgb(38 38 38)"
+              strokeWidth={1.5}
+              dot={false}
+              activeDot={{ r: 3 }}
+              isAnimationActive={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   )
 }
@@ -1404,37 +1393,166 @@ function LineChartPreview({ data }: { data: number[] }) {
 function BarChartPreview({
   bars,
   format,
+  orientation,
+  compact,
 }: {
   bars: { label: string; value: number }[]
   format?: 'currency'
+  orientation?: 'vertical' | 'horizontal'
+  compact?: boolean
 }) {
-  const rows = bars.map(({ label, value }) => ({ label, value }))
-  const fmtNum = (v: number) =>
-    format === 'currency' ? `$${v.toLocaleString()}` : Intl.NumberFormat().format(v)
+  const t = useT()
+  const [mode, setMode] = useState<'count' | 'pct'>('count')
+  const trimmed = collapsePreviewSlices(bars, MAX_PIE_SLICES).map(({ label, value }) => ({ label, value }))
+  const total = trimmed.reduce((s, r) => s + (Number.isFinite(r.value) ? r.value : 0), 0)
+  const fmtNum = (v: number) => {
+    if (mode === 'pct') return total > 0 ? `${((v / total) * 100).toFixed(1)}%` : '0%'
+    return format === 'currency' ? `$${v.toLocaleString()}` : Intl.NumberFormat().format(v)
+  }
+  const horizontal = orientation === 'horizontal'
+  return (
+    <div className="h-full w-full flex flex-col text-neutral-400 dark:text-neutral-500">
+      {!compact && <ChartModeTabs mode={mode} setMode={setMode} tCount={t('chart.count')} tShare={t('chart.share')} />}
+      <div className={compact ? 'flex-1 min-h-0 p-1' : 'flex-1 min-h-0 p-2 pt-0'}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart
+            data={trimmed}
+            layout={horizontal ? 'vertical' : 'horizontal'}
+            margin={compact ? { top: 4, right: 4, bottom: 4, left: 4 } : { top: 6, right: 6, bottom: 4, left: horizontal ? 4 : 0 }}
+          >
+            {!compact && (
+              <CartesianGrid strokeDasharray="2 4" stroke="currentColor" strokeOpacity={0.15} vertical={horizontal} horizontal={!horizontal} />
+            )}
+            {horizontal ? (
+              <>
+                <XAxis type="number" stroke="currentColor" tick={compact ? false : { fontSize: 9, fill: 'currentColor' }} tickLine={false} axisLine={compact ? false : { stroke: 'currentColor', strokeOpacity: 0.2 }} tickFormatter={(v) => (typeof v === 'number' ? fmtNum(v) : String(v))} hide={compact} />
+                <YAxis type="category" dataKey="label" stroke="currentColor" tick={compact ? false : { fontSize: 9, fill: 'currentColor' }} tickLine={false} axisLine={compact ? false : { stroke: 'currentColor', strokeOpacity: 0.2 }} width={compact ? 0 : 64} interval={0} hide={compact} />
+              </>
+            ) : (
+              <>
+                <XAxis dataKey="label" stroke="currentColor" tick={compact ? false : { fontSize: 10, fill: 'currentColor' }} tickLine={false} axisLine={compact ? false : { stroke: 'currentColor', strokeOpacity: 0.2 }} interval={0} hide={compact} />
+                <YAxis stroke="currentColor" tick={compact ? false : { fontSize: 10, fill: 'currentColor' }} tickLine={false} axisLine={compact ? false : { stroke: 'currentColor', strokeOpacity: 0.2 }} width={compact ? 0 : (mode === 'pct' ? 36 : 28)} tickFormatter={(v) => (typeof v === 'number' ? fmtNum(v) : String(v))} hide={compact} />
+              </>
+            )}
+            <Bar dataKey="value" fill="rgb(38 38 38)" radius={horizontal ? [0, 2, 2, 0] : [2, 2, 0, 0]} maxBarSize={16} isAnimationActive={false} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  )
+}
+
+function ChartModeTabs({
+  mode,
+  setMode,
+  tCount,
+  tShare,
+}: {
+  mode: 'count' | 'pct'
+  setMode: (m: 'count' | 'pct') => void
+  tCount: string
+  tShare: string
+}) {
+  return (
+    <div className="px-2 pt-1.5 flex items-center justify-end gap-0.5">
+      {([
+        { id: 'count' as const, label: tCount },
+        { id: 'pct' as const, label: tShare },
+      ]).map(({ id, label }) => {
+        const active = mode === id
+        return (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setMode(id)}
+            className={
+              active
+                ? 'px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 cursor-pointer'
+                : 'px-1.5 py-0.5 rounded-sm text-[10px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer'
+            }
+          >
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function AreaChartPreview({ data }: { data: number[] }) {
+  const rows = data.map((y, i) => ({ x: i, y }))
   return (
     <div className="h-full w-full p-2 text-neutral-400 dark:text-neutral-500">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={rows} margin={{ top: 6, right: 6, bottom: 4, left: 0 }}>
-          <CartesianGrid strokeDasharray="2 4" stroke="currentColor" strokeOpacity={0.15} vertical={false} />
-          <XAxis
-            dataKey="label"
-            stroke="currentColor"
-            tick={{ fontSize: 10, fill: 'currentColor' }}
-            tickLine={false}
-            axisLine={{ stroke: 'currentColor', strokeOpacity: 0.2 }}
-            interval={0}
-          />
-          <YAxis
-            stroke="currentColor"
-            tick={{ fontSize: 10, fill: 'currentColor' }}
-            tickLine={false}
-            axisLine={{ stroke: 'currentColor', strokeOpacity: 0.2 }}
-            width={28}
-            tickFormatter={(v) => (typeof v === 'number' ? fmtNum(v) : String(v))}
-          />
-          <Bar dataKey="value" fill="rgb(38 38 38)" radius={[2, 2, 0, 0]} isAnimationActive={false} />
-        </BarChart>
+        <AreaChart data={rows} margin={{ top: 6, right: 6, bottom: 0, left: 0 }}>
+          <Area type="monotone" dataKey="y" stroke="rgb(38 38 38)" strokeWidth={1.5} fill="rgb(38 38 38)" fillOpacity={0.15} dot={false} isAnimationActive={false} />
+        </AreaChart>
       </ResponsiveContainer>
+    </div>
+  )
+}
+
+const PIE_PREVIEW_PALETTE = [
+  '#2563eb', '#f97316', '#16a34a', '#db2777', '#a855f7', '#eab308',
+  '#0ea5e9', '#dc2626', '#14b8a6', '#8b5cf6', '#84cc16', '#64748b',
+] as const
+
+/** Up to 8 distinct slices + "기타" once we exceed 9. */
+const MAX_PIE_SLICES = 9
+
+function collapsePreviewSlices(
+  slices: { label: string; value: number }[],
+  max: number,
+  otherLabel = 'Other',
+): { label: string; value: number }[] {
+  if (slices.length <= max) return slices
+  const sorted = [...slices].sort((a, b) => b.value - a.value)
+  const head = sorted.slice(0, max - 1)
+  const tail = sorted.slice(max - 1)
+  const sum = tail.reduce((s, r) => s + (Number.isFinite(r.value) ? r.value : 0), 0)
+  return [...head, { label: otherLabel, value: sum }]
+}
+
+function PieChartPreview({ slices, compact }: { slices: { label: string; value: number }[]; compact?: boolean }) {
+  const t = useT()
+  const [mode, setMode] = useState<'count' | 'pct'>('pct')
+  const trimmed = collapsePreviewSlices(slices, MAX_PIE_SLICES, t('chart.other'))
+  const total = trimmed.reduce((s, r) => s + (Number.isFinite(r.value) ? r.value : 0), 0)
+  const fmt = (v: number) =>
+    mode === 'pct'
+      ? total > 0 ? `${((v / total) * 100).toFixed(1)}%` : '0%'
+      : Intl.NumberFormat().format(v)
+  return (
+    <div className="h-full w-full flex flex-col text-neutral-400 dark:text-neutral-500">
+      {!compact && <ChartModeTabs mode={mode} setMode={setMode} tCount={t('chart.count')} tShare={t('chart.share')} />}
+      <div className={
+        compact
+          ? 'flex-1 min-h-0 p-1'
+          : 'flex-1 min-h-0 p-2 pt-0 grid grid-cols-[1fr_auto] gap-1.5'
+      }>
+        <div className="min-w-0 h-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+              <Pie data={trimmed} dataKey="value" nameKey="label" innerRadius="55%" outerRadius="85%" paddingAngle={1} isAnimationActive={false}>
+                {trimmed.map((_, i) => (
+                  <Cell key={i} fill={PIE_PREVIEW_PALETTE[i % PIE_PREVIEW_PALETTE.length]} />
+                ))}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+        {!compact && (
+          <ul className="self-end max-h-full overflow-y-auto pr-1 pb-1 space-y-0.5 text-[10px] leading-tight text-neutral-600 dark:text-neutral-300">
+            {trimmed.map((s, i) => (
+              <li key={`${s.label}-${i}`} className="flex items-center gap-1 min-w-0">
+                <span className="shrink-0 inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: PIE_PREVIEW_PALETTE[i % PIE_PREVIEW_PALETTE.length] }} />
+                <span className="truncate flex-1">{s.label}</span>
+                <span className="shrink-0 text-neutral-400 font-mono">{fmt(s.value)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   )
 }

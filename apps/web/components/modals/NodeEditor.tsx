@@ -6,7 +6,7 @@ import { type ModelInfo, listModels } from '@/lib/api/models'
 import { type ProviderStatus, listProviders } from '@/lib/api/providers'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { useT } from '@/lib/i18n'
-import { mockProviders } from '@/lib/mock/companies'
+import { PROVIDERS } from '@/lib/providers'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
 import { useCanvasStore } from '@/lib/stores/useCanvasStore'
 import type { Agent } from '@/lib/types'
@@ -157,7 +157,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
 
   const onChangeProvider = (providerId: string) => {
     const connected = connectedProviders.find((p) => p.id === providerId)
-    const fallback = mockProviders.find((p) => p.id === providerId)
+    const fallback = PROVIDERS.find((p) => p.id === providerId)
     const cached = modelCache[providerId]
     const nextModel = cached?.find((m) => m.default)?.id ?? cached?.[0]?.id ?? draft.model
     setDraft({
@@ -309,7 +309,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
   }
 
   const save = async () => {
-    const provider = mockProviders.find((p) => p.id === draft.providerId)
+    const provider = PROVIDERS.find((p) => p.id === draft.providerId)
     const clampedParallel = isLead
       ? 1
       : Math.max(1, Math.min(HARD_MAX_PARALLEL, Number(draft.maxParallel ?? 1) || 1))

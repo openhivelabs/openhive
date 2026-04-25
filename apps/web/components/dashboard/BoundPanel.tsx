@@ -10,8 +10,11 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Line,
   LineChart,
+  Pie,
+  PieChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -978,18 +981,115 @@ interface ChartShape {
   series?: { name: string; data: number[] }[]
 }
 function ChartView({ data, props }: { data: ChartShape; props?: Record<string, unknown> }) {
-  const variant = (props?.variant as 'bar' | 'line' | 'area' | undefined) ?? 'bar'
+  const t = useT()
+  const variant =
+    (props?.variant as 'bar' | 'line' | 'area' | 'pie' | undefined) ?? 'bar'
+  const layout = props?.layout === 'horizontal' ? 'horizontal' : 'vertical'
   const goal =
     typeof props?.goal_line === 'number' && Number.isFinite(props.goal_line as number)
       ? (props.goal_line as number)
       : null
-  const xs = data.x ?? []
-  const ys = data.y ?? []
-  const rows = xs.map((x, i) => ({ x, y: ys[i] ?? 0 }))
-  const tickCount = xs.length > 8 ? 5 : Math.max(2, xs.length)
 
-  if (xs.length === 0) {
-    return <div className="p-4 text-[13px] text-neutral-400">(no data)</div>
+  // Optional time-range tab strip. Only rendered when the panel declares
+  // `props.time_ranges`. Slicing happens client-side: SQL returns the largest
+  // window (e.g. 90 days), the user picks 7 / 30 / 90 and we tail the array.
+  const ranges = Array.isArray(props?.time_ranges)
+    ? (props.time_ranges as unknown[])
+        .map((n) => Number(n))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    : []
+  const defaultRange =
+    typeof props?.default_range === 'number' && ranges.includes(props.default_range as number)
+      ? (props.default_range as number)
+      : (ranges[ranges.length - 1] ?? null)
+  const [range, setRange] = useState<number | null>(defaultRange)
+
+  const fullXs = data.x ?? []
+  const fullYs = data.y ?? []
+  // Auto-trim ISO timestamps to date-only for axis/tooltip readability.
+  // Anything matching `YYYY-MM-DDTHH:MM:SS...` collapses to `YYYY-MM-DD`.
+  const trimX = (v: string) => /^\d{4}-\d{2}-\d{2}T/.test(v) ? v.slice(0, 10) : v
+  const trimmedXs = fullXs.map((v) => trimX(String(v)))
+
+  // When the panel uses time_ranges and all x values look like calendar
+  // dates, build a complete daily series ending today so days with no rows
+  // show as 0 instead of being skipped. Otherwise fall back to a tail-slice
+  // of whatever rows the binding returned (works for non-date charts too).
+  const isDateAxis =
+    ranges.length > 0 && trimmedXs.length > 0 && trimmedXs.every((v) => /^\d{4}-\d{2}-\d{2}$/.test(v))
+  let rows: { x: string; y: number }[]
+  if (isDateAxis && range != null) {
+    const valueByDay = new Map<string, number>()
+    trimmedXs.forEach((d, i) => {
+      const y = Number(fullYs[i])
+      valueByDay.set(d, Number.isFinite(y) ? y : 0)
+    })
+    // Detect a cumulative/monotone series: data points are non-decreasing
+    // and start above zero. For those we carry the last known value forward
+    // into "no row" days (gaps and tail) instead of dropping to 0 — that
+    // way "총 가입자 12명" stays at 12 after the last signup day, not 0.
+    // Default for additive series (daily counts, events) is still zero-fill.
+    const numericYs = fullYs
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v))
+    const isCumulative =
+      numericYs.length >= 2 &&
+      numericYs.every((v, i) => i === 0 || v >= (numericYs[i - 1] as number)) &&
+      (numericYs[0] as number) >= 0 &&
+      (numericYs[numericYs.length - 1] as number) > 0
+    const days: { x: string; y: number }[] = []
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    let lastKnown = 0
+    for (let offset = range - 1; offset >= 0; offset -= 1) {
+      const d = new Date(today)
+      d.setDate(d.getDate() - offset)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      const direct = valueByDay.get(key)
+      if (direct !== undefined) {
+        lastKnown = direct
+        days.push({ x: key, y: direct })
+      } else {
+        days.push({ x: key, y: isCumulative ? lastKnown : 0 })
+      }
+    }
+    rows = days
+  } else {
+    const xs = range != null ? trimmedXs.slice(-range) : trimmedXs
+    const ys = range != null ? fullYs.slice(-range) : fullYs
+    rows = xs.map((x, i) => ({ x, y: ys[i] ?? 0 }))
+  }
+  const tickCount = rows.length > 8 ? 5 : Math.max(2, rows.length)
+
+  const tabs = ranges.length > 0 ? (
+    <div className="px-3 pt-2 flex items-center justify-end gap-1">
+      {ranges.map((n) => {
+        const active = n === range
+        return (
+          <button
+            key={n}
+            type="button"
+            onClick={() => setRange(n)}
+            className={
+              active
+                ? 'px-2 py-0.5 rounded-sm text-[11.5px] font-medium bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 cursor-pointer'
+                : 'px-2 py-0.5 rounded-sm text-[11.5px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer'
+            }
+          >
+            {n}d
+          </button>
+        )
+      })}
+    </div>
+  ) : null
+
+  if (fullXs.length === 0) {
+    return (
+      <div className="h-full flex flex-col">
+        {tabs}
+        <div className="p-4 text-[13px] text-neutral-400">(no data)</div>
+      </div>
+    )
   }
 
   const sharedAxisProps = {
@@ -1002,59 +1102,312 @@ function ChartView({ data, props }: { data: ChartShape; props?: Record<string, u
   if (variant === 'line' || variant === 'area') {
     const Chart = variant === 'area' ? AreaChart : LineChart
     return (
-      <div className="h-full w-full p-3 text-neutral-400 dark:text-neutral-500">
-        <ResponsiveContainer width="100%" height="100%">
-          <Chart data={rows} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
-            <CartesianGrid strokeDasharray="2 4" stroke="currentColor" strokeOpacity={0.15} vertical={false} />
-            <XAxis dataKey="x" {...sharedAxisProps} interval="preserveStartEnd" minTickGap={20} tickCount={tickCount} />
-            <YAxis {...sharedAxisProps} width={28} />
-            <Tooltip content={<ChartTooltip />} cursor={{ stroke: 'currentColor', strokeOpacity: 0.2 }} />
-            {variant === 'area' ? (
-              <Area
-                type="monotone"
-                dataKey="y"
-                stroke="rgb(38 38 38)"
-                strokeWidth={1.5}
-                fill="rgb(38 38 38)"
-                fillOpacity={0.12}
-                dot={false}
-                activeDot={{ r: 3 }}
-                isAnimationActive={false}
-              />
-            ) : (
-              <Line
-                type="monotone"
-                dataKey="y"
-                stroke="rgb(38 38 38)"
-                strokeWidth={1.5}
-                dot={false}
-                activeDot={{ r: 3 }}
-                isAnimationActive={false}
-              />
-            )}
-            {goal != null && (
-              <ReferenceLine y={goal} stroke="rgb(16 185 129)" strokeDasharray="3 3" strokeWidth={1} />
-            )}
-          </Chart>
-        </ResponsiveContainer>
+      <div className="h-full flex flex-col">
+        {tabs}
+        <div className="flex-1 min-h-0 w-full p-3 text-neutral-400 dark:text-neutral-500">
+          <ResponsiveContainer width="100%" height="100%">
+            <Chart data={rows} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+              <CartesianGrid strokeDasharray="2 4" stroke="currentColor" strokeOpacity={0.15} vertical={false} />
+              <XAxis dataKey="x" {...sharedAxisProps} interval="preserveStartEnd" minTickGap={20} tickCount={tickCount} />
+              <YAxis {...sharedAxisProps} width={28} />
+              <Tooltip content={<ChartTooltip />} cursor={{ stroke: 'currentColor', strokeOpacity: 0.2 }} isAnimationActive={false} />
+              {variant === 'area' ? (
+                <Area
+                  type="monotone"
+                  dataKey="y"
+                  stroke="rgb(38 38 38)"
+                  strokeWidth={1.5}
+                  fill="rgb(38 38 38)"
+                  fillOpacity={0.12}
+                  dot={false}
+                  activeDot={{ r: 3 }}
+                  isAnimationActive={false}
+                />
+              ) : (
+                <Line
+                  type="monotone"
+                  dataKey="y"
+                  stroke="rgb(38 38 38)"
+                  strokeWidth={1.5}
+                  dot={false}
+                  activeDot={{ r: 3 }}
+                  isAnimationActive={false}
+                />
+              )}
+              {goal != null && (
+                <ReferenceLine y={goal} stroke="rgb(16 185 129)" strokeDasharray="3 3" strokeWidth={1} />
+              )}
+            </Chart>
+          </ResponsiveContainer>
+        </div>
       </div>
     )
   }
 
+  if (variant === 'pie') {
+    return <PieView rows={rows} timeTabs={tabs} />
+  }
+
+  // bar (default).
   return (
-    <div className="h-full w-full p-3 text-neutral-400 dark:text-neutral-500">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={rows} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
-          <CartesianGrid strokeDasharray="2 4" stroke="currentColor" strokeOpacity={0.15} vertical={false} />
-          <XAxis dataKey="x" {...sharedAxisProps} interval={0} />
-          <YAxis {...sharedAxisProps} width={28} />
-          <Tooltip content={<ChartTooltip />} cursor={{ fill: 'currentColor', fillOpacity: 0.06 }} />
-          <Bar dataKey="y" fill="rgb(38 38 38)" radius={[2, 2, 0, 0]} isAnimationActive={false} />
-          {goal != null && (
-            <ReferenceLine y={goal} stroke="rgb(16 185 129)" strokeDasharray="3 3" strokeWidth={1} />
-          )}
-        </BarChart>
-      </ResponsiveContainer>
+    <BarView
+      rows={rows}
+      props={props}
+      timeTabs={tabs}
+      goal={goal}
+      otherLabel={t('chart.other')}
+      tCount={t('chart.count')}
+      tShare={t('chart.share')}
+    />
+  )
+}
+
+/** Bar / Column with horizontal-or-vertical layout, capped bar thickness,
+ *  scrolling on overflow, dataMax-pinned axis, "Other"-collapse beyond 9
+ *  categories, and a top-right "개수 / 비중" toggle (default 개수). */
+function BarView({
+  rows,
+  props,
+  timeTabs,
+  goal,
+  otherLabel,
+  tCount,
+  tShare,
+}: {
+  rows: { x: string; y: number }[]
+  props?: Record<string, unknown>
+  timeTabs: React.ReactElement | null
+  goal: number | null
+  otherLabel: string
+  tCount: string
+  tShare: string
+}) {
+  const horizontal = props?.layout === 'horizontal'
+  const [mode, setMode] = useState<'count' | 'pct'>('count')
+  const barRows = collapseToOther(rows, 9, otherLabel)
+  const total = barRows.reduce((s, r) => s + (Number.isFinite(r.y) ? r.y : 0), 0)
+  const formatValue = (v: number) =>
+    mode === 'pct'
+      ? total > 0 ? `${((v / total) * 100).toFixed(1)}%` : '0%'
+      : Intl.NumberFormat().format(v)
+  const ROW_PX = 56
+  const COL_PX = 64
+  const MAX_BAR = 40
+  const lockedHeight = horizontal ? Math.max(barRows.length * ROW_PX, ROW_PX * 2) : null
+  const lockedWidth = !horizontal ? Math.max(barRows.length * COL_PX, COL_PX * 3) : null
+  const sharedAxisProps = {
+    stroke: 'currentColor',
+    tick: { fontSize: 11, fill: 'currentColor' },
+    tickLine: false,
+    axisLine: { stroke: 'currentColor', strokeOpacity: 0.2 },
+  } as const
+  const headerTabs = (
+    <div className="px-3 pt-2 flex items-center justify-end gap-1">
+      {([
+        { id: 'count', label: tCount },
+        { id: 'pct', label: tShare },
+      ] as const).map(({ id, label }) => {
+        const active = mode === id
+        return (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setMode(id)}
+            className={
+              active
+                ? 'px-2 py-0.5 rounded-sm text-[11.5px] font-medium bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 cursor-pointer'
+                : 'px-2 py-0.5 rounded-sm text-[11.5px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer'
+            }
+          >
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  )
+  return (
+    <div className="h-full flex flex-col">
+      {timeTabs}
+      {headerTabs}
+      <div className={
+        horizontal
+          ? 'flex-1 min-h-0 w-full p-3 pt-1 text-neutral-400 dark:text-neutral-500 overflow-y-auto'
+          : 'flex-1 min-h-0 w-full p-3 pt-1 text-neutral-400 dark:text-neutral-500 overflow-x-auto'
+      }>
+        <div style={
+          lockedHeight
+            ? { height: `${lockedHeight}px`, width: '100%' }
+            : lockedWidth
+              ? { width: `${lockedWidth}px`, height: '100%', minWidth: '100%' }
+              : { height: '100%', width: '100%' }
+        }>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart
+              data={barRows}
+              layout={horizontal ? 'vertical' : 'horizontal'}
+              margin={{ top: 8, right: horizontal ? 24 : 12, bottom: 4, left: horizontal ? 12 : 4 }}
+            >
+              <CartesianGrid strokeDasharray="2 4" stroke="currentColor" strokeOpacity={0.15} vertical={horizontal} horizontal={!horizontal} />
+              {horizontal ? (
+                <>
+                  <XAxis type="number" domain={[0, 'dataMax']} tickFormatter={formatValue} {...sharedAxisProps} />
+                  <YAxis type="category" dataKey="x" {...sharedAxisProps} width={80} interval={0} />
+                </>
+              ) : (
+                <>
+                  <XAxis dataKey="x" {...sharedAxisProps} interval={0} />
+                  <YAxis domain={[0, 'dataMax']} tickFormatter={formatValue} {...sharedAxisProps} width={mode === 'pct' ? 40 : 28} />
+                </>
+              )}
+              <Tooltip
+                content={<ChartTooltip valueFormatter={formatValue} />}
+                cursor={{ fill: 'currentColor', fillOpacity: 0.06 }}
+                isAnimationActive={false}
+              />
+              <Bar dataKey="y" fill="rgb(38 38 38)" radius={horizontal ? [0, 2, 2, 0] : [2, 2, 0, 0]} maxBarSize={MAX_BAR} isAnimationActive={false} />
+              {goal != null && (
+                <ReferenceLine y={goal} stroke="rgb(16 185 129)" strokeDasharray="3 3" strokeWidth={1} />
+              )}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Distinct, accessible-ish palette for pie/donut slices. Cycled per slice;
+// pick contrasting hues so adjacent slices stay legible. 12 entries cover
+// most realistic category counts before wrap.
+const PIE_PALETTE = [
+  '#2563eb', // blue-600
+  '#f97316', // orange-500
+  '#16a34a', // green-600
+  '#db2777', // pink-600
+  '#a855f7', // purple-500
+  '#eab308', // yellow-500
+  '#0ea5e9', // sky-500
+  '#dc2626', // red-600
+  '#14b8a6', // teal-500
+  '#8b5cf6', // violet-500
+  '#84cc16', // lime-500
+  '#64748b', // slate-500
+] as const
+
+/** Pie chart with a top-right "개수 / 비중" toggle controlling the legend
+ *  (and tooltip) format. Slices beyond the palette get collapsed to "기타". */
+function PieView({
+  rows,
+  timeTabs,
+}: {
+  rows: { x: string; y: number }[]
+  timeTabs: React.ReactElement | null
+}) {
+  const t = useT()
+  const [mode, setMode] = useState<'count' | 'pct'>('pct')
+  const pieRows = collapseToOther(rows, 9, t('chart.other'))
+  const total = pieRows.reduce((s, r) => s + (Number.isFinite(r.y) ? r.y : 0), 0)
+  const formatValue = (v: number) =>
+    mode === 'pct'
+      ? total > 0 ? `${((v / total) * 100).toFixed(1)}%` : '0%'
+      : Intl.NumberFormat().format(v)
+  const headerTabs = (
+    <div className="px-3 pt-2 flex items-center justify-end gap-1">
+      {([
+        { id: 'count', label: t('chart.count') },
+        { id: 'pct', label: t('chart.share') },
+      ] as const).map(({ id, label }) => {
+        const active = mode === id
+        return (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setMode(id)}
+            className={
+              active
+                ? 'px-2 py-0.5 rounded-sm text-[11.5px] font-medium bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 cursor-pointer'
+                : 'px-2 py-0.5 rounded-sm text-[11.5px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer'
+            }
+          >
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  )
+  return (
+    <div className="h-full flex flex-col">
+      {timeTabs}
+      {headerTabs}
+      <div className="flex-1 min-h-0 w-full grid grid-cols-[1fr_auto] gap-2 p-3 pt-1 text-neutral-400 dark:text-neutral-500">
+        <div className="min-w-0">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
+              <Tooltip
+                content={<ChartTooltip valueFormatter={formatValue} />}
+                isAnimationActive={false}
+              />
+              <Pie
+                data={pieRows}
+                dataKey="y"
+                nameKey="x"
+                innerRadius="50%"
+                outerRadius="85%"
+                paddingAngle={1}
+                isAnimationActive={false}
+              >
+                {pieRows.map((_, i) => (
+                  <Cell key={i} fill={PIE_PALETTE[i % PIE_PALETTE.length]} />
+                ))}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+        <PieLegend rows={pieRows} format={formatValue} />
+      </div>
+    </div>
+  )
+}
+
+/** Collapse rows beyond the palette size into a single "Other" slice so the
+ *  pie keeps distinct colors. Sorts by value descending first so the biggest
+ *  N-1 slices stay individual; the rest get summed. */
+function collapseToOther(
+  rows: { x: string; y: number }[],
+  maxSlices: number,
+  otherLabel = 'Other',
+): { x: string; y: number }[] {
+  if (rows.length <= maxSlices) return rows
+  const sorted = [...rows].sort((a, b) => b.y - a.y)
+  const head = sorted.slice(0, maxSlices - 1)
+  const tail = sorted.slice(maxSlices - 1)
+  const otherSum = tail.reduce((s, r) => s + (Number.isFinite(r.y) ? r.y : 0), 0)
+  return [...head, { x: otherLabel, y: otherSum }]
+}
+
+function PieLegend({
+  rows,
+  format,
+}: {
+  rows: { x: string; y: number }[]
+  format?: (v: number) => string
+}) {
+  if (rows.length === 0) return null
+  const fmt = format ?? ((v: number) => Intl.NumberFormat().format(v))
+  return (
+    <div className="self-end max-h-full min-w-[110px] max-w-[200px] overflow-y-auto pr-1">
+      <ul className="space-y-1 text-[11.5px] leading-tight text-neutral-600 dark:text-neutral-300">
+        {rows.map((r, i) => (
+          <li key={`${r.x}-${i}`} className="flex items-center gap-1.5 min-w-0">
+            <span
+              className="shrink-0 inline-block w-2.5 h-2.5 rounded-sm"
+              style={{ backgroundColor: PIE_PALETTE[i % PIE_PALETTE.length] }}
+            />
+            <span className="truncate flex-1">{r.x}</span>
+            <span className="shrink-0 text-neutral-400 font-mono">{fmt(r.y)}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -1063,19 +1416,30 @@ function ChartTooltip({
   active,
   payload,
   label,
+  valueFormatter,
 }: {
   active?: boolean
-  payload?: { value: number | string }[]
+  payload?: { value?: number | string; name?: string; payload?: { x?: unknown } }[]
   label?: string | number
+  valueFormatter?: (v: number) => string
 }) {
   if (!active || !payload || payload.length === 0) return null
-  const v = payload[0]?.value
+  const entry = payload[0]
+  const v = entry?.value
+  const heading =
+    (label !== undefined && label !== '' ? String(label) : null) ??
+    (entry?.payload && typeof entry.payload.x !== 'undefined' ? String(entry.payload.x) : null) ??
+    (entry?.name ? String(entry.name) : '')
+  const formatted =
+    typeof v === 'number'
+      ? valueFormatter
+        ? valueFormatter(v)
+        : Intl.NumberFormat().format(v)
+      : String(v ?? '')
   return (
     <div className="rounded-sm border border-neutral-200 dark:border-neutral-700 bg-white/95 dark:bg-neutral-900/95 px-2 py-1 text-[11.5px] font-mono text-neutral-700 dark:text-neutral-200 shadow-sm">
-      <div className="text-neutral-400">{String(label ?? '')}</div>
-      <div className="text-neutral-900 dark:text-neutral-50">
-        {typeof v === 'number' ? Intl.NumberFormat().format(v) : String(v ?? '')}
-      </div>
+      {heading && <div className="text-neutral-400">{heading}</div>}
+      <div className="text-neutral-900 dark:text-neutral-50">{formatted}</div>
     </div>
   )
 }

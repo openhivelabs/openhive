@@ -5,13 +5,11 @@ import { ai } from './ai'
 import { artifacts } from './artifacts'
 import { backup } from './backup'
 import { companies } from './companies'
-import { composer } from './composer'
 import { credentials } from './credentials'
 import { frames } from './frames'
 import { health } from './health'
 import { market } from './market'
 import { mcp } from './mcp'
-import { panelTemplates } from './panel-templates'
 import { panels } from './panels'
 import { providers } from './providers'
 import { sessions } from './sessions'
@@ -22,7 +20,6 @@ import { usage } from './usage'
 export const api = new Hono()
 api.route('/health', health)
 api.route('/companies', companies)
-api.route('/composer', composer)
 api.route('/credentials', credentials)
 api.route('/agents', agents)
 api.route('/agent-frames', agentFrames)
@@ -32,7 +29,6 @@ api.route('/backup', backup)
 api.route('/frames', frames)
 api.route('/market', market)
 api.route('/mcp', mcp)
-api.route('/panel-templates', panelTemplates)
 api.route('/panels', panels)
 api.route('/providers', providers)
 api.route('/sessions', sessions)

@@ -1,13 +1,9 @@
 /**
- * Frame Market — remote catalog of shareable company / team / agent frames.
+ * Frame Market — local catalog of shareable company / team / agent / panel
+ * frames. Lives at `packages/frame-market/` inside this repo so the app
+ * always ships with its catalog (no network, no env, no GitHub round-trip).
  *
- * Source of truth lives in a GitHub repo whose base URL is configurable via
- * `OPENHIVE_MARKET_BASE_URL`. Default points at the canonical openhive market
- * repo. The server fetches an `index.json` manifest and individual frame
- * YAMLs on demand, never caching on disk — clients always see the latest
- * catalog push.
- *
- * Repo layout (relative to base):
+ * Catalog layout (relative to packages/frame-market/):
  *   index.json                       { companies, teams, agents, panels }
  *   teams/<id>.openhive-frame.yaml
  *   agents/<id>.openhive-agent-frame.yaml
@@ -20,16 +16,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import yaml from 'js-yaml'
-import { repoRoot } from './paths'
+import { packagesRoot } from './paths'
 
-const DEFAULT_BASE_URL =
-  'https://raw.githubusercontent.com/openhivelabs/frame-market/main'
-
-function baseUrl(): string {
-  return (process.env.OPENHIVE_MARKET_BASE_URL ?? DEFAULT_BASE_URL).replace(
-    /\/+$/,
-    '',
-  )
+function catalogDir(): string {
+  return path.join(packagesRoot(), 'frame-market')
 }
 
 export type MarketType = 'company' | 'team' | 'agent' | 'panel'
@@ -55,12 +45,30 @@ export interface MarketEntry {
    *  install-time AI router inspects this alongside the current company
    *  schema and emits a plan (reuse / extend / standalone). */
   setup_sql?: string
+  /** type=panel → static thumbnail spec for the modal. Renderer-agnostic;
+   *  lets new panels ship with a preview without app code changes. */
+  preview?: PanelPreview
 }
 
 export interface PanelSize {
   colSpan: 1 | 2 | 3 | 4
   rowSpan: 1 | 2 | 3 | 4
 }
+
+export type PanelPreview =
+  | {
+      kind: 'line'
+      data: number[]
+      subtitle?: string
+      time_ranges?: number[]
+      default_range?: number
+    }
+  | { kind: 'area'; data: number[]; subtitle?: string }
+  | { kind: 'bar'; bars: { label: string; value: number }[]; subtitle?: string; format?: 'currency'; orientation?: 'vertical' | 'horizontal' }
+  | { kind: 'pie'; slices: { label: string; value: number }[]; subtitle?: string }
+  | { kind: 'kpi'; value: string; hint: string; tone?: 'positive' | 'negative'; subtitle?: string }
+  | { kind: 'kanban'; columns: { label: string; cards: string[] }[]; subtitle?: string }
+  | { kind: 'table'; columns: string[]; rows: string[][]; subtitle?: string }
 
 export interface MarketIndex {
   companies: MarketEntry[]
@@ -73,418 +81,9 @@ export interface MarketIndex {
   source: string
 }
 
-/** Built-in demo catalog. Shown automatically when the remote catalog is
- *  unreachable or empty, so the market UI never looks dead during dev / before
- *  a real frame-market repo is published. Entries are prefixed `demo-` and
- *  are NOT installable (install endpoint returns a friendly error). */
-const DEMO_COMPANIES: MarketEntry[] = [
-  {
-    id: 'demo-acme',
-    type: 'company',
-    name: 'Acme Holdings',
-    description:
-      'Consumer goods conglomerate with sales, support, and ops teams pre-wired.',
-    tags: ['demo', 'bundle', 'sales'],
-    author: 'Openhive Demo',
-    teams: ['demo-sales-crm', 'demo-support-desk', 'demo-ops'],
-  },
-  {
-    id: 'demo-globex',
-    type: 'company',
-    name: 'Globex Research',
-    description:
-      'R&D org template — literature review agents, experiment tracker, and weekly digest.',
-    tags: ['demo', 'bundle', 'research'],
-    author: 'Openhive Demo',
-    teams: ['demo-research', 'demo-lab-ops'],
-  },
-  {
-    id: 'demo-initech',
-    type: 'company',
-    name: 'Initech Consulting',
-    description:
-      'Services firm layout — billable hours, client CRM, and project tracker.',
-    tags: ['demo', 'bundle', 'services'],
-    author: 'Openhive Demo',
-    teams: ['demo-clients', 'demo-billing'],
-  },
-]
 
-const DEMO_TEAMS: MarketEntry[] = [
-  {
-    id: 'demo-sales-crm',
-    type: 'team',
-    name: 'Sales CRM',
-    description:
-      'Deal pipeline, activity log, and a deal-qualification agent. Starter dashboard included.',
-    tags: ['demo', 'sales', 'pipeline'],
-    author: 'Openhive Demo',
-    agent_count: 2,
-  },
-  {
-    id: 'demo-support-desk',
-    type: 'team',
-    name: 'Customer Support',
-    description:
-      'Ticket triage team with auto-categorization and first-response drafting.',
-    tags: ['demo', 'support', 'tickets'],
-    author: 'Openhive Demo',
-    agent_count: 3,
-  },
-  {
-    id: 'demo-research',
-    type: 'team',
-    name: 'Research Cell',
-    description:
-      'Literature review + summarization workflow. Pulls PDFs, hands off to a critic.',
-    tags: ['demo', 'research', 'rag'],
-    author: 'Openhive Demo',
-    agent_count: 4,
-  },
-  {
-    id: 'demo-ops',
-    type: 'team',
-    name: 'Ops Runbook',
-    description:
-      'On-call rotation, incident log, and a runbook-followup agent.',
-    tags: ['demo', 'ops', 'oncall'],
-    author: 'Openhive Demo',
-    agent_count: 2,
-  },
-]
-
-const DEMO_AGENTS: MarketEntry[] = [
-  {
-    id: 'demo-researcher',
-    type: 'agent',
-    name: 'Researcher',
-    description: 'Gathers sources, cites, and returns a structured brief.',
-    tags: ['demo', 'research', 'writing'],
-    author: 'Openhive Demo',
-  },
-  {
-    id: 'demo-reviewer',
-    type: 'agent',
-    name: 'Critic Reviewer',
-    description:
-      'Audits another agent\'s output against a rubric; flags gaps inline.',
-    tags: ['demo', 'review', 'qa'],
-    author: 'Openhive Demo',
-  },
-  {
-    id: 'demo-triager',
-    type: 'agent',
-    name: 'Ticket Triager',
-    description:
-      'Classifies incoming tickets, assigns priority, suggests first reply.',
-    tags: ['demo', 'support'],
-    author: 'Openhive Demo',
-  },
-  {
-    id: 'demo-writer',
-    type: 'agent',
-    name: 'Release Notes Writer',
-    description:
-      'Turns a PR list into customer-facing release notes in a given tone.',
-    tags: ['demo', 'writing', 'devrel'],
-    author: 'Openhive Demo',
-  },
-  {
-    id: 'demo-scheduler',
-    type: 'agent',
-    name: 'Calendar Scheduler',
-    description:
-      'Finds overlap across attendee calendars and drafts an invite.',
-    tags: ['demo', 'calendar', 'ops'],
-    author: 'Openhive Demo',
-  },
-]
-
-/** Shared `customer` DDL used by the 6 original seed panels. Kept as a
- *  single string constant so all six entries stay in lock-step. */
-const CUSTOMER_SETUP_SQL = `CREATE TABLE IF NOT EXISTS customer (
-  team_id    TEXT NOT NULL,
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  name       TEXT,
-  email      TEXT,
-  stage      TEXT DEFAULT 'prospect',
-  value      REAL DEFAULT 0,
-  created_at TEXT DEFAULT (datetime('now'))
-)`
-
-const DEAL_SETUP_SQL = `CREATE TABLE IF NOT EXISTS deal (
-  team_id     TEXT NOT NULL,
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  title       TEXT NOT NULL,
-  amount      REAL DEFAULT 0,
-  stage       TEXT DEFAULT 'prospect',
-  customer_id INTEGER,
-  created_at  TEXT DEFAULT (datetime('now'))
-)`
-
-const TASK_SETUP_SQL = `CREATE TABLE IF NOT EXISTS task (
-  team_id     TEXT NOT NULL,
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  title       TEXT NOT NULL,
-  status      TEXT DEFAULT 'todo',
-  customer_id INTEGER,
-  deal_id     INTEGER,
-  due_at      TEXT
-)`
-
-const WORKOUT_SETUP_SQL = `CREATE TABLE IF NOT EXISTS workout (
-  team_id      TEXT NOT NULL,
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  name         TEXT NOT NULL,
-  duration_min INTEGER DEFAULT 0,
-  intensity    TEXT DEFAULT 'medium',
-  notes        TEXT,
-  logged_at    TEXT DEFAULT (datetime('now'))
-)`
-
-const BOOK_SETUP_SQL = `CREATE TABLE IF NOT EXISTS book (
-  team_id  TEXT NOT NULL,
-  id       INTEGER PRIMARY KEY AUTOINCREMENT,
-  title    TEXT NOT NULL,
-  author   TEXT,
-  status   TEXT DEFAULT 'unread',
-  rating   INTEGER,
-  added_at TEXT DEFAULT (datetime('now'))
-)`
-
-const PLAYER_SETUP_SQL = `CREATE TABLE IF NOT EXISTS player (
-  team_id  TEXT NOT NULL,
-  id       INTEGER PRIMARY KEY AUTOINCREMENT,
-  name     TEXT NOT NULL,
-  position TEXT,
-  jersey   INTEGER,
-  bats     TEXT,
-  throws   TEXT,
-  added_at TEXT DEFAULT (datetime('now'))
-)`
-
-const EPISODE_SETUP_SQL = `CREATE TABLE IF NOT EXISTS episode (
-  team_id      TEXT NOT NULL,
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  number       INTEGER,
-  title        TEXT NOT NULL,
-  guest_name   TEXT,
-  duration_min INTEGER,
-  status       TEXT DEFAULT 'draft',
-  release_at   TEXT,
-  created_at   TEXT DEFAULT (datetime('now'))
-)`
-
-/** Curated seed catalog — 2 categories × 3 panels each (plus 2 extra
- *  relational panels used by the install-plan Playwright tests). These
- *  mirror the YAML frames in `frame-market-seed/`; publish that folder
- *  to the remote `frame-market` repo to make them installable. */
-const DEMO_PANELS: MarketEntry[] = [
-  // ── kpi ──
-  {
-    id: 'demo-total-count',
-    type: 'panel',
-    name: 'Total Count',
-    description:
-      'Single-number tile: total rows in a chosen table. Default reads the customer table.',
-    tags: ['count', 'universal'],
-    author: 'OpenHive',
-    category: 'kpi',
-    sizes: [
-      { colSpan: 1, rowSpan: 1 },
-      { colSpan: 2, rowSpan: 1 },
-    ],
-    setup_sql: CUSTOMER_SETUP_SQL,
-  },
-  {
-    id: 'demo-sum-metric',
-    type: 'panel',
-    name: 'Sum Metric',
-    description:
-      'Sum of a numeric column across all rows. Default sums the `value` column on the customer table.',
-    tags: ['sum', 'universal'],
-    author: 'OpenHive',
-    category: 'kpi',
-    sizes: [
-      { colSpan: 1, rowSpan: 1 },
-      { colSpan: 2, rowSpan: 1 },
-    ],
-    setup_sql: CUSTOMER_SETUP_SQL,
-  },
-  {
-    id: 'demo-period-change',
-    type: 'panel',
-    name: 'Period Change %',
-    description:
-      'Week-over-week percent change in row count. Assumes a `created_at` column (ISO date or unix epoch).',
-    tags: ['growth', 'universal'],
-    author: 'OpenHive',
-    category: 'kpi',
-    sizes: [
-      { colSpan: 1, rowSpan: 1 },
-      { colSpan: 2, rowSpan: 1 },
-    ],
-    setup_sql: CUSTOMER_SETUP_SQL,
-  },
-
-  // ── chart ──
-  {
-    id: 'demo-trend-line',
-    type: 'panel',
-    name: 'Trend Line',
-    description:
-      'Line chart of daily row count over the last 30 days. Swap the table to trend any time-series.',
-    tags: ['trend', 'time-series', 'universal'],
-    author: 'OpenHive',
-    category: 'chart',
-    sizes: [
-      { colSpan: 2, rowSpan: 2 },
-      { colSpan: 4, rowSpan: 2 },
-    ],
-    setup_sql: CUSTOMER_SETUP_SQL,
-  },
-  {
-    id: 'demo-bar-by-category',
-    type: 'panel',
-    name: 'Bar by Category',
-    description:
-      'Horizontal bar chart grouped by a category column. Default groups the customer table by `stage`.',
-    tags: ['bar', 'distribution', 'universal'],
-    author: 'OpenHive',
-    category: 'chart',
-    sizes: [
-      { colSpan: 2, rowSpan: 2 },
-      { colSpan: 3, rowSpan: 2 },
-      { colSpan: 4, rowSpan: 2 },
-    ],
-    setup_sql: CUSTOMER_SETUP_SQL,
-  },
-  {
-    id: 'demo-stacked-composition',
-    type: 'panel',
-    name: 'Stacked Composition',
-    description:
-      'Composition of a total broken down by a grouping column — useful for pipeline mix, channel breakdowns.',
-    tags: ['composition', 'mix', 'universal'],
-    author: 'OpenHive',
-    category: 'chart',
-    sizes: [
-      { colSpan: 2, rowSpan: 2 },
-      { colSpan: 4, rowSpan: 2 },
-    ],
-    setup_sql: CUSTOMER_SETUP_SQL,
-  },
-
-  // ── relational panels for install-plan testing ──
-  {
-    id: 'demo-deal-pipeline',
-    type: 'panel',
-    name: 'Deal Pipeline',
-    description:
-      'Table of open deals with amount, stage, owner. Deal carries customer_id so it links to any customer table the user already has.',
-    tags: ['sales', 'relational'],
-    author: 'OpenHive',
-    category: 'table',
-    sizes: [
-      { colSpan: 2, rowSpan: 2 },
-      { colSpan: 4, rowSpan: 2 },
-    ],
-    setup_sql: DEAL_SETUP_SQL,
-  },
-  {
-    id: 'demo-task-board',
-    type: 'panel',
-    name: 'Task Board',
-    description:
-      'Kanban of tasks grouped by status. Task carries customer_id and deal_id for cross-entity linking.',
-    tags: ['ops', 'relational'],
-    author: 'OpenHive',
-    category: 'kanban',
-    sizes: [
-      { colSpan: 2, rowSpan: 2 },
-      { colSpan: 4, rowSpan: 2 },
-    ],
-    setup_sql: TASK_SETUP_SQL,
-  },
-
-  // ── cross-domain panels (install-plan stress tests) ──
-  {
-    id: 'demo-workout-log',
-    type: 'panel',
-    name: 'Workout Log',
-    description:
-      'Fitness log — record workouts with duration and intensity. Own `workout` table, unrelated to business data.',
-    tags: ['fitness', 'personal'],
-    author: 'OpenHive',
-    category: 'table',
-    sizes: [
-      { colSpan: 2, rowSpan: 2 },
-      { colSpan: 4, rowSpan: 2 },
-    ],
-    setup_sql: WORKOUT_SETUP_SQL,
-  },
-  {
-    id: 'demo-library-books',
-    type: 'panel',
-    name: 'Library Books',
-    description:
-      'Personal library — books with title, author, status. `book` table.',
-    tags: ['library', 'personal'],
-    author: 'OpenHive',
-    category: 'table',
-    sizes: [
-      { colSpan: 2, rowSpan: 2 },
-      { colSpan: 4, rowSpan: 2 },
-    ],
-    setup_sql: BOOK_SETUP_SQL,
-  },
-  {
-    id: 'demo-baseball-roster',
-    type: 'panel',
-    name: 'Baseball Roster',
-    description:
-      'Team roster — players with position and jersey number. `player` table, sport-specific.',
-    tags: ['baseball', 'sports'],
-    author: 'OpenHive',
-    category: 'table',
-    sizes: [
-      { colSpan: 2, rowSpan: 2 },
-      { colSpan: 4, rowSpan: 2 },
-    ],
-    setup_sql: PLAYER_SETUP_SQL,
-  },
-  {
-    id: 'demo-podcast-episodes',
-    type: 'panel',
-    name: 'Podcast Episodes',
-    description:
-      'Podcast studio — episodes with guest, duration, release status. `episode` table.',
-    tags: ['podcast', 'media'],
-    author: 'OpenHive',
-    category: 'table',
-    sizes: [
-      { colSpan: 2, rowSpan: 2 },
-      { colSpan: 4, rowSpan: 2 },
-    ],
-    setup_sql: EPISODE_SETUP_SQL,
-  },
-]
-
-const DEMO_INDEX: MarketIndex = {
-  companies: DEMO_COMPANIES,
-  teams: DEMO_TEAMS,
-  agents: DEMO_AGENTS,
-  panels: DEMO_PANELS,
-  warnings: [],
-  source: 'demo:builtin',
-}
-
-async function getText(url: string): Promise<string> {
-  const res = await fetch(url, {
-    headers: { 'user-agent': 'openhive-market-client' },
-  })
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${url}`)
-  return res.text()
+function readCatalogFile(rel: string): string {
+  return fs.readFileSync(path.join(catalogDir(), rel), 'utf8')
 }
 
 function coerceEntry(raw: unknown, type: MarketType): MarketEntry | null {
@@ -509,6 +108,102 @@ function coerceEntry(raw: unknown, type: MarketType): MarketEntry | null {
       typeof r.setup_sql === 'string' && r.setup_sql.trim()
         ? r.setup_sql
         : undefined,
+    preview: coercePreview(r.preview),
+  }
+}
+
+function coercePreview(raw: unknown): PanelPreview | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const r = raw as Record<string, unknown>
+  const subtitle = typeof r.subtitle === 'string' ? r.subtitle : undefined
+  switch (r.kind) {
+    case 'line': {
+      if (!Array.isArray(r.data)) return undefined
+      const data = (r.data as unknown[]).map((n) => Number(n)).filter((n) => Number.isFinite(n))
+      if (data.length === 0) return undefined
+      const time_ranges = Array.isArray(r.time_ranges)
+        ? (r.time_ranges as unknown[]).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)
+        : undefined
+      const default_range =
+        typeof r.default_range === 'number' && Number.isFinite(r.default_range)
+          ? r.default_range
+          : undefined
+      return {
+        kind: 'line',
+        data,
+        subtitle,
+        time_ranges: time_ranges && time_ranges.length > 0 ? time_ranges : undefined,
+        default_range,
+      }
+    }
+    case 'area': {
+      if (!Array.isArray(r.data)) return undefined
+      const data = (r.data as unknown[]).map((n) => Number(n)).filter((n) => Number.isFinite(n))
+      return data.length > 0 ? { kind: 'area', data, subtitle } : undefined
+    }
+    case 'bar': {
+      if (!Array.isArray(r.bars)) return undefined
+      const bars: { label: string; value: number }[] = []
+      for (const b of r.bars as unknown[]) {
+        if (!b || typeof b !== 'object') continue
+        const o = b as Record<string, unknown>
+        const label = typeof o.label === 'string' ? o.label : null
+        const value = Number(o.value)
+        if (label !== null && Number.isFinite(value)) bars.push({ label, value })
+      }
+      const format = r.format === 'currency' ? 'currency' : undefined
+      const orientation =
+        r.orientation === 'horizontal' ? 'horizontal' : r.orientation === 'vertical' ? 'vertical' : undefined
+      return bars.length > 0 ? { kind: 'bar', bars, subtitle, format, orientation } : undefined
+    }
+    case 'pie': {
+      if (!Array.isArray(r.slices)) return undefined
+      const slices: { label: string; value: number }[] = []
+      for (const s of r.slices as unknown[]) {
+        if (!s || typeof s !== 'object') continue
+        const o = s as Record<string, unknown>
+        const label = typeof o.label === 'string' ? o.label : null
+        const value = Number(o.value)
+        if (label !== null && Number.isFinite(value)) slices.push({ label, value })
+      }
+      return slices.length > 0 ? { kind: 'pie', slices, subtitle } : undefined
+    }
+    case 'kpi': {
+      const value = typeof r.value === 'string' ? r.value : null
+      const hint = typeof r.hint === 'string' ? r.hint : ''
+      if (!value) return undefined
+      const tone = r.tone === 'positive' || r.tone === 'negative' ? r.tone : undefined
+      return { kind: 'kpi', value, hint, tone, subtitle }
+    }
+    case 'kanban': {
+      if (!Array.isArray(r.columns)) return undefined
+      const columns: { label: string; cards: string[] }[] = []
+      for (const c of r.columns as unknown[]) {
+        if (!c || typeof c !== 'object') continue
+        const o = c as Record<string, unknown>
+        const label = typeof o.label === 'string' ? o.label : null
+        const cards = Array.isArray(o.cards)
+          ? (o.cards as unknown[]).filter((x): x is string => typeof x === 'string')
+          : []
+        if (label !== null) columns.push({ label, cards })
+      }
+      return columns.length > 0 ? { kind: 'kanban', columns, subtitle } : undefined
+    }
+    case 'table': {
+      const columns = Array.isArray(r.columns)
+        ? (r.columns as unknown[]).filter((x): x is string => typeof x === 'string')
+        : []
+      const rows: string[][] = []
+      if (Array.isArray(r.rows)) {
+        for (const row of r.rows as unknown[]) {
+          if (!Array.isArray(row)) continue
+          rows.push((row as unknown[]).map((c) => (typeof c === 'string' ? c : String(c ?? ''))))
+        }
+      }
+      return columns.length > 0 ? { kind: 'table', columns, rows, subtitle } : undefined
+    }
+    default:
+      return undefined
   }
 }
 
@@ -526,14 +221,13 @@ function coerceSizes(raw: unknown): PanelSize[] | undefined {
   return out.length > 0 ? out : undefined
 }
 
-/** Fetch and parse the market manifest. Returns an index shape with empty
- *  arrays + a `warnings[]` entry when the remote is unreachable — callers
- *  should not throw the whole UI away just because the market is down. */
+/** Read and parse the local catalog manifest. Returns an empty shape with
+ *  a `warnings[]` entry if the on-disk catalog is missing or malformed —
+ *  callers should not throw the whole UI away. */
 export async function fetchMarketIndex(): Promise<MarketIndex> {
-  const base = baseUrl()
-  const url = `${base}/index.json`
+  const dir = catalogDir()
   try {
-    const text = await getText(url)
+    const text = readCatalogFile('index.json')
     const raw = JSON.parse(text) as Record<string, unknown>
     const companies = Array.isArray(raw.companies)
       ? (raw.companies as unknown[])
@@ -555,24 +249,17 @@ export async function fetchMarketIndex(): Promise<MarketIndex> {
           .map((x) => coerceEntry(x, 'panel'))
           .filter((x): x is MarketEntry => !!x)
       : []
-    const allEmpty =
-      companies.length === 0 &&
-      teams.length === 0 &&
-      agents.length === 0 &&
-      panels.length === 0
-    if (allEmpty) {
-      return { ...DEMO_INDEX, source: `${base} (demo fallback)` }
-    }
-    return { companies, teams, agents, panels, warnings: [], source: base }
+    return { companies, teams, agents, panels, warnings: [], source: dir }
   } catch (e) {
-    // Remote unreachable — serve built-in demo catalog so the market UI still
-    // has something to show. The warning banner tells users this is a fallback.
     return {
-      ...DEMO_INDEX,
+      companies: [],
+      teams: [],
+      agents: [],
+      panels: [],
       warnings: [
-        `Market catalog unreachable (${e instanceof Error ? e.message : String(e)}) — showing built-in demo entries.`,
+        `Failed to load local catalog at ${dir} (${e instanceof Error ? e.message : String(e)}).`,
       ],
-      source: `${base} (demo fallback)`,
+      source: dir,
     }
   }
 }
@@ -587,62 +274,22 @@ function pathFor(type: MarketType, id: string, category?: string): string {
     case 'company':
       return `companies/${safe}.openhive-company.yaml`
     case 'panel': {
-      // Panels live under panels/<category>/<id>.yaml in the remote repo.
-      // Category is required — caller must supply it from the index entry.
+      // Panels live under panels/<category>/<id>.yaml. Category is required —
+      // caller must supply it from the index entry.
       const cat = (category ?? '').replace(/[^a-zA-Z0-9._-]/g, '_') || 'uncategorized'
       return `panels/${cat}/${safe}.openhive-panel-frame.yaml`
     }
   }
 }
 
-/** Download and parse a single frame YAML from the remote market. Returns
- *  the parsed object — exactly what `installFrame` / `installAgentFrame`
- *  expects as `frame`.
- *
- *  Demo panel entries (`demo-*` id + `type=panel`) are resolved to the
- *  local `frame-market-seed/panels/<category>/<id-without-demo->.yaml`
- *  file so the market is end-to-end installable during dev + tests
- *  without any external repo. Non-panel demos still throw. */
+/** Read and parse a single frame YAML from the local catalog. Returns the
+ *  parsed object — exactly what `installFrame` / `installAgentFrame`
+ *  expects as `frame`. */
 export async function fetchMarketFrame(
   type: MarketType,
   id: string,
   category?: string,
 ): Promise<unknown> {
-  if (id.startsWith('demo-')) {
-    if (type === 'panel') {
-      const local = loadLocalSeedPanel(id.replace(/^demo-/, ''), category ?? '')
-      if (local) return local
-    }
-    const err = new Error(
-      'This is a demo entry from the built-in catalog — publish a real frame to the market repo to install it.',
-    )
-    ;(err as { code?: string }).code = 'DEMO'
-    throw err
-  }
-  const base = baseUrl()
-  const url = `${base}/${pathFor(type, id, category)}`
-  const text = await getText(url)
+  const text = readCatalogFile(pathFor(type, id, category))
   return yaml.load(text)
-}
-
-/** Load a panel frame from `frame-market-seed/` in the repo. Returns null
- *  if the file doesn't exist (caller falls back to the DEMO error). */
-function loadLocalSeedPanel(id: string, category: string): unknown | null {
-  try {
-    const seedRoot = process.env.OPENHIVE_MARKET_SEED_DIR
-      ? process.env.OPENHIVE_MARKET_SEED_DIR
-      : path.join(repoRoot(), 'frame-market-seed')
-    const safeId = id.replace(/[^a-zA-Z0-9._-]/g, '_')
-    const safeCat = category.replace(/[^a-zA-Z0-9._-]/g, '_')
-    const file = path.join(
-      seedRoot,
-      'panels',
-      safeCat,
-      `${safeId}.openhive-panel-frame.yaml`,
-    )
-    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return null
-    return yaml.load(fs.readFileSync(file, 'utf8'))
-  } catch {
-    return null
-  }
 }

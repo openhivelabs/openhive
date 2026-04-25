@@ -247,12 +247,51 @@ export async function callTool(
     if (typeof text === 'string') pieces.push(text)
     else pieces.push(JSON.stringify(block))
   }
-  const body = pieces.join('\n')
+  let body = pieces.join('\n')
+  body = unwrapUntrustedData(body)
   const capped = capMcpBody(body)
   if ((result as { isError?: boolean }).isError) {
     return `ERROR from ${name}__${toolName}: ${capped || 'unknown error'}`
   }
   return capped
+}
+
+/** Some MCP servers (Supabase, others) wrap SQL/tool output in nested
+ *  envelopes as a prompt-injection guard:
+ *    1. The MCP content block's text is itself a JSON object like
+ *       `{"result": "<warning text>...<untrusted-data-XXX>\n[...]\n</untrusted-data-XXX>..."}`.
+ *    2. Inside the `result` string, the actual payload is wrapped in
+ *       `<untrusted-data-XXX>...</untrusted-data-XXX>` tags.
+ *  That structure is fine for an LLM but breaks structured consumers
+ *  (the panel mapper). We unwrap both layers when present and return
+ *  just the inner payload (typically a JSON array). Falls through
+ *  unchanged when nothing matches. */
+function unwrapUntrustedData(body: string): string {
+  // Layer 1: JSON envelope with `result` field. Supabase wraps execute_sql
+  // output this way; other MCP servers may use different keys.
+  let inner = body
+  try {
+    const parsed = JSON.parse(body) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>
+      const candidate = obj.result ?? obj.text ?? obj.body
+      if (typeof candidate === 'string') inner = candidate
+    }
+  } catch {
+    /* not JSON, keep raw */
+  }
+  // Layer 2: <untrusted-data-XXX>...</untrusted-data-XXX> envelope. The
+  // warning preamble mentions the tag name in prose, so a generic match
+  // would pick up junk from the warning instead of the real payload.
+  // Require the captured content to look like JSON (object or array) so
+  // we land on the actual data block.
+  const re = /<untrusted-data-[\w-]+>\s*(\[[\s\S]*?\]|\{[\s\S]*?\})\s*<\/untrusted-data-[\w-]+>/g
+  let best = ''
+  for (const m of inner.matchAll(re)) {
+    const captured = (m[1] ?? '').trim()
+    if (captured.length > best.length) best = captured
+  }
+  return best.length > 0 ? best : inner
 }
 
 export function capMcpBody(body: string): string {
