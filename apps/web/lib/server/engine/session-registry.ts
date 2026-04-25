@@ -105,6 +105,26 @@ export async function stop(sessionId: string): Promise<boolean> {
   // The chat loop may be parked on the user-message inbox — wake it so the
   // generator observes the abort and exits.
   closeUserInbox(sessionId)
+  // Eager terminal meta write. Without this, the engine generator throws on
+  // abort and never emits `run_finished` / `turn_finished`, so meta.status
+  // stays 'running' forever — the FE keeps subscribing to the dead SSE and
+  // freezes when the user navigates. By the time /stop returns 200, status
+  // is guaranteed terminal so the FE can move on. The boot-time
+  // reclassifier still owns the hard-crash recovery path; this just covers
+  // the explicit-cancel path that abort() short-circuits past.
+  const now = Date.now()
+  sessionsStore.updateMeta(sessionId, {
+    status: 'abandoned',
+    finished_at: now,
+    abandoned_reason: {
+      kind: 'cancelled_by_user',
+      last_event_seq: null,
+      last_event_kind: null,
+      last_event_ts: null,
+      detected_at: now,
+    },
+    error: 'cancelled',
+  })
   return true
 }
 

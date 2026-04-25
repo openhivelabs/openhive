@@ -49,6 +49,10 @@ export type EventKind =
   // A3 — artifact rehydration
   | 'artifact.read'
   | 'artifact.read.denied'
+  // Provider-side hosted tool lifecycle (Codex web_search, Anthropic
+  // server_tool_use). Emitted per phase so the UI can show "🔍 web_search
+  // searching…" instead of a blank turn while a 30-150s native search runs.
+  | 'native_tool'
 
 export interface Event {
   kind: EventKind

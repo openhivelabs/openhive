@@ -3,7 +3,8 @@
 
 stdin JSON: {query, count?, region?}
 stdout JSON (success): {ok: true, query, count_requested, count_returned,
-                         source: "duckduckgo-lite", results: [...]}
+                         source: "yahoo"|"mojeek"|"duckduckgo-lite"|"duckduckgo-html",
+                         results: [...]}
 stdout JSON (failure): {ok: false, error_code, error, guidance, status?}
 """
 
@@ -38,7 +39,7 @@ def main() -> int:
     region = str(params.get("region", "wt-wt"))
 
     try:
-        results = search(query=query, count=count_requested, region=region)
+        results, source = search(query=query, count=count_requested, region=region)
     except SearchError as exc:
         if getattr(exc, "reason", None) == "budget_exceeded":
             return _emit(
@@ -106,7 +107,7 @@ def main() -> int:
                 "query": query,
                 "count_requested": count_requested,
                 "count_returned": 0,
-                "source": "duckduckgo-lite",
+                "source": source,
                 "results": [],
                 "warning": "no results parsed — try a different query or region",
             }
@@ -118,7 +119,7 @@ def main() -> int:
             "query": query,
             "count_requested": count_requested,
             "count_returned": len(results),
-            "source": "duckduckgo-lite",
+            "source": source,
             "results": results,
         }
     )
