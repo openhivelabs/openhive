@@ -287,7 +287,7 @@ const DEMO_PANELS: MarketEntry[] = [
     name: 'Total Count',
     description:
       'Single-number tile: total rows in a chosen table. Default reads the customer table.',
-    tags: ['kpi', 'count', 'universal'],
+    tags: ['count', 'universal'],
     author: 'OpenHive',
     category: 'kpi',
     sizes: [
@@ -302,7 +302,7 @@ const DEMO_PANELS: MarketEntry[] = [
     name: 'Sum Metric',
     description:
       'Sum of a numeric column across all rows. Default sums the `value` column on the customer table.',
-    tags: ['kpi', 'sum', 'universal'],
+    tags: ['sum', 'universal'],
     author: 'OpenHive',
     category: 'kpi',
     sizes: [
@@ -317,7 +317,7 @@ const DEMO_PANELS: MarketEntry[] = [
     name: 'Period Change %',
     description:
       'Week-over-week percent change in row count. Assumes a `created_at` column (ISO date or unix epoch).',
-    tags: ['kpi', 'growth', 'universal'],
+    tags: ['growth', 'universal'],
     author: 'OpenHive',
     category: 'kpi',
     sizes: [
@@ -334,7 +334,7 @@ const DEMO_PANELS: MarketEntry[] = [
     name: 'Trend Line',
     description:
       'Line chart of daily row count over the last 30 days. Swap the table to trend any time-series.',
-    tags: ['chart', 'trend', 'time-series', 'universal'],
+    tags: ['trend', 'time-series', 'universal'],
     author: 'OpenHive',
     category: 'chart',
     sizes: [
@@ -349,7 +349,7 @@ const DEMO_PANELS: MarketEntry[] = [
     name: 'Bar by Category',
     description:
       'Horizontal bar chart grouped by a category column. Default groups the customer table by `stage`.',
-    tags: ['chart', 'bar', 'distribution', 'universal'],
+    tags: ['bar', 'distribution', 'universal'],
     author: 'OpenHive',
     category: 'chart',
     sizes: [
@@ -365,7 +365,7 @@ const DEMO_PANELS: MarketEntry[] = [
     name: 'Stacked Composition',
     description:
       'Composition of a total broken down by a grouping column — useful for pipeline mix, channel breakdowns.',
-    tags: ['chart', 'composition', 'mix', 'universal'],
+    tags: ['composition', 'mix', 'universal'],
     author: 'OpenHive',
     category: 'chart',
     sizes: [
@@ -382,7 +382,7 @@ const DEMO_PANELS: MarketEntry[] = [
     name: 'Deal Pipeline',
     description:
       'Table of open deals with amount, stage, owner. Deal carries customer_id so it links to any customer table the user already has.',
-    tags: ['table', 'sales', 'relational'],
+    tags: ['sales', 'relational'],
     author: 'OpenHive',
     category: 'table',
     sizes: [
@@ -397,7 +397,7 @@ const DEMO_PANELS: MarketEntry[] = [
     name: 'Task Board',
     description:
       'Kanban of tasks grouped by status. Task carries customer_id and deal_id for cross-entity linking.',
-    tags: ['kanban', 'ops', 'relational'],
+    tags: ['ops', 'relational'],
     author: 'OpenHive',
     category: 'kanban',
     sizes: [
@@ -414,7 +414,7 @@ const DEMO_PANELS: MarketEntry[] = [
     name: 'Workout Log',
     description:
       'Fitness log — record workouts with duration and intensity. Own `workout` table, unrelated to business data.',
-    tags: ['table', 'fitness', 'personal'],
+    tags: ['fitness', 'personal'],
     author: 'OpenHive',
     category: 'table',
     sizes: [
@@ -429,7 +429,7 @@ const DEMO_PANELS: MarketEntry[] = [
     name: 'Library Books',
     description:
       'Personal library — books with title, author, status. `book` table.',
-    tags: ['table', 'library', 'personal'],
+    tags: ['library', 'personal'],
     author: 'OpenHive',
     category: 'table',
     sizes: [
@@ -444,7 +444,7 @@ const DEMO_PANELS: MarketEntry[] = [
     name: 'Baseball Roster',
     description:
       'Team roster — players with position and jersey number. `player` table, sport-specific.',
-    tags: ['table', 'baseball', 'sports'],
+    tags: ['baseball', 'sports'],
     author: 'OpenHive',
     category: 'table',
     sizes: [
@@ -459,7 +459,7 @@ const DEMO_PANELS: MarketEntry[] = [
     name: 'Podcast Episodes',
     description:
       'Podcast studio — episodes with guest, duration, release status. `episode` table.',
-    tags: ['table', 'podcast', 'media'],
+    tags: ['podcast', 'media'],
     author: 'OpenHive',
     category: 'table',
     sizes: [

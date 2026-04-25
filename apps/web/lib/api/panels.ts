@@ -86,6 +86,27 @@ export async function buildBinding(
   )
 }
 
+export interface RebindResult {
+  binding: Record<string, unknown>
+  panel_type: string
+  data: unknown
+  error: string | null
+}
+
+export async function rebindPanel(input: {
+  team_id: string
+  spec: Record<string, unknown>
+  user_intent: string | null
+}): Promise<RebindResult> {
+  return jsonOrThrow(
+    await fetch('/api/panels/rebind', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+  )
+}
+
 export interface ActionResult {
   ok: boolean
   result?: unknown

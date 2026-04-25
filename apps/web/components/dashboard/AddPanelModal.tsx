@@ -1,347 +1,110 @@
-import { CircleNotch, Sparkle, Warning, X } from '@phosphor-icons/react'
-import { useEffect, useMemo, useState } from 'react'
+import { CircleNotch, X } from '@phosphor-icons/react'
+import type React from 'react'
+import { useEffect, useState } from 'react'
 import { PanelShape } from '@/components/dashboard/BoundPanel'
-import {
-  type PanelTemplate,
-  buildBinding,
-  fetchPanelTemplates,
-  previewBinding,
-} from '@/lib/api/panels'
 import type { PanelBinding, PanelSpec } from '@/lib/api/dashboards'
+import { previewBinding, rebindPanel } from '@/lib/api/panels'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
+import { useT } from '@/lib/i18n'
+
+type Span = 1 | 2 | 3 | 4 | 5 | 6
+const SPANS: readonly Span[] = [1, 2, 3, 4, 5, 6]
+/** Px per grid unit inside the preview pane. Mirrors the dashboard's cell
+ *  shape (square) so a 1×1 preview is square, just like on the board.
+ *  Smaller than the live grid (195) so 6×6 fits in the modal. */
+const PREVIEW_UNIT = 110
+const PREVIEW_GAP = 12
 
 /**
- * Two-step modal:
- *  - Create mode: pick a template → describe data → AI fills binding → preview → save
- *  - Edit mode:   skip the gallery, open the builder pre-filled with `existingSpec`
- *
- * The builder is the same component either way; only the entry path + the save
- * callback differ. `existingSpec` makes the builder start populated.
+ * Panel edit modal. The original component supported both an "Add" gallery
+ * flow and an "Edit" pre-filled flow; the gallery is no longer reachable
+ * (Add is now driven by FrameMarketModal), so this is purely the edit flow,
+ * trimmed down to match the Frame Market detail view's tighter layout.
  */
 export function AddPanelModal({
   open,
   teamId,
   existingSpec,
   onClose,
-  onAdd,
   onUpdate,
 }: {
   open: boolean
   teamId: string | null
-  /** When set, modal skips the gallery and opens the builder in edit mode. */
   existingSpec?: PanelSpec | null
   onClose: () => void
-  onAdd: (spec: PanelSpec) => void
-  /** Called on save in edit mode (instead of onAdd). */
+  /** Unused — Add flow is now FrameMarketModal. Kept on the prop list for
+   *  call-site backwards compat. */
+  onAdd?: (spec: PanelSpec) => void
   onUpdate?: (spec: PanelSpec) => void
 }) {
-  const [templates, setTemplates] = useState<PanelTemplate[]>([])
-  const [chosen, setChosen] = useState<PanelTemplate | null>(null)
+  const t = useT()
 
-  useEffect(() => {
-    if (!open) return
-    void fetchPanelTemplates().then(setTemplates).catch(() => setTemplates([]))
-  }, [open])
-
-  // In edit mode, synthesise a template from the existing spec so the builder
-  // can reuse the same state machine. The binding_skeleton field is left
-  // empty — AI won't be re-used unless the user clicks Generate again.
-  const editingTemplate = useMemo<PanelTemplate | null>(() => {
-    if (!existingSpec) return null
-    return {
-      id: existingSpec.id,
-      name: existingSpec.title || 'Panel',
-      description: '',
-      icon: '✏️',
-      category: 'custom',
-      panel: {
-        type: existingSpec.type,
-        colSpan: existingSpec.colSpan,
-        rowSpan: existingSpec.rowSpan,
-        props: existingSpec.props,
-      },
-      binding_skeleton: (existingSpec.binding as unknown as Record<string, unknown>) || {},
-      ai_prompts: {},
-    }
-  }, [existingSpec])
-
-  const activeTemplate = editingTemplate ?? chosen
-  const isEditing = !!editingTemplate
-
-  useEscapeClose(open, () => {
-    if (chosen && !isEditing) setChosen(null)
-    else onClose()
-  })
-
-  if (!open) return null
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
-      onClick={() => {
-        if (chosen && !isEditing) setChosen(null)
-        else onClose()
-      }}
-      onKeyDown={(e) =>
-        e.key === 'Escape' && (chosen && !isEditing ? setChosen(null) : onClose())
-      }
-    >
-      <div
-        className="w-[1080px] max-w-[96vw] h-[86vh] rounded-md bg-white shadow-xl border border-neutral-200 flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-neutral-200">
-          <h2 className="text-base font-semibold">
-            {isEditing
-              ? `Edit panel — ${existingSpec?.title ?? ''}`
-              : chosen
-                ? `Configure "${chosen.name}"`
-                : 'Add panel'}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="p-1 rounded-sm hover:bg-neutral-100"
-          >
-            <X className="w-4 h-4 text-neutral-500" />
-          </button>
-        </div>
-
-        {!activeTemplate ? (
-          <TemplateGallery templates={templates} onPick={setChosen} />
-        ) : (
-          <BindingBuilder
-            template={activeTemplate}
-            teamId={teamId}
-            existingSpec={existingSpec ?? null}
-            onBack={isEditing ? onClose : () => setChosen(null)}
-            onSave={(spec) => {
-              if (isEditing && onUpdate) onUpdate(spec)
-              else onAdd(spec)
-              setChosen(null)
-              onClose()
-            }}
-          />
-        )}
-      </div>
-    </div>
+  const [title, setTitle] = useState(existingSpec?.title ?? '')
+  const [intent, setIntent] = useState('')
+  const [binding, setBinding] = useState<PanelBinding | null>(
+    (existingSpec?.binding as PanelBinding | undefined) ?? null,
   )
-}
-
-// -----------------------------------------------------------------------------
-
-function TemplateGallery({
-  templates,
-  onPick,
-}: {
-  templates: PanelTemplate[]
-  onPick: (t: PanelTemplate) => void
-}) {
-  const groups = useMemo(() => {
-    const map = new Map<string, PanelTemplate[]>()
-    for (const t of templates) {
-      if (!map.has(t.category)) map.set(t.category, [])
-      map.get(t.category)!.push(t)
-    }
-    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-  }, [templates])
-
-  if (templates.length === 0) {
-    return null
-  }
-
-  return (
-    <div className="overflow-y-auto px-6 py-5 space-y-6">
-      <p className="text-[13px] text-neutral-500">
-        Pick a panel shape. In the next step you describe the data in plain
-        language and the AI fills in the binding.
-      </p>
-      {groups.map(([cat, items]) => (
-        <section key={cat}>
-          <div className="text-[11.5px] uppercase tracking-wide font-semibold text-neutral-400 mb-2">
-            {cat}
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            {items.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => onPick(t)}
-                className="text-left rounded-md border border-neutral-200 bg-white hover:border-neutral-500 hover:shadow-md transition-all overflow-hidden flex flex-col"
-              >
-                <div className="h-[120px] bg-neutral-50 border-b border-neutral-200 flex items-center justify-center p-3">
-                  <ShapeThumbnail panelType={t.panel.type} />
-                </div>
-                <div className="p-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[16px]">{t.icon || '▦'}</span>
-                    <span className="font-semibold text-neutral-900 text-[14px] truncate">
-                      {t.name}
-                    </span>
-                    <span className="ml-auto text-[10.5px] text-neutral-400 font-mono">
-                      {t.panel.type}
-                    </span>
-                  </div>
-                  <p className="text-[12px] text-neutral-500 mt-1 leading-snug line-clamp-2">
-                    {t.description}
-                  </p>
-                </div>
-              </button>
-            ))}
-          </div>
-        </section>
-      ))}
-    </div>
-  )
-}
-
-/** Tiny stylized sketch of what each panel type looks like — used in gallery
- *  cards so the user can see shape at a glance without reading the label. */
-function ShapeThumbnail({ panelType }: { panelType: string }) {
-  if (panelType === 'kpi') {
-    return (
-      <div className="flex flex-col gap-1.5 items-start w-full">
-        <div className="h-1.5 w-10 rounded bg-neutral-300" />
-        <div className="h-7 w-16 rounded bg-neutral-800" />
-      </div>
-    )
-  }
-  if (panelType === 'table') {
-    return (
-      <div className="w-full space-y-1">
-        <div className="h-1.5 bg-neutral-400 rounded" />
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="h-1.5 bg-neutral-200 rounded" />
-        ))}
-      </div>
-    )
-  }
-  if (panelType === 'kanban') {
-    return (
-      <div className="w-full grid grid-cols-3 gap-1.5">
-        {Array.from({ length: 3 }).map((_, c) => (
-          <div key={c} className="rounded bg-neutral-100 border border-neutral-200 p-1 space-y-1">
-            <div className="h-1.5 bg-neutral-400 rounded" />
-            <div className="h-3 bg-white border border-neutral-200 rounded" />
-            <div className="h-3 bg-white border border-neutral-200 rounded" />
-          </div>
-        ))}
-      </div>
-    )
-  }
-  if (panelType === 'chart') {
-    const heights = [50, 70, 30, 85, 45]
-    return (
-      <div className="flex items-end gap-1 h-full w-full">
-        {heights.map((h, i) => (
-          <div
-            key={i}
-            className="flex-1 bg-amber-400 rounded-t"
-            style={{ height: `${h}%` }}
-          />
-        ))}
-      </div>
-    )
-  }
-  if (panelType === 'list') {
-    return (
-      <div className="w-full space-y-1.5">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-neutral-400" />
-            <div className="h-1.5 flex-1 bg-neutral-300 rounded" />
-          </div>
-        ))}
-      </div>
-    )
-  }
-  if (panelType === 'note') {
-    return (
-      <div className="w-full space-y-1">
-        <div className="h-1.5 bg-neutral-400 rounded w-1/2" />
-        <div className="h-1.5 bg-neutral-200 rounded" />
-        <div className="h-1.5 bg-neutral-200 rounded" />
-        <div className="h-1.5 bg-neutral-200 rounded w-3/4" />
-      </div>
-    )
-  }
-  return <div className="w-full h-full bg-neutral-200 rounded" />
-}
-
-// -----------------------------------------------------------------------------
-
-function BindingBuilder({
-  template,
-  teamId,
-  existingSpec,
-  onBack,
-  onSave,
-}: {
-  template: PanelTemplate
-  teamId: string | null
-  existingSpec?: PanelSpec | null
-  onBack: () => void
-  onSave: (spec: PanelSpec) => void
-}) {
-  const [goal, setGoal] = useState('')
-  const [title, setTitle] = useState(existingSpec?.title || template.name)
-  const [binding, setBinding] = useState<Record<string, unknown> | null>(
-    existingSpec?.binding ? (existingSpec.binding as unknown as Record<string, unknown>) : null,
-  )
-  const [previewData, setPreviewData] = useState<unknown>(null)
-  const [busy, setBusy] = useState<'build' | 'preview' | null>(null)
+  const [data, setData] = useState<unknown>(null)
+  const [busy, setBusy] = useState<'rebind' | 'preview' | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [colSpan, setColSpan] = useState<1 | 2 | 3 | 4>(
-    ((existingSpec?.colSpan as 1 | 2 | 3 | 4) ?? (template.panel.colSpan as 1 | 2 | 3 | 4)) || 2,
+  const [colSpan, setColSpan] = useState<Span>(
+    (existingSpec?.colSpan as Span) ?? 2,
   )
-  const [rowSpan, setRowSpan] = useState<1 | 2 | 3 | 4>(
-    ((existingSpec?.rowSpan as 1 | 2 | 3 | 4) ?? (template.panel.rowSpan as 1 | 2 | 3 | 4)) || 1,
+  const [rowSpan, setRowSpan] = useState<Span>(
+    (existingSpec?.rowSpan as Span) ?? 2,
   )
 
-  const panelType = template.panel.type
-  const isEditing = !!existingSpec
-
-  // On mount in edit mode, session preview once so the user sees current data.
+  // When the modal (re)opens with a new spec, sync local state.
   useEffect(() => {
-    if (isEditing && teamId && binding) {
-      void (async () => {
-        const p = await previewBinding(teamId, panelType, binding).catch(() => null)
-        if (p?.ok) setPreviewData(p.data)
-      })()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const runBuild = async () => {
-    if (!teamId || !goal.trim()) return
-    setBusy('build')
+    if (!open || !existingSpec) return
+    setTitle(existingSpec.title ?? '')
+    setIntent('')
+    setBinding((existingSpec.binding as PanelBinding | undefined) ?? null)
+    setData(null)
+    setBusy(null)
     setError(null)
-    setPreviewData(null)
-    try {
-      const built = await buildBinding(teamId, template.id, goal.trim())
-      setBinding(built.binding)
-      const p = await previewBinding(teamId, built.panel_type, built.binding)
-      if (p.ok) setPreviewData(p.data)
-      else setError(p.error || 'preview failed')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(null)
-    }
-  }
+    setColSpan((existingSpec.colSpan as 1 | 2 | 3 | 4) ?? 2)
+    setRowSpan((existingSpec.rowSpan as 1 | 2 | 3 | 4) ?? 2)
+  }, [open, existingSpec])
 
-  const runPreview = async () => {
-    if (!teamId || !binding) return
-    setBusy('preview')
+  // Show the existing data once on open so the preview isn't blank.
+  useEffect(() => {
+    if (!open || !teamId || !existingSpec?.binding) return
+    let cancelled = false
+    void (async () => {
+      const r = await previewBinding(
+        teamId,
+        existingSpec.type,
+        existingSpec.binding as unknown as Record<string, unknown>,
+      ).catch(() => null)
+      if (!cancelled && r?.ok) setData(r.data)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [open, teamId, existingSpec])
+
+  useEscapeClose(open, onClose)
+  if (!open || !existingSpec) return null
+
+  const onApply = async () => {
+    if (!teamId) return
+    setBusy('rebind')
     setError(null)
     try {
-      const p = await previewBinding(teamId, panelType, binding)
-      if (p.ok) setPreviewData(p.data)
-      else setError(p.error || 'preview failed')
+      const next = await rebindPanel({
+        team_id: teamId,
+        spec: {
+          type: existingSpec.type,
+          title: existingSpec.title,
+          props: existingSpec.props,
+          binding: binding ?? existingSpec.binding,
+        } as unknown as Record<string, unknown>,
+        user_intent: intent.trim() ? intent.trim() : null,
+      })
+      setBinding(next.binding as unknown as PanelBinding)
+      setData(next.data)
+      if (next.error) setError(next.error)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -350,210 +113,225 @@ function BindingBuilder({
   }
 
   const save = () => {
-    if (!binding) return
-    const id = existingSpec?.id || `p_${Math.random().toString(36).slice(2, 8)}`
+    if (!onUpdate) return
     const spec: PanelSpec = {
-      id,
-      type: panelType as PanelSpec['type'],
-      title: title || template.name,
+      ...existingSpec,
+      title: title.trim() || existingSpec.title,
       colSpan,
       rowSpan,
-      props: (template.panel.props as Record<string, unknown>) ?? existingSpec?.props ?? {},
-      binding: binding as unknown as PanelBinding,
+      binding: (binding ?? existingSpec.binding) as PanelBinding,
     }
-    onSave(spec)
+    onUpdate(spec)
   }
 
   return (
-    <div className="flex-1 flex overflow-hidden">
-      {/* Left column — form */}
-      <div className="w-[400px] shrink-0 border-r border-neutral-200 flex flex-col">
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
-          <div>
-            <label className="text-[12.5px] font-medium text-neutral-600">Panel title</label>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="mt-1 w-full px-2.5 py-1.5 text-[14px] rounded-sm border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-300"
-            />
-          </div>
-          <div>
-            <label className="text-[12.5px] font-medium text-neutral-600">
-              Describe what this panel should show
-            </label>
-            <textarea
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              rows={4}
-              placeholder="e.g. Show deals closing this month, grouped by stage, sorted by amount"
-              className="mt-1 w-full px-2.5 py-1.5 text-[14px] rounded-sm border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-300 font-[inherit]"
-            />
-            <div className="text-[11.5px] text-neutral-400 mt-1">
-              AI picks from available data sources (team DB + connected MCP servers) and fills in the SQL / tool args.
-            </div>
-          </div>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('panel.edit.title')}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+      onKeyDown={(e) => e.key === 'Escape' && onClose()}
+    >
+      <div
+        className="w-[1200px] max-w-[96vw] h-[82vh] max-h-[820px] rounded-md bg-white dark:bg-neutral-900 shadow-xl border border-neutral-200 dark:border-neutral-800 flex flex-col overflow-hidden"
+        onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="shrink-0 flex items-center justify-between px-5 py-3 border-b border-neutral-200 dark:border-neutral-800">
+          <h2 className="text-[15px] font-semibold text-neutral-900 dark:text-neutral-50">
+            {t('panel.edit.title')}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t('common.close')}
+            className="p-1 rounded-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={runBuild}
-              disabled={busy !== null || !goal.trim() || !teamId}
-              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-sm bg-amber-500 text-white text-[13px] font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {busy === 'build' ? (
-                <CircleNotch className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Sparkle className="w-3.5 h-3.5" />
-              )}
-              {busy === 'build' ? 'Thinking…' : 'Generate'}
-            </button>
-            {binding && (
+        {/* Body — two columns: left form, right live preview */}
+        <div className="flex-1 min-h-0 flex overflow-hidden">
+          {/* Left column — controls */}
+          <div className="w-[360px] shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              {/* Section: title */}
+              <Section>
+                <label
+                  htmlFor="panel-edit-title"
+                  className="block text-[12px] font-medium text-neutral-500 dark:text-neutral-400 mb-1.5"
+                >
+                  {t('panel.edit.panelTitle')}
+                </label>
+                <input
+                  id="panel-edit-title"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  className="w-full px-3 py-2 text-[13px] rounded-sm border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-300"
+                />
+              </Section>
+
+              {/* Section: data */}
+              <Section>
+                <label
+                  htmlFor="panel-edit-intent"
+                  className="block text-[12px] font-medium text-neutral-500 dark:text-neutral-400 mb-1.5"
+                >
+                  {t('panel.edit.data')}
+                </label>
+                <textarea
+                  id="panel-edit-intent"
+                  value={intent}
+                  onChange={(e) => setIntent(e.target.value)}
+                  placeholder={t('panel.edit.intentPlaceholder')}
+                  rows={3}
+                  className="w-full px-3 py-2 text-[13px] rounded-sm border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-300 resize-none"
+                />
+                <button
+                  type="button"
+                  onClick={onApply}
+                  disabled={busy !== null || !teamId}
+                  className="mt-2 w-full inline-flex items-center justify-center gap-1.5 h-8 px-4 text-[13px] rounded-sm bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {busy === 'rebind' ? (
+                    <CircleNotch className="w-3.5 h-3.5 animate-spin" />
+                  ) : null}
+                  {busy === 'rebind'
+                    ? t('market.install.applying')
+                    : t('market.install.apply')}
+                </button>
+                {error && (
+                  <div className="mt-2 text-[12px] text-red-600 dark:text-red-300 font-mono break-all">
+                    {error}
+                  </div>
+                )}
+              </Section>
+
+              {/* Section: size */}
+              <Section>
+                <div className="block text-[12px] font-medium text-neutral-500 dark:text-neutral-400 mb-1.5">
+                  {t('panel.edit.size')}
+                </div>
+                <SizePicker
+                  label={t('panel.edit.width')}
+                  value={colSpan}
+                  onChange={(v) => setColSpan(v)}
+                />
+                <div className="mt-2">
+                  <SizePicker
+                    label={t('panel.edit.height')}
+                    value={rowSpan}
+                    onChange={(v) => setRowSpan(v)}
+                  />
+                </div>
+              </Section>
+            </div>
+
+            {/* Footer pinned to left column */}
+            <div className="shrink-0 flex items-center justify-end gap-2 px-5 py-3 border-t border-neutral-200 dark:border-neutral-800">
               <button
                 type="button"
-                onClick={runPreview}
-                disabled={busy !== null}
-                className="h-8 px-2.5 rounded-sm border border-neutral-300 text-[13px] hover:bg-neutral-50 disabled:opacity-50"
+                onClick={onClose}
+                className="h-8 px-3 rounded-sm text-[13px] text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
               >
-                {busy === 'preview' ? 'Running…' : 'Re-session'}
+                {t('panel.edit.cancel')}
               </button>
+              <button
+                type="button"
+                onClick={save}
+                disabled={!binding || busy !== null}
+                className="h-8 px-4 rounded-sm bg-neutral-900 text-white text-[13px] font-medium hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {t('panel.edit.save')}
+              </button>
+            </div>
+          </div>
+
+          {/* Right column — live preview. Outer scrolls when the preview
+              card is bigger than the pane (e.g. 6×6 on a small modal),
+              inner wrapper centers when it fits. */}
+          <div className="flex-1 min-w-0 bg-neutral-50 dark:bg-neutral-950 overflow-auto relative">
+            <div className="min-h-full min-w-full flex items-center justify-center p-6">
+              <div
+                className="flex flex-col rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-sm overflow-hidden transition-all shrink-0"
+                style={{
+                  width: `${colSpan * PREVIEW_UNIT + (colSpan - 1) * PREVIEW_GAP}px`,
+                  height: `${rowSpan * PREVIEW_UNIT + (rowSpan - 1) * PREVIEW_GAP}px`,
+                }}
+              >
+                <div className="shrink-0 px-3 py-1.5 border-b border-neutral-200 dark:border-neutral-700 text-[13px] font-medium text-neutral-700 dark:text-neutral-200 truncate">
+                  {title || existingSpec.title}
+                </div>
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  {data == null ? (
+                    <div className="h-full flex items-center justify-center text-[12px] text-neutral-400">
+                      —
+                    </div>
+                  ) : (
+                    <PanelShape
+                      panelType={existingSpec.type}
+                      data={data}
+                      props={existingSpec.props}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+            {busy === 'rebind' && (
+              <div className="absolute inset-0 flex items-center justify-center bg-neutral-50/50 dark:bg-neutral-950/50 pointer-events-none">
+                <CircleNotch className="w-5 h-5 text-neutral-400 animate-spin" />
+              </div>
             )}
           </div>
-
-          {error && (
-            <div className="text-[13px] text-red-700 bg-red-50 border border-red-200 rounded px-2.5 py-2 whitespace-pre-wrap font-mono">
-              <Warning className="inline w-3.5 h-3.5 mr-1" />
-              {error}
-            </div>
-          )}
-
-          <div className="pt-2 border-t border-neutral-100 space-y-2">
-            <div>
-              <label className="text-[12.5px] font-medium text-neutral-600">Width</label>
-              <div className="mt-1 grid grid-cols-4 gap-1">
-                {([1, 2, 3, 4] as const).map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setColSpan(n)}
-                    className={
-                      colSpan === n
-                        ? 'h-7 text-[12.5px] rounded-sm bg-neutral-900 text-white font-medium'
-                        : 'h-7 text-[12.5px] rounded-sm border border-neutral-300 hover:bg-neutral-50'
-                    }
-                  >
-                    {n} col
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <label className="text-[12.5px] font-medium text-neutral-600">Height</label>
-              <div className="mt-1 grid grid-cols-4 gap-1">
-                {([1, 2, 3, 4] as const).map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setRowSpan(n)}
-                    className={
-                      rowSpan === n
-                        ? 'h-7 text-[12.5px] rounded-sm bg-neutral-900 text-white font-medium'
-                        : 'h-7 text-[12.5px] rounded-sm border border-neutral-300 hover:bg-neutral-50'
-                    }
-                  >
-                    {n} row
-                  </button>
-                ))}
-              </div>
-              <div className="text-[11px] text-neutral-400 mt-1">
-                Each row ≈ 180px. {colSpan}×{rowSpan} on the dashboard grid.
-              </div>
-            </div>
-          </div>
-
-          {binding && (
-            <details className="rounded-sm border border-neutral-200">
-              <summary className="px-2.5 py-1.5 text-[12.5px] text-neutral-600 cursor-pointer hover:bg-neutral-50">
-                Generated binding (advanced)
-              </summary>
-              <pre className="text-[11px] font-mono p-2.5 bg-neutral-50 overflow-auto max-h-[220px]">
-                {JSON.stringify(binding, null, 2)}
-              </pre>
-            </details>
-          )}
-        </div>
-
-        <div className="shrink-0 px-5 py-3 border-t border-neutral-200 flex items-center justify-between">
-          <button
-            type="button"
-            onClick={onBack}
-            className="h-8 px-3 rounded-sm text-[13px] text-neutral-600 hover:bg-neutral-100"
-          >
-            ← Back
-          </button>
-          <button
-            type="button"
-            onClick={save}
-            disabled={!binding}
-            className="h-8 px-3 rounded-sm bg-neutral-900 text-white text-[13px] font-medium hover:opacity-90 disabled:opacity-50"
-          >
-            Add to dashboard
-          </button>
         </div>
       </div>
+    </div>
+  )
+}
 
-      {/* Right column — live preview of the actual panel */}
-      <div className="flex-1 bg-neutral-50 flex flex-col overflow-hidden">
-        <div className="shrink-0 px-4 py-2 border-b border-neutral-200 flex items-center gap-2">
-          <span className="text-[12px] uppercase tracking-wide font-semibold text-neutral-400">
-            Preview
-          </span>
-          <span className="text-[11.5px] text-neutral-400 font-mono">{panelType}</span>
-          {busy === 'build' && (
-            <span className="ml-auto text-[11.5px] text-neutral-400 flex items-center gap-1">
-              <CircleNotch className="w-3 h-3 animate-spin" /> generating
-            </span>
-          )}
-        </div>
-        <div className="flex-1 overflow-auto p-5 flex items-start justify-center">
-          {previewData === null ? (
-            <div className="text-[13px] text-neutral-400 pt-12 text-center max-w-[360px]">
-              After generating, your panel shows up here rendered exactly how it
-              will look on the dashboard.
-            </div>
-          ) : (
-            // Preview card sized to match the chosen grid footprint. The
-            // dashboard grid uses col widths in a 4-col layout and ~180px row
-            // heights; we mimic that here at a scale fitting the preview pane.
-            <div
-              className="rounded-md bg-white border border-neutral-200 shadow-sm overflow-hidden flex flex-col"
-              style={{
-                // Width: proportional to chosen cols (1..4) out of 4, capped.
-                width: `${(colSpan / 4) * 100}%`,
-                maxWidth: 640,
-                minWidth: 240,
-                // Height: ~140px per row (slightly tighter than the live grid's
-                // 180px so we fit 4 rows comfortably in the preview pane).
-                height: `${rowSpan * 140 + 36}px`,
-              }}
-            >
-              <div className="h-9 shrink-0 px-3 flex items-center gap-2 border-b border-neutral-100 bg-neutral-50">
-                <span className="text-[14px] font-medium text-neutral-800 truncate">
-                  {title || template.name}
-                </span>
-                <span className="ml-auto text-[11px] text-neutral-400 font-mono">
-                  {colSpan}×{rowSpan}
-                </span>
-              </div>
-              <div className="flex-1 overflow-auto">
-                <PanelShape
-                  panelType={panelType}
-                  data={previewData}
-                  props={template.panel.props as Record<string, unknown> | undefined}
-                />
-              </div>
-            </div>
-          )}
-        </div>
+function Section({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-5 py-4 border-b border-neutral-100 dark:border-neutral-800 last:border-b-0">
+      {children}
+    </div>
+  )
+}
+
+function SizePicker({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: Span
+  onChange: (v: Span) => void
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="w-12 shrink-0 text-[12px] text-neutral-500 dark:text-neutral-400">
+        {label}
+      </div>
+      <div className="flex-1 grid grid-cols-6 gap-1">
+        {SPANS.map((n) => (
+          <button
+            key={n}
+            type="button"
+            onClick={() => onChange(n)}
+            aria-pressed={value === n}
+            className={
+              value === n
+                ? 'h-7 text-[12.5px] rounded-sm bg-neutral-900 text-white font-medium dark:bg-neutral-100 dark:text-neutral-900 cursor-pointer'
+                : 'h-7 text-[12.5px] rounded-sm border border-neutral-200 dark:border-neutral-700 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer'
+            }
+          >
+            {n}
+          </button>
+        ))}
       </div>
     </div>
   )

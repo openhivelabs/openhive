@@ -161,8 +161,12 @@ export interface PanelSpec {
   type: PanelType
   title: string
   subtitle?: string
-  colSpan?: 1 | 2 | 3 | 4
-  rowSpan?: 1 | 2 | 3 | 4
+  colSpan?: 1 | 2 | 3 | 4 | 5 | 6
+  rowSpan?: 1 | 2 | 3 | 4 | 5 | 6
+  /** Explicit grid placement (1-based). When unset, the panel falls into the
+   *  CSS grid auto-flow (top-left packing). Set after the user drags it. */
+  col?: number
+  row?: number
   props?: Record<string, unknown>
   /** Optional. When present, the block renders cached data refreshed by the
    *  server on a schedule. When absent, the block falls back to its existing

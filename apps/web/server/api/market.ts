@@ -3,9 +3,13 @@ import { listConnected } from '@/lib/server/tokens'
 import { installAgentFrame } from '@/lib/server/agent-frames'
 import { installFrame } from '@/lib/server/frames'
 import { loadDashboard, saveDashboard } from '@/lib/server/dashboards'
+import { aiBindPanel } from '@/lib/server/panels/ai-bind'
 import { acquireInstallLock } from '@/lib/server/panels/install-lock'
 import { buildInstallPlan } from '@/lib/server/panels/install-plan'
-import { runExec } from '@/lib/server/team-data'
+import { apply as applyMapper } from '@/lib/server/panels/mapper'
+import { execute as executeSource } from '@/lib/server/panels/sources'
+import { resolveTeamSlugs } from '@/lib/server/companies'
+import { describeSchema, runExec } from '@/lib/server/team-data'
 import {
   type MarketType,
   fetchMarketFrame,
@@ -107,13 +111,26 @@ interface PanelApplyBody extends PanelInstallBody {
   decision?: 'reuse' | 'extend' | 'standalone'
   alter_sql?: string[]
   skip_create_tables?: string[]
+  user_intent?: string | null
+  /** Optional binding produced by an earlier `/install/ai-bind-preview` call.
+   *  When present we skip the (expensive) AI call here and trust the client's
+   *  preview-validated binding. */
+  prebuilt_binding?: Record<string, unknown> | null
+  /** User-chosen footprint on the dashboard grid. Overrides the frame
+   *  manifest's default size. */
+  col_span?: number
+  row_span?: number
 }
 
 // Shared: fetch panel frame + extract setup_sql + panel body.
 async function fetchPanelFrameParts(
   id: string,
   category: string | undefined,
-): Promise<{ setupSql: string | undefined; panel: Record<string, unknown> }> {
+): Promise<{
+  setupSql: string | undefined
+  panel: Record<string, unknown>
+  description: string | undefined
+}> {
   if (!category) throw new Error('category required for panel install')
   const frame = (await fetchMarketFrame('panel', id, category)) as
     | Record<string, unknown>
@@ -128,9 +145,14 @@ async function fetchPanelFrameParts(
   const setupSqlVal = (frame as { setup_sql?: unknown }).setup_sql
   const setupSql =
     typeof setupSqlVal === 'string' && setupSqlVal.trim() ? setupSqlVal : undefined
+  const descVal =
+    (frame as { description?: unknown }).description ??
+    (panelRaw as { description?: unknown }).description
+  const description = typeof descVal === 'string' ? descVal : undefined
   return {
     setupSql,
     panel: JSON.parse(JSON.stringify(panelRaw)) as Record<string, unknown>,
+    description,
   }
 }
 
@@ -203,49 +225,88 @@ market.post('/install/apply', async (c) => {
   // finally so a thrown install doesn't wedge future installs.
   const release = await acquireInstallLock(teamId)
   try {
-    const { setupSql, panel } = await fetchPanelFrameParts(id, body.category)
+    const { setupSql, panel, description } = await fetchPanelFrameParts(
+      id,
+      body.category,
+    )
     const skipCreateTables = new Set(body.skip_create_tables ?? [])
 
-    // 1) Run ALTERs for `extend`, then setup.sql filtered by skip list.
-    if (finalDecision === 'extend' && body.alter_sql && body.alter_sql.length > 0) {
-      for (const stmt of body.alter_sql) {
-        if (!stmt.trim()) continue
-        try {
-          runExec(targetCompany, stmt, {
-            source: `panel-install:${id}`,
-            note: `extend for ${id}`,
-            teamId,
-          })
-        } catch (e) {
-          // SQLite "duplicate column" errors are benign for idempotency —
-          // install ran before, column already there.
-          const msg = e instanceof Error ? e.message : String(e)
-          if (!/duplicate column|already exists/i.test(msg)) throw e
+    // AI binding route — runs whenever the user expressed an intent OR the
+    // team already has tables. Skips setup_sql (we map onto existing schema
+    // instead of creating new tables) and replaces the manifest binding with
+    // an AI-generated one. The deterministic install-plan path below is only
+    // reached when intent is empty AND the team is a blank canvas.
+    const userIntent =
+      typeof body.user_intent === 'string' && body.user_intent.trim().length > 0
+        ? body.user_intent.trim()
+        : null
+    const schema = (() => {
+      try {
+        return describeSchema(targetCompany, { teamId })
+      } catch {
+        return { tables: [], recent_migrations: [] }
+      }
+    })()
+    const useAi = userIntent !== null || (schema.tables?.length ?? 0) > 0
+
+    if (useAi) {
+      // Trust the prebuilt binding from a prior preview call when present —
+      // the user already saw it render in the modal preview, no point re-asking
+      // the LLM and risking a different answer.
+      const binding =
+        body.prebuilt_binding && typeof body.prebuilt_binding === 'object'
+          ? body.prebuilt_binding
+          : ((await aiBindPanel({
+              panel,
+              description,
+              schema,
+              userIntent,
+            })) as unknown as Record<string, unknown>)
+      panel.binding = binding
+    } else {
+      // 1) Run ALTERs for `extend`, then setup.sql filtered by skip list.
+      if (finalDecision === 'extend' && body.alter_sql && body.alter_sql.length > 0) {
+        for (const stmt of body.alter_sql) {
+          if (!stmt.trim()) continue
+          try {
+            runExec(targetCompany, stmt, {
+              source: `panel-install:${id}`,
+              note: `extend for ${id}`,
+              teamId,
+            })
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            if (!/duplicate column|already exists/i.test(msg)) throw e
+          }
         }
       }
-    }
 
-    if (finalDecision !== 'reuse' && setupSql) {
-      for (const stmt of splitStatements(setupSql)) {
-        if (!stmt.trim()) continue
-        if (shouldSkipCreate(stmt, skipCreateTables)) continue
-        try {
-          runExec(targetCompany, stmt, {
-            source: `panel-install:${id}`,
-            note: `setup_sql for ${id}`,
-            teamId,
-          })
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e)
-          // CREATE IF NOT EXISTS is idempotent, but bare CREATE may re-run —
-          // just log and move on.
-          if (!/already exists|duplicate column/i.test(msg)) throw e
+      if (finalDecision !== 'reuse' && setupSql) {
+        for (const stmt of splitStatements(setupSql)) {
+          if (!stmt.trim()) continue
+          if (shouldSkipCreate(stmt, skipCreateTables)) continue
+          try {
+            runExec(targetCompany, stmt, {
+              source: `panel-install:${id}`,
+              note: `setup_sql for ${id}`,
+              teamId,
+            })
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            if (!/already exists|duplicate column/i.test(msg)) throw e
+          }
         }
       }
     }
 
     // 2) Add the panel to the team's dashboard.
     panel.id = `p-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`
+    if (typeof body.col_span === 'number') {
+      panel.colSpan = Math.min(6, Math.max(1, Math.floor(body.col_span)))
+    }
+    if (typeof body.row_span === 'number') {
+      panel.rowSpan = Math.min(6, Math.max(1, Math.floor(body.row_span)))
+    }
     const layout = loadDashboard(targetCompany, targetTeam) ?? { blocks: [] }
     const blocks = Array.isArray(layout.blocks)
       ? (layout.blocks as Record<string, unknown>[])
@@ -260,6 +321,86 @@ market.post('/install/apply', async (c) => {
     return c.json({ detail: message }, code === 'ENOENT' ? 404 : 400)
   } finally {
     release()
+  }
+})
+
+// POST /api/market/install/ai-bind-preview
+// Returns { binding, panel_type, data } — runs the AI binder against the team's
+// current schema and executes the binding once so the modal can render a live
+// preview before the user commits to install.
+market.post('/install/ai-bind-preview', async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as PanelInstallBody & {
+    user_intent?: string | null
+  }
+  if (!body.id || !body.target_company_slug || !body.target_team_id) {
+    return c.json(
+      { detail: 'id, target_company_slug, target_team_id required' },
+      400,
+    )
+  }
+  try {
+    const { panel, description } = await fetchPanelFrameParts(
+      body.id,
+      body.category,
+    )
+    const targetCompany = body.target_company_slug
+    const teamId = body.target_team_id
+    const userIntent =
+      typeof body.user_intent === 'string' && body.user_intent.trim().length > 0
+        ? body.user_intent.trim()
+        : null
+    const schema = (() => {
+      try {
+        return describeSchema(targetCompany, { teamId })
+      } catch {
+        return { tables: [], recent_migrations: [] }
+      }
+    })()
+    const binding = await aiBindPanel({
+      panel,
+      description,
+      schema,
+      userIntent,
+    })
+    const panelType = String(panel.type ?? '')
+    const resolved = resolveTeamSlugs(teamId)
+    if (!resolved) {
+      return c.json({ detail: 'team not found' }, 404)
+    }
+    const ctx = {
+      companySlug: resolved.companySlug,
+      teamSlug: resolved.teamSlug,
+      teamId,
+    }
+    let data: unknown = null
+    let execError: string | null = null
+    try {
+      const raw = await executeSource(
+        binding.source as unknown as Record<string, unknown>,
+        ctx,
+      )
+      data = applyMapper(
+        raw,
+        binding.map as unknown as Record<string, unknown>,
+        panelType,
+      )
+    } catch (exc) {
+      execError = exc instanceof Error ? exc.message : String(exc)
+    }
+    const panelProps =
+      typeof panel.props === 'object' && panel.props !== null
+        ? (panel.props as Record<string, unknown>)
+        : null
+    return c.json({
+      binding,
+      panel_type: panelType,
+      panel_props: panelProps,
+      data,
+      error: execError,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ detail: message }, 400)
   }
 })
 

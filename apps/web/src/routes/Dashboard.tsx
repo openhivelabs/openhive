@@ -16,8 +16,13 @@ import {
 } from '@/lib/api/teamData'
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
-import { Package, PencilSimple, Plus } from '@phosphor-icons/react'
-import { useCallback, useEffect, useState } from 'react'
+import { Package, Plus } from '@phosphor-icons/react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+
+/** Cell unit in pixels — must match the grid template (auto-rows + cols).
+ *  Used to compute target grid coordinates from mouse drop position. */
+const CELL = 195
+const GAP = 12
 
 const STAGE_ORDER = ['prospect', 'qualified', 'proposal', 'won', 'lost'] as const
 const STAGE_LABEL: Record<string, string> = {
@@ -39,11 +44,78 @@ export function Dashboard() {
   const [schema, setSchema] = useState<SchemaResponse | null>(null)
   const [customers, setCustomers] = useState<QueryResult | null>(null)
   const [layout, setLayout] = useState<DashboardLayout | null>(null)
-  const [editing, setEditing] = useState(false)
-  const [draggingId, setDraggingId] = useState<string | null>(null)
-  const [dragOverId, setDragOverId] = useState<string | null>(null)
-  const [editingPanelId, setEditingPanelId] = useState<string | null>(null)
   const [marketOpen, setMarketOpen] = useState(false)
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [editingPanelId, setEditingPanelId] = useState<string | null>(null)
+  const gridRef = useRef<HTMLDivElement | null>(null)
+
+  const persist = useCallback(
+    async (next: DashboardLayout) => {
+      setLayout(next)
+      if (teamId) await saveDashboard(teamId, next).catch(() => {})
+    },
+    [teamId],
+  )
+
+  const removeBlock = useCallback(
+    (id: string) => {
+      void persist({ blocks: (layout?.blocks ?? []).filter((b) => b.id !== id) })
+    },
+    [layout, persist],
+  )
+
+  const updatePanel = useCallback(
+    (spec: PanelSpec) => {
+      void persist({
+        blocks: (layout?.blocks ?? []).map((b) => (b.id === spec.id ? spec : b)),
+      })
+    },
+    [layout, persist],
+  )
+
+  /** Translate a clientX/clientY drop position into the 1-based grid cell
+   *  under it. Returns null if the drop happened outside the grid. */
+  const cellFromPoint = useCallback((clientX: number, clientY: number) => {
+    const el = gridRef.current
+    if (!el) return null
+    const rect = el.getBoundingClientRect()
+    const x = clientX - rect.left
+    const y = clientY - rect.top
+    if (x < 0 || y < 0) return null
+    const col = Math.max(1, Math.floor(x / (CELL + GAP)) + 1)
+    const row = Math.max(1, Math.floor(y / (CELL + GAP)) + 1)
+    return { col, row }
+  }, [])
+
+  /** Move panel `sourceId` so its top-left is at (col, row). If another panel
+   *  is anchored at that exact cell, swap their positions — keeps the user's
+   *  intent (dragging onto a tile = swap) without auto-reflowing everything. */
+  const dropAt = useCallback(
+    (sourceId: string, col: number, row: number) => {
+      const blocks = layout?.blocks ?? []
+      const src = blocks.find((b) => b.id === sourceId)
+      if (!src) return
+      const occupant = blocks.find(
+        (b) => b.id !== sourceId && b.col === col && b.row === row,
+      )
+      const next = blocks.map((b) => {
+        if (b.id === sourceId) return { ...b, col, row }
+        if (occupant && b.id === occupant.id) {
+          // Send the occupant to wherever the source used to live. If source
+          // had no explicit position, drop the occupant's position (let it
+          // auto-flow into the freed slot).
+          if (src.col !== undefined && src.row !== undefined) {
+            return { ...b, col: src.col, row: src.row }
+          }
+          const { col: _c, row: _r, ...rest } = b
+          return rest
+        }
+        return b
+      })
+      void persist({ blocks: next })
+    },
+    [layout, persist],
+  )
 
   useEffect(() => {
     if (!teamId) return
@@ -77,46 +149,6 @@ export function Dashboard() {
     }
   }, [teamId, schema])
 
-  const persist = useCallback(
-    async (next: DashboardLayout) => {
-      setLayout(next)
-      if (teamId) await saveDashboard(teamId, next).catch(() => {})
-    },
-    [teamId],
-  )
-
-  const removeBlock = useCallback(
-    (id: string) => {
-      const next = { blocks: (layout?.blocks ?? []).filter((b) => b.id !== id) }
-      void persist(next)
-    },
-    [layout, persist],
-  )
-
-  const updatePanel = useCallback(
-    (spec: PanelSpec) => {
-      const next = {
-        blocks: (layout?.blocks ?? []).map((b) => (b.id === spec.id ? spec : b)),
-      }
-      void persist(next)
-    },
-    [layout, persist],
-  )
-
-  const reorderBlocks = useCallback(
-    (sourceId: string, targetId: string) => {
-      if (sourceId === targetId) return
-      const blocks = [...(layout?.blocks ?? [])]
-      const from = blocks.findIndex((b) => b.id === sourceId)
-      const to = blocks.findIndex((b) => b.id === targetId)
-      if (from < 0 || to < 0) return
-      const [moved] = blocks.splice(from, 1)
-      blocks.splice(to, 0, moved!)
-      void persist({ blocks })
-    },
-    [layout, persist],
-  )
-
   const customerRows = customers?.rows ?? []
   const totalValue = customerRows.reduce(
     (acc, r) => acc + (typeof r.value === 'number' ? r.value : Number(r.value ?? 0)),
@@ -127,47 +159,19 @@ export function Dashboard() {
     rows: customerRows.filter((r) => r.stage === stage),
   }))
 
-  const enterEdit = useCallback(() => {
-    setEditing(true)
-  }, [])
-
-  const leaveEdit = useCallback(() => {
-    setEditing(false)
-  }, [])
-
   return (
     <div className="h-full flex overflow-hidden bg-neutral-50 dark:bg-neutral-950">
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex-1 min-h-0 flex flex-col p-3">
           <div className="mb-3 flex items-center gap-2 shrink-0">
-            {editing ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setMarketOpen(true)}
-                  className="inline-flex items-center justify-center gap-1.5 h-[34px] px-[20px] text-[13px] leading-none bg-neutral-900 text-white rounded-sm hover:bg-neutral-800 cursor-pointer"
-                >
-                  <Plus weight="bold" className="w-3.5 h-3.5" />
-                  {t('dashboard.addPanel')}
-                </button>
-                <button
-                  type="button"
-                  onClick={leaveEdit}
-                  className="inline-flex items-center justify-center gap-1 h-[34px] px-[20px] text-[13px] leading-none bg-white dark:bg-neutral-900 text-neutral-500 dark:text-neutral-400 ring-1 ring-neutral-200 dark:ring-neutral-800 rounded-sm hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
-                >
-                  {t('dashboard.done')}
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                onClick={enterEdit}
-                className="inline-flex items-center justify-center gap-1 h-[34px] px-[20px] text-[13px] leading-none bg-neutral-900 text-white rounded-sm hover:bg-neutral-800 cursor-pointer"
-              >
-                <PencilSimple weight="bold" className="w-3.5 h-3.5" />
-                {t('dashboard.edit')}
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setMarketOpen(true)}
+              className="inline-flex items-center justify-center gap-1.5 h-[34px] px-[20px] text-[13px] leading-none bg-neutral-900 text-white rounded-sm hover:bg-neutral-800 cursor-pointer"
+            >
+              <Plus weight="bold" className="w-3.5 h-3.5" />
+              {t('dashboard.addPanel')}
+            </button>
           </div>
 
           <div className="flex-1 min-h-0 overflow-auto">
@@ -176,17 +180,29 @@ export function Dashboard() {
             ) : (layout?.blocks.length ?? 0) === 0 ? (
               <EmptyState />
             ) : (
-              <div className="grid grid-cols-4 auto-rows-[180px] gap-3">
+              <div
+                ref={gridRef}
+                className="grid gap-3 grid-cols-[repeat(auto-fill,195px)] auto-rows-[195px] justify-start min-h-full"
+                onDragOver={(e) => {
+                  if (!draggingId) return
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  const id = draggingId ?? e.dataTransfer.getData('text/plain')
+                  if (!id) return
+                  const cell = cellFromPoint(e.clientX, e.clientY)
+                  if (cell) dropAt(id, cell.col, cell.row)
+                  setDraggingId(null)
+                }}
+              >
                 {(layout?.blocks ?? []).map((spec) => (
                   <PanelCell
                     key={spec.id}
                     spec={spec}
-                    editing={editing}
                     draggingId={draggingId}
-                    dragOverId={dragOverId}
                     setDraggingId={setDraggingId}
-                    setDragOverId={setDragOverId}
-                    reorderBlocks={reorderBlocks}
                     removeBlock={removeBlock}
                     onEdit={() => setEditingPanelId(spec.id)}
                     customerRows={customerRows}
@@ -214,31 +230,31 @@ export function Dashboard() {
           }}
         />
       )}
-      <AddPanelModal
-        open={editingPanelId !== null}
-        teamId={teamId}
-        existingSpec={
-          editingPanelId ? (layout?.blocks.find((b) => b.id === editingPanelId) ?? null) : null
-        }
-        onClose={() => setEditingPanelId(null)}
-        onAdd={() => {}}
-        onUpdate={(spec) => {
-          updatePanel(spec)
-          setEditingPanelId(null)
-        }}
-      />
+      {teamId && (
+        <AddPanelModal
+          open={editingPanelId !== null}
+          teamId={teamId}
+          existingSpec={
+            editingPanelId
+              ? (layout?.blocks.find((b) => b.id === editingPanelId) ?? null)
+              : null
+          }
+          onClose={() => setEditingPanelId(null)}
+          onAdd={() => {}}
+          onUpdate={(spec) => {
+            updatePanel(spec)
+            setEditingPanelId(null)
+          }}
+        />
+      )}
     </div>
   )
 }
 
 function PanelCell({
   spec,
-  editing,
   draggingId,
-  dragOverId,
   setDraggingId,
-  setDragOverId,
-  reorderBlocks,
   removeBlock,
   onEdit,
   customerRows,
@@ -247,12 +263,8 @@ function PanelCell({
   teamId,
 }: {
   spec: PanelSpec
-  editing: boolean
   draggingId: string | null
-  dragOverId: string | null
   setDraggingId: (id: string | null) => void
-  setDragOverId: (id: string | null) => void
-  reorderBlocks: (sourceId: string, targetId: string) => void
   removeBlock: (id: string) => void
   onEdit: () => void
   customerRows: Record<string, unknown>[]
@@ -267,9 +279,9 @@ function PanelCell({
       subtitle={spec.subtitle}
       colSpan={spec.colSpan ?? 1}
       rowSpan={spec.rowSpan ?? 1}
-      editing={editing}
+      col={spec.col}
+      row={spec.row}
       dragging={draggingId === spec.id}
-      dragOver={dragOverId === spec.id && draggingId !== spec.id}
       onRemove={() => removeBlock(spec.id)}
       onEdit={spec.binding ? onEdit : undefined}
       onDragStart={(id, e) => {
@@ -277,24 +289,8 @@ function PanelCell({
         e.dataTransfer.setData('text/plain', id)
         setDraggingId(id)
       }}
-      onDragOver={(id, e) => {
-        e.preventDefault()
-        e.dataTransfer.dropEffect = 'move'
-        if (dragOverId !== id) setDragOverId(id)
-      }}
-      onDragLeave={(id) => {
-        if (dragOverId === id) setDragOverId(null)
-      }}
-      onDrop={(id, e) => {
-        e.preventDefault()
-        const src = draggingId ?? e.dataTransfer.getData('text/plain')
-        if (src && src !== id) reorderBlocks(src, id)
-        setDragOverId(null)
-        setDraggingId(null)
-      }}
       onDragEnd={() => {
         setDraggingId(null)
-        setDragOverId(null)
       }}
     >
       {spec.binding ? (
