@@ -1,0 +1,42 @@
+id: column-chart
+name: Column Chart
+description: >-
+  Vertical bars by category. Same data shape as Bar Chart, vertical
+  orientation. Use when category labels are short.
+author: OpenHive
+category: chart
+tags: [chart, column, bar, distribution, universal]
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS customer (
+    team_id    TEXT NOT NULL,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT,
+    email      TEXT,
+    stage      TEXT DEFAULT 'prospect',
+    value      REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: chart
+  title: By Category
+  colSpan: 2
+  rowSpan: 2
+  props:
+    variant: bar
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT stage AS category, COUNT(*) AS n
+          FROM customer
+          WHERE team_id = :team_id
+          GROUP BY stage
+          ORDER BY n DESC
+    map:
+      rows: "$.rows[*]"
+      group_by: category
+      value: n
+    refresh_seconds: 600

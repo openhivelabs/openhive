@@ -1,0 +1,42 @@
+id: pie-chart
+name: Pie Chart
+description: >-
+  Donut showing category share of a total. Default groups customer rows
+  by `stage`. Best with 3-6 categories.
+author: OpenHive
+category: chart
+tags: [chart, pie, donut, distribution, universal]
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS customer (
+    team_id    TEXT NOT NULL,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT,
+    email      TEXT,
+    stage      TEXT DEFAULT 'prospect',
+    value      REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: chart
+  title: Share by Category
+  colSpan: 2
+  rowSpan: 2
+  props:
+    variant: pie
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT stage AS category, COUNT(*) AS n
+          FROM customer
+          WHERE team_id = :team_id
+          GROUP BY stage
+          ORDER BY n DESC
+    map:
+      rows: "$.rows[*]"
+      group_by: category
+      value: n
+    refresh_seconds: 600

@@ -1,0 +1,87 @@
+{
+  "companies": [],
+  "teams": [],
+  "agents": [],
+  "panels": [
+    {
+      "id": "line-chart",
+      "name": "Line Chart",
+      "description": "Line chart of daily count with selectable 7 / 30 / 90 day window. Swap the table to plot any time-series.",
+      "author": "OpenHive",
+      "category": "chart",
+      "tags": ["chart", "line", "time-series", "universal"],
+      "preview": {
+        "kind": "line",
+        "subtitle": "Daily volume",
+        "time_ranges": [7, 30, 90],
+        "default_range": 30,
+        "data": [
+          1, 2, 1, 2, 3, 2, 1, 3, 2, 4, 3, 2, 4, 3, 5, 4, 3, 5, 4, 6,
+          5, 4, 6, 5, 7, 6, 5, 7, 6, 8, 4, 6, 5, 7, 8, 6, 9, 11, 9, 10,
+          12, 11, 9, 12, 14, 11, 13, 15, 14, 13, 16, 14, 12, 15, 17, 14,
+          16, 18, 17, 15, 19, 17, 20, 18, 22, 19, 21, 23, 20, 24, 22,
+          21, 25, 27, 24, 26, 28, 25, 27, 30, 28, 26, 31, 29, 33, 30,
+          28, 34, 32, 35
+        ]
+      }
+    },
+    {
+      "id": "bar-chart",
+      "name": "Bar Chart",
+      "description": "Horizontal bars by category. Use when category labels are long.",
+      "author": "OpenHive",
+      "category": "chart",
+      "tags": ["chart", "bar", "distribution", "category", "universal"],
+      "preview": {
+        "kind": "bar",
+        "orientation": "horizontal",
+        "subtitle": "By category",
+        "bars": [
+          { "label": "Prospect", "value": 42 },
+          { "label": "Qualified", "value": 28 },
+          { "label": "Proposal", "value": 17 },
+          { "label": "Won", "value": 9 },
+          { "label": "Lost", "value": 6 }
+        ]
+      }
+    },
+    {
+      "id": "column-chart",
+      "name": "Column Chart",
+      "description": "Vertical bars by category. Use when labels are short.",
+      "author": "OpenHive",
+      "category": "chart",
+      "tags": ["chart", "column", "bar", "distribution", "universal"],
+      "preview": {
+        "kind": "bar",
+        "subtitle": "By category",
+        "bars": [
+          { "label": "A", "value": 42 },
+          { "label": "B", "value": 28 },
+          { "label": "C", "value": 17 },
+          { "label": "D", "value": 9 },
+          { "label": "E", "value": 6 }
+        ]
+      }
+    },
+    {
+      "id": "pie-chart",
+      "name": "Pie Chart",
+      "description": "Donut showing category share of a total. Best with 3-6 categories.",
+      "author": "OpenHive",
+      "category": "chart",
+      "tags": ["chart", "pie", "donut", "distribution", "universal"],
+      "preview": {
+        "kind": "pie",
+        "subtitle": "Share",
+        "slices": [
+          { "label": "Prospect", "value": 42 },
+          { "label": "Qualified", "value": 28 },
+          { "label": "Proposal", "value": 17 },
+          { "label": "Won", "value": 9 },
+          { "label": "Lost", "value": 6 }
+        ]
+      }
+    }
+  ]
+}

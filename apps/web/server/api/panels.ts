@@ -18,6 +18,50 @@ export const panels = new Hono()
 
 const POLL_INTERVAL_MS = 1000
 
+interface PreviewBody {
+  team_id?: string
+  panel_type?: string
+  binding?: Record<string, unknown>
+}
+
+// POST /api/panels/preview
+// Run a draft binding against a team's data without persisting anything.
+// Used by the panel edit modal to show a live preview of the user's edit.
+panels.post('/preview', async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as PreviewBody
+  if (typeof body.team_id !== 'string' || !body.team_id) {
+    return c.json({ detail: 'team_id required' }, 400)
+  }
+  if (typeof body.panel_type !== 'string' || !body.panel_type) {
+    return c.json({ detail: 'panel_type required' }, 400)
+  }
+  if (!body.binding || typeof body.binding !== 'object') {
+    return c.json({ detail: 'binding required' }, 400)
+  }
+  const resolved = resolveTeamSlugs(body.team_id)
+  if (!resolved) {
+    return c.json({ detail: 'team not found' }, 404)
+  }
+  const ctx = {
+    companySlug: resolved.companySlug,
+    teamSlug: resolved.teamSlug,
+    teamId: body.team_id,
+  }
+  try {
+    const raw = await executeSource(body.binding.source ?? {}, ctx)
+    const shaped = applyMapper(
+      raw,
+      (body.binding.map as Record<string, unknown> | undefined) ?? {},
+      body.panel_type,
+    )
+    return c.json({ ok: true, data: shaped })
+  } catch (exc) {
+    const name = exc instanceof Error ? exc.name : 'Error'
+    const message = exc instanceof Error ? exc.message : String(exc)
+    return c.json({ ok: false, error: `${name}: ${message}` })
+  }
+})
+
 // POST /api/panels/rebind
 // Body: { team_id, spec: PanelSpec, user_intent }
 // Re-runs the AI binder against the team's current schema using an existing

@@ -8,6 +8,7 @@ import {
   fetchDashboard,
   saveDashboard,
 } from '@/lib/api/dashboards'
+import { refreshPanel } from '@/lib/api/panels'
 import {
   type QueryResult,
   type SchemaResponse,
@@ -66,9 +67,14 @@ export function Dashboard() {
 
   const updatePanel = useCallback(
     (spec: PanelSpec) => {
-      void persist({
-        blocks: (layout?.blocks ?? []).map((b) => (b.id === spec.id ? spec : b)),
-      })
+      void (async () => {
+        await persist({
+          blocks: (layout?.blocks ?? []).map((b) => (b.id === spec.id ? spec : b)),
+        })
+        // Force a re-execute of the new binding so the dashboard tile reflects
+        // the edit immediately instead of waiting for the next poll tick.
+        await refreshPanel(spec.id).catch(() => {})
+      })()
     },
     [layout, persist],
   )

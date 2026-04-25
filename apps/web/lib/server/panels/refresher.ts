@@ -15,7 +15,11 @@ import * as panelCache from './cache'
 import { apply as applyMapper } from './mapper'
 import { execute as executeSource, type SourceContext } from './sources'
 
-const inflight = new Set<string>()
+/** Per-panel in-flight promise. When a refresh is already running we hand
+ *  the same promise to subsequent callers instead of kicking off a parallel
+ *  one — that avoids two concurrent writers stepping on each other and
+ *  letting an older/slower call clobber a newer good result. */
+const inflight = new Map<string, Promise<void>>()
 
 export async function refreshDuePanels(): Promise<void> {
   const now = Date.now()
@@ -40,14 +44,13 @@ export async function refreshDuePanels(): Promise<void> {
 
         if (!isDue(panelId, binding as Record<string, unknown>, now)) continue
 
-        inflight.add(panelId)
         const ctx: SourceContext = {
           companySlug,
           teamSlug,
           teamId,
         }
         // Fire-and-forget per panel so slow sources don't serialise.
-        void refreshOne(panelId, block, binding as Record<string, unknown>, teamId, ctx)
+        void runRefresh(panelId, block, binding as Record<string, unknown>, teamId, ctx)
       }
     }
   }
@@ -65,6 +68,23 @@ function isDue(
   if (!cached) return true
   const age = nowMs - cached.fetched_at
   return age >= refreshS * 1000
+}
+
+/** Coalesce concurrent calls — second caller awaits the first's promise. */
+function runRefresh(
+  panelId: string,
+  block: Record<string, unknown>,
+  binding: Record<string, unknown>,
+  teamId: string,
+  ctx: SourceContext,
+): Promise<void> {
+  const existing = inflight.get(panelId)
+  if (existing) return existing
+  const p = refreshOne(panelId, block, binding, teamId, ctx).finally(() => {
+    inflight.delete(panelId)
+  })
+  inflight.set(panelId, p)
+  return p
 }
 
 async function refreshOne(
@@ -99,8 +119,6 @@ async function refreshOne(
       error: `${name}: ${message}`,
       durationMs,
     })
-  } finally {
-    inflight.delete(panelId)
   }
 }
 
@@ -128,7 +146,7 @@ export async function refreshOneNow(panelId: string): Promise<ReturnType<typeof 
           teamSlug,
           teamId,
         }
-        await refreshOne(panelId, block, binding as Record<string, unknown>, teamId, ctx)
+        await runRefresh(panelId, block, binding as Record<string, unknown>, teamId, ctx)
         return panelCache.get(panelId)
       }
     }

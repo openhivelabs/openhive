@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import { fetchArtifactsForTeam } from '../api/artifacts'
 import { appendMessage, clearMessages, listMessages } from '../api/messages'
-import { mockTriggers } from '../mock/triggers'
 import type { Artifact, DrawerTab, Message, Trigger } from '../types'
 
 interface DrawerState {
@@ -39,7 +38,7 @@ export const useDrawerStore = create<DrawerState>((set, get) => ({
   tab: 'chat',
   selectedAgentId: null,
   messages: [],
-  triggers: mockTriggers,
+  triggers: [],
   artifacts: [],
   loadedTeamIds: new Set<string>(),
   artifactsLoadedFor: new Set<string>(),

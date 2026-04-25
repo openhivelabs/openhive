@@ -7,9 +7,8 @@ import {
   ReactFlow,
 } from '@xyflow/react'
 import { useCallback, useMemo, useState } from 'react'
-import { CreateAgentModal } from '@/components/modals/CreateAgentModal'
+import { FrameMarketModal } from '@/components/modals/FrameMarketModal'
 import { NodeEditor } from '@/components/modals/NodeEditor'
-import { mockProviders } from '@/lib/mock/companies'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
 import { useCanvasStore } from '@/lib/stores/useCanvasStore'
 import type { Agent } from '@/lib/types'
@@ -143,6 +142,7 @@ function autoLayout(
 export function OrgCanvas() {
   const team = useCurrentTeam()
   const mode = useAppStore((s) => s.mode)
+  const currentCompanyId = useAppStore((s) => s.currentCompanyId)
   const companySlug = useAppStore((s) => {
     const c = s.companies.find((x) => x.id === s.currentCompanyId)
     return c?.slug ?? ''
@@ -157,7 +157,7 @@ export function OrgCanvas() {
     return team.agents.find((a) => a.id === editingAgentId) ?? null
   }, [editingAgentId, team])
   const [askAiOpen, setAskAiOpen] = useState(false)
-  const [createOpen, setCreateOpen] = useState(false)
+  const [marketOpen, setMarketOpen] = useState(false)
   const [frameGalleryOpen, setFrameGalleryOpen] = useState(false)
   const startGeneration = useAgentGenerationStore((s) => s.start)
 
@@ -264,16 +264,13 @@ export function OrgCanvas() {
     [addEdge, mode, team],
   )
 
-  const addManualMember = useCallback(() => {
-    // Open the dedicated Create form instead of opening NodeEditor on a
-    // half-formed stub. NodeEditor is edit-only now.
-    setCreateOpen(true)
-  }, [])
-
   const addViaAi = useCallback(() => {
     setAskAiOpen(true)
   }, [])
 
+  const addFromMarket = useCallback(() => {
+    setMarketOpen(true)
+  }, [])
 
   const addFromFrame = useCallback(() => {
     setFrameGalleryOpen(true)
@@ -304,8 +301,8 @@ export function OrgCanvas() {
     <div className="h-full w-full relative">
       {mode === 'design' && (
         <AddAgentButton
-          onAddManual={addManualMember}
           onAddViaAi={addViaAi}
+          onAddFromMarket={addFromMarket}
           onAddFromFrame={addFromFrame}
         />
       )}
@@ -339,7 +336,14 @@ export function OrgCanvas() {
       </ReactFlow>
 
       <NodeEditor agent={editingAgent} onClose={() => setEditingAgentId(null)} />
-      <CreateAgentModal open={createOpen} onClose={() => setCreateOpen(false)} />
+      <FrameMarketModal
+        open={marketOpen}
+        onClose={() => setMarketOpen(false)}
+        defaultCompanyId={currentCompanyId}
+        defaultTeamId={team.id}
+        allowedTabs={['agent']}
+        lockTarget
+      />
       <AskAiAgentModal
         open={askAiOpen}
         onClose={() => setAskAiOpen(false)}

@@ -34,8 +34,13 @@ Config shapes per source kind:
   static:     { "value": <any> }
 
 RULES:
-- Prefer \`team_data\` when the data is already in the team's SQLite.
-- Prefer \`mcp\` when it lives externally and the right server is connected.
+- If the user names an external system explicitly (e.g. "supabase",
+  "notion", "github", a connected MCP server name) you MUST use that MCP
+  server. Falling back to team_data because the user mentioned a familiar
+  domain word like "users" or "signups" is wrong — the user told you where
+  the data lives.
+- Otherwise prefer \`team_data\` when the data is already in the team's SQLite,
+  \`mcp\` when it lives externally and the right server is connected.
 - Keep SQL tight — name columns the panel will consume, avoid SELECT *.
 - Never invent tools or tables that aren't listed in the context.
 - refresh_seconds: 60 normal, 300 heavy, 30 fast-changing.
@@ -47,6 +52,28 @@ RULES:
   \`WHERE team_id = :team_id\` alongside any other predicate.
 - For team_data sources, the query result arrives as { columns, rows } — use
   \`map.rows: "$.rows[*]"\` (NOT "$[*]") unless you pass it through transforms.
+- For chart panels showing a time-series (signups over time, daily volume,
+  trend, etc.) the SQL MUST aggregate by a calendar bucket — group by
+  \`date_trunc('day', <ts>)::date\` (Postgres / Supabase) or
+  \`date(<ts>)\` (SQLite), and \`COUNT(*)\` / \`SUM(...)\` accordingly. Never
+  group by the raw timestamp column or you get one row per microsecond and
+  every value is 1.
+- For \`mcp\` sources, the tool's response shape is NOT obvious from the name —
+  many tools wrap their list under a key (e.g. \`{ "projects": [...] }\`,
+  \`{ "results": [...] }\`). Look at the tool's input_schema to infer args, and
+  default \`map.rows\` to a wrapped path like \`$.projects[*]\` when the tool name
+  hints at a collection (list_*, search_*); use \`$[*]\` only when the tool
+  description explicitly says it returns a bare array.
+- SQL-execution tools (\`execute_sql\`, \`run_query\`, etc.) return a bare JSON
+  array of row objects after our envelope-stripping pass. ALWAYS use
+  \`map.rows: "$[*]"\` for those — never \`$.rows[*]\` (that's team_data only).
+- Many MCP tools require an opaque ID (UUID, slug, ref) for arguments like
+  \`project_id\`, \`org_id\`. If the user names a project/org by human-readable
+  name only, do NOT invent the ID and do NOT silently fall back to team_data.
+  Instead pick the matching list_* / search_* tool that returns the IDs (e.g.
+  \`list_projects\`) and emit it as the source — the rendered list lets the
+  user copy the ID and re-run with a more specific intent. Only use the
+  user-named tool directly when the user gave you the literal ID.
 - For a kpi block when SQL already aggregates (COUNT/SUM/AVG in the query),
   use \`map.aggregate: "first"\` with \`aggregate_field\` naming the single column.
   Otherwise the mapper will count the number of rows instead of reading the value.

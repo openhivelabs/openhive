@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { type PanelCacheRow, fetchPanelData } from '@/lib/api/panels'
+import { type PanelCacheRow, fetchPanelData, refreshPanel } from '@/lib/api/panels'
 
 /**
  * Poll a bound panel's cached data every few seconds. Previously we used SSE
@@ -27,14 +27,21 @@ export function usePanelData(
     if (!active || !blockId) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
+    // First fetch on mount (page load / hard refresh) actually re-executes the
+    // binding instead of reading the cache, so users see fresh data without
+    // having to wait for the next poll. Subsequent ticks read the cache (the
+    // background scheduler keeps it warm based on each panel's
+    // refresh_seconds).
+    let firstTick = true
 
     const tick = async () => {
       try {
-        const r = await fetchPanelData(blockId)
+        const r = firstTick ? await refreshPanel(blockId) : await fetchPanelData(blockId)
         if (!cancelled) setRow(r)
       } catch {
         /* swallow — next tick retries */
       } finally {
+        firstTick = false
         if (!cancelled && loading) setLoading(false)
         if (!cancelled) timer = setTimeout(tick, POLL_MS)
       }

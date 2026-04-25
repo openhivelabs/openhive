@@ -1,14 +1,14 @@
-import { Package, Plus, Sparkle, User } from '@phosphor-icons/react'
+import { Package, Plus, Sparkle, Storefront } from '@phosphor-icons/react'
 import { useEffect, useState } from 'react'
 import { useT } from '@/lib/i18n'
 
 export function AddAgentButton({
-  onAddManual,
   onAddViaAi,
+  onAddFromMarket,
   onAddFromFrame,
 }: {
-  onAddManual: () => void
   onAddViaAi: () => void
+  onAddFromMarket: () => void
   onAddFromFrame: () => void
 }) {
   const t = useT()
@@ -75,17 +75,17 @@ export function AddAgentButton({
               type="button"
               onClick={() => {
                 setOpen(false)
-                onAddManual()
+                onAddFromMarket()
               }}
               className="w-full flex items-start gap-2.5 p-2.5 rounded-sm hover:bg-neutral-100 dark:hover:bg-neutral-800 text-left cursor-pointer"
             >
-              <User className="w-4 h-4 mt-0.5 text-neutral-500 shrink-0" />
+              <Storefront className="w-4 h-4 mt-0.5 text-neutral-500 shrink-0" />
               <div className="min-w-0">
                 <div className="text-[14px] font-medium text-neutral-800 dark:text-neutral-100">
-                  {t('canvas.addManual')}
+                  {t('canvas.addFromMarket')}
                 </div>
                 <div className="text-[12px] text-neutral-500 leading-relaxed mt-0.5">
-                  {t('canvas.addManualHint')}
+                  {t('canvas.addFromMarketHint')}
                 </div>
               </div>
             </button>

@@ -9,22 +9,6 @@ export interface PanelCacheRow {
   shape_changed?: boolean
 }
 
-export interface PanelTemplate {
-  id: string
-  name: string
-  description: string
-  icon: string
-  category: string
-  panel: {
-    type: string
-    colSpan?: number
-    rowSpan?: number
-    props?: Record<string, unknown>
-  }
-  binding_skeleton: Record<string, unknown>
-  ai_prompts: Record<string, unknown>
-}
-
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.text()
@@ -43,10 +27,6 @@ export async function refreshPanel(blockId: string): Promise<PanelCacheRow> {
   )
 }
 
-export async function fetchPanelTemplates(): Promise<PanelTemplate[]> {
-  return jsonOrThrow(await fetch('/api/panel-templates'))
-}
-
 export interface PreviewResult {
   ok: boolean
   data?: unknown
@@ -59,29 +39,10 @@ export async function previewBinding(
   binding: Record<string, unknown>,
 ): Promise<PreviewResult> {
   return jsonOrThrow(
-    await fetch('/api/panel-templates/preview', {
+    await fetch('/api/panels/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ team_id: teamId, panel_type: panelType, binding }),
-    }),
-  )
-}
-
-export interface BuildBindingResult {
-  binding: Record<string, unknown>
-  panel_type: string
-}
-
-export async function buildBinding(
-  teamId: string,
-  templateId: string,
-  userGoal: string,
-): Promise<BuildBindingResult> {
-  return jsonOrThrow(
-    await fetch('/api/panel-templates/build', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ team_id: teamId, template_id: templateId, user_goal: userGoal }),
     }),
   )
 }
