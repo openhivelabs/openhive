@@ -22,12 +22,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import subprocess
 import sys
 
 SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_ROOT))
+sys.path.insert(0, str(SKILL_ROOT.parent))
+
+from _lib.output_path import resolve_out  # noqa: E402
 
 
 PAGE_OPS = {"merge", "split", "extract_pages", "rotate",
@@ -51,7 +55,7 @@ def main() -> int:
         return 1
 
     inp = pathlib.Path(args.inp).expanduser()
-    out = pathlib.Path(args.out).expanduser().resolve()
+    out = resolve_out(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -107,10 +111,15 @@ def main() -> int:
         interim_spec.write_text(json.dumps(spec, ensure_ascii=False, indent=2),
                                 encoding="utf-8")
         build_path = pathlib.Path(__file__).resolve().parent / "build_doc.py"
+        # Mark the child as an internal call so resolve_out passes the
+        # interim path through unchanged. Without this the child would
+        # rewrite interim_pdf to <artifact>/<basename> and the parent
+        # would later read from a stale path.
+        child_env = {**os.environ, "OPENHIVE_SKILL_INTERNAL": "1"}
         proc = subprocess.run(
             [sys.executable, str(build_path), "--spec", str(interim_spec),
              "--out", str(interim_pdf)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, env=child_env,
         )
         if proc.returncode != 0:
             print(json.dumps({

@@ -16,12 +16,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import subprocess
 import sys
 
 SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_ROOT))
+sys.path.insert(0, str(SKILL_ROOT.parent))
+
+from _lib.output_path import resolve_out  # noqa: E402
 
 
 def main() -> int:
@@ -41,7 +45,7 @@ def main() -> int:
         return 1
 
     inp = pathlib.Path(args.inp).expanduser()
-    out = pathlib.Path(args.out).expanduser().resolve()
+    out = resolve_out(args.out)
 
     try:
         patch = json.load(open(args.patch, "r", encoding="utf-8"))
@@ -75,9 +79,13 @@ def main() -> int:
         out_spec.write_text(json.dumps(new_spec, ensure_ascii=False, indent=2),
                             encoding="utf-8")
         build_path = pathlib.Path(__file__).resolve().parent / "build_doc.py"
+        # Mark child as internal so resolve_out passes paths through —
+        # `out` and `out_spec` are already in the artifact dir (parent
+        # remapped them), and double-rewriting would only add stderr noise.
+        child_env = {**os.environ, "OPENHIVE_SKILL_INTERNAL": "1"}
         proc = subprocess.run(
             [sys.executable, str(build_path), "--spec", str(out_spec), "--out", str(out)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, env=child_env,
         )
         if proc.returncode != 0:
             print(json.dumps({

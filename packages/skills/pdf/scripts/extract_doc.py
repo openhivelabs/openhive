@@ -24,6 +24,9 @@ import sys
 
 SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_ROOT))
+sys.path.insert(0, str(SKILL_ROOT.parent))
+
+from _lib.output_path import resolve_out  # noqa: E402
 
 
 def main() -> int:
@@ -66,11 +69,13 @@ def main() -> int:
                     "images are lost. Verify the spec and hand-edit before "
                     "rebuilding if fidelity matters.")
 
-    pathlib.Path(args.out).expanduser().write_text(
+    out = resolve_out(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
         json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8",
     )
     print(json.dumps({
-        "ok": True, "path": str(args.out), "blocks": len(blocks),
+        "ok": True, "path": str(out), "blocks": len(blocks),
         "pages": len(pages), "warnings": warnings,
     }, ensure_ascii=False))
     return 0

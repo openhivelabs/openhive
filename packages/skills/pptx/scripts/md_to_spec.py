@@ -23,6 +23,11 @@ import pathlib
 import re
 import sys
 
+SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(SKILL_ROOT.parent))
+
+from _lib.output_path import resolve_out  # noqa: E402
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -104,10 +109,12 @@ def main() -> int:
         },
         "slides": slides,
     }
-    pathlib.Path(args.out).expanduser().write_text(
+    out = resolve_out(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
         json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8",
     )
-    print(json.dumps({"ok": True, "path": str(args.out), "slides": len(slides)}))
+    print(json.dumps({"ok": True, "path": str(out), "slides": len(slides)}))
     return 0
 
 

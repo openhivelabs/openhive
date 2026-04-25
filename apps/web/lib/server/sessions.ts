@@ -858,13 +858,25 @@ export interface TranscriptSource {
   rank?: number
 }
 
+interface ExtractedSourcesResult {
+  sources: TranscriptSource[]
+  /** Set when the inner skill payload reports `ok: false`. Surfaced to the
+   *  FE so a failed web-search renders with a warning icon + tooltip
+   *  ("DuckDuckGo timed out", "rate limited", …) instead of looking like
+   *  a successful search that just happens to have zero results. */
+  errorCode?: string
+  errorMessage?: string
+}
+
 /** Parse the JSON body of a `tool_result` for web-search / web-fetch and
  *  return a normalised source list. Returns `null` if parse fails or the
- *  shape is unexpected — caller falls back to a plain tool chip. */
+ *  shape is unexpected — caller falls back to a plain tool chip. When the
+ *  payload carries `ok:false`, returns a result with empty sources +
+ *  error metadata so the UI can show the failure explicitly. */
 function extractSources(
   toolName: string,
   resultEvent: StoredEventRow,
-): TranscriptSource[] | null {
+): ExtractedSourcesResult | null {
   const content = resultEvent.data.content
   if (typeof content !== 'string' || !content.trim()) return null
   // The skillTool handler wraps skill stdout in
@@ -889,7 +901,14 @@ function extractSources(
   }
   if (!payload || typeof payload !== 'object') return null
   const p = payload as Record<string, unknown>
-  if (p.ok === false) return null
+  if (p.ok === false) {
+    return {
+      sources: [],
+      errorCode:
+        typeof p.error_code === 'string' ? p.error_code : 'search_failed',
+      errorMessage: typeof p.error === 'string' ? p.error : undefined,
+    }
+  }
 
   if (toolName === 'web-search') {
     const results = p.results
@@ -909,7 +928,7 @@ function extractSources(
         rank: typeof rr.rank === 'number' ? rr.rank : undefined,
       })
     }
-    return out.length > 0 ? out : null
+    return out.length > 0 ? { sources: out } : null
   }
 
   if (toolName === 'web-fetch') {
@@ -920,14 +939,16 @@ function extractSources(
         ? p.title
         : domainFromUrl(url) || url
     const contentStr = typeof p.content === 'string' ? p.content : ''
-    return [
-      {
-        title,
-        url,
-        domain: domainFromUrl(url),
-        snippet: contentStr ? contentStr.slice(0, 160) : undefined,
-      },
-    ]
+    return {
+      sources: [
+        {
+          title,
+          url,
+          domain: domainFromUrl(url),
+          snippet: contentStr ? contentStr.slice(0, 160) : undefined,
+        },
+      ],
+    }
   }
 
   return null
@@ -992,8 +1013,9 @@ export function buildTranscript(
       if (ev.depth !== 0 && !isWeb && !isDelegate) continue
       const result =
         isWeb && ev.tool_call_id ? resultByCallId.get(ev.tool_call_id) : null
-      const sources =
+      const extracted =
         isWeb && result ? extractSources(ev.tool_name ?? '', result) : null
+      const sources = extracted?.sources ?? null
       // Surface delegate_parallel sibling metadata so the FE can disambiguate
       // children of N concurrent same-role instances (they all share a
       // node_id, so depth+nodeId alone can't tell which instance owned a
@@ -1028,6 +1050,8 @@ export function buildTranscript(
         tool: ev.tool_name,
         args: ev.data.arguments,
         sources: sources ?? undefined,
+        error_code: extracted?.errorCode,
+        error_message: extracted?.errorMessage,
         depth: ev.depth,
         sibling_group_id: siblingGroupId,
         sibling_index: siblingIndex,
