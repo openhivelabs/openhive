@@ -16,7 +16,24 @@ export default defineConfig({
     // post-auth redirect lands on hono's callback handler (which exchanges
     // the code for tokens and shows a self-closing success page).
     proxy: {
-      '/api': `http://localhost:${process.env.API_PORT ?? 4484}`,
+      '/api': {
+        target: `http://localhost:${process.env.API_PORT ?? 4484}`,
+        changeOrigin: false,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes, _req, res) => {
+            const ct = String(proxyRes.headers['content-type'] ?? '')
+            if (!ct.startsWith('text/event-stream')) return
+            res.setHeader('X-Accel-Buffering', 'no')
+            res.setHeader('Cache-Control', 'no-cache, no-transform')
+            // Take ownership of the body pipe so each SSE frame is flushed
+            // immediately instead of being coalesced by http-proxy's default
+            // buffering. http-proxy still owns close/end semantics.
+            proxyRes.on('data', (chunk: Buffer) => {
+              res.write(chunk)
+            })
+          })
+        },
+      },
       '/callback': `http://localhost:${process.env.API_PORT ?? 4484}`,
       '/auth/callback': `http://localhost:${process.env.API_PORT ?? 4484}`,
     },

@@ -1,5 +1,3 @@
-import fs from 'node:fs'
-import path from 'node:path'
 import { listForSession as listArtifactsForSession } from '@/lib/server/artifacts'
 import { resolveTeamSlugs } from '@/lib/server/companies'
 import { resolveAskUser } from '@/lib/server/engine/askuser'
@@ -10,6 +8,7 @@ import {
   attach,
   forceEvict,
   isActive,
+  liveEventsFor,
   resume,
   start as startRegistryRun,
   stop,
@@ -24,7 +23,6 @@ import {
   getSession,
   listSessions,
   listSessionsFor,
-  sessionDir,
   updateMeta,
 } from '@/lib/server/sessions'
 import { usageForSession } from '@/lib/server/usage'
@@ -366,23 +364,25 @@ sessions.get('/:sessionId', (c) => {
   if (!meta) {
     return c.json({ detail: 'session not found' }, 404)
   }
-  const dir = sessionDir(sessionId)
-  const eventsPath = path.join(dir, 'events.jsonl')
-  const events: Record<string, unknown>[] = (() => {
-    if (!fs.existsSync(eventsPath)) return []
-    const txt = fs.readFileSync(eventsPath, 'utf8')
-    const out: Record<string, unknown>[] = []
-    for (const line of txt.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      try {
-        out.push(JSON.parse(trimmed) as Record<string, unknown>)
-      } catch {
-        /* skip */
-      }
-    }
-    return out
-  })()
+  // Single source-of-truth read. `liveEventsFor` returns in-memory state for
+  // active sessions (no event-writer flush lag — that 100ms window was the
+  // root of the "must hard-refresh to see updates" UI bug) and falls back to
+  // disk for idle/completed sessions.
+  const liveEvents = liveEventsFor(sessionId)
+  // The flat `events` field on the response carries `data` parsed (cheaper
+  // than re-stringifying every fetch) — the legacy `data_json` form is no
+  // longer emitted; consumers (`pendingAskFromEvents`, UI dashboard) already
+  // accept both shapes via `EventRow.data ?? JSON.parse(data_json)`.
+  const events: Record<string, unknown>[] = liveEvents.map((r) => ({
+    seq: r.seq,
+    ts: r.ts,
+    kind: r.kind,
+    depth: r.depth,
+    node_id: r.node_id,
+    tool_call_id: r.tool_call_id,
+    tool_name: r.tool_name,
+    data: r.data,
+  }))
   const artifacts = listArtifactsForSession(sessionId).map((a) => ({
     id: a.id,
     filename: a.filename,
@@ -392,17 +392,15 @@ sessions.get('/:sessionId', (c) => {
   }))
   const usage = usageForSession(sessionId)
   const pendingAsk =
-    meta.status === 'error' ? null : pendingAskFromEvents(events as unknown as EventRow[])
+    meta.status === 'error' || meta.status === 'abandoned'
+      ? null
+      : pendingAskFromEvents(events as unknown as EventRow[])
   // Always rebuild transcript from events. transcript.jsonl is written once
   // at `finalizeSession` (guarded by `finalized_at` idempotency) and then
   // never updated — so follow-up turns in a resumable chat session would
   // never surface in the UI if we preferred the file. events.jsonl IS the
-  // source of truth; the file on disk is only kept for historical archival.
-  const transcript = buildTranscript(
-    meta.goal,
-    meta.started_at,
-    eventsForSession(sessionId),
-  )
+  // source of truth (or in-memory ring during active runs).
+  const transcript = buildTranscript(meta.goal, meta.started_at, liveEvents)
   return c.json({
     ...meta,
     transcript,

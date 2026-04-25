@@ -28,6 +28,7 @@ export interface Tool {
     runWithHooks: (
       args: Record<string, unknown>,
       hooks: { onQueued: () => void; onStarted: () => void },
+      opts?: { signal?: AbortSignal },
     ) => Promise<unknown>
   } | null
 }

@@ -1,6 +1,6 @@
 ---
 name: web-fetch
-description: Fetch a web page and return clean markdown of its main content. Strips nav/ads/scripts, caches with ETag, and (if a query is given) returns only the most relevant chunks via BM25 — designed for maximum signal per token. Use whenever an agent needs to read a URL.
+description: Fetch ONE specific URL you ALREADY have and return clean markdown of its main content. Use AFTER `web-search` (which gives you real URLs). NEVER fetch search-engine result pages (duckduckgo.com, google.com/search, bing.com/search, etc.) — that is what `web-search` is for. NEVER guess domain names. If you don't have a URL and `web-search` isn't available, return control to your parent and ask for the skill, do not improvise.
 triggers:
   keywords: [url, web, scrape, crawl, fetch, link, page, website]
   patterns: ['https?://']
@@ -33,7 +33,14 @@ parameters:
 
 # web-fetch skill
 
-Fetch a URL and hand the agent the **smallest possible useful text** — not raw HTML. Three ideas stacked for token efficiency:
+Fetch a URL and hand the agent the **smallest possible useful text** — not raw HTML.
+
+## DO NOT
+
+- **Do NOT fetch search-engine result pages.** `https://duckduckgo.com/...`, `https://html.duckduckgo.com/...`, `https://www.google.com/search?...`, `https://www.bing.com/search?...`, `https://search.brave.com/...`, etc. all return JS-heavy markup with anti-scraping protections; you will get either a 202 challenge or a useless "enable JavaScript" page and you will burn your tool-round budget repeating the call. Use the `web-search` skill instead — that's what it exists for.
+- **Do NOT guess URLs.** "It's probably at `apple.com/iphone-15-pro-specs`" → almost always wrong, almost always a 404, always wastes a round. Search first, fetch the real URL second.
+- **Do NOT fetch the same URL repeatedly hoping for different content.** The cache + revalidation already handles "did this change?". If the page is JS-rendered (returns `warning: empty_content_likely_spa`), refetching won't fix it — escalate to your parent.
+- **If `web-search` is not available to you and you don't have a URL,** stop. Return a structured note to your parent saying "I need web-search to research X; please grant the skill or pick a different agent." Do not improvise by fetching any homepage and hoping. Three ideas stacked for token efficiency:
 
 1. **Main-content extraction** via `trafilatura` — strips nav, ads, cookie banners, footers, comment sections. Typical compression: original HTML → 10–20% in characters.
 2. **Query-targeted chunking** — when the caller passes `query`, the page is split into paragraph-ish chunks, ranked with BM25, and only the top `top_k` are returned. Use this the moment you know what you're looking for on a page.

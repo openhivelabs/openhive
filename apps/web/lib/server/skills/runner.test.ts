@@ -79,6 +79,26 @@ describe('runSkillScript structured envelope integration', () => {
     expect(result.structured?.suggestion).toBe('fix it')
   })
 
+  it('pre-aborted signal kills child fast (SIGTERM-then-SIGKILL)', async () => {
+    const script = path.join(skillDir, 'scripts', 'sleep.py')
+    fs.writeFileSync(
+      script,
+      ['import time', 'time.sleep(10)', 'print("done")'].join('\n'),
+    )
+    const controller = new AbortController()
+    controller.abort()
+    const start = Date.now()
+    const result = await runSkillScript(makeSkill(), 'scripts/sleep.py', outputDir, {
+      signal: controller.signal,
+    })
+    const elapsed = Date.now() - start
+    // Should resolve well under the 10s sleep — SIGTERM lands immediately,
+    // SIGKILL would land 2s later. Give generous slack for CI.
+    expect(elapsed).toBeLessThan(4000)
+    expect(result.timedOut).toBe(false)
+    expect(result.exitCode).not.toBe(0)
+  }, 15_000)
+
   it('prefers envelope files over directory snapshot on success', async () => {
     const declared = path.join(outputDir, 'declared.pdf')
     const sneaky = path.join(outputDir, 'sneaky.tmp')

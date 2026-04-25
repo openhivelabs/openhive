@@ -1,5 +1,25 @@
 import { describe, it, expect } from 'vitest'
 import { askUserGuidance, delegateToGuidance, activateSkillGuidance } from './delegation-guidance'
+import { buildRelaySection, parallelDelegationRule } from './session'
+import type { TeamSpec } from './team'
+
+const teamFixture: TeamSpec = {
+  id: 'team-x',
+  name: 'Test',
+  agents: [],
+  edges: [],
+  entry_agent_id: null,
+  allowed_skills: [],
+  allowed_mcp_servers: [],
+  limits: {
+    max_tool_rounds_per_turn: 8,
+    max_delegation_depth: 4,
+    max_delegations_per_pair_per_turn: 4,
+    max_ask_user_per_turn: 4,
+    max_read_skill_file_per_turn: 8,
+    max_web_search_per_turn: 5,
+  },
+}
 
 describe('askUserGuidance', () => {
   const g = askUserGuidance()
@@ -76,6 +96,37 @@ describe('delegateToGuidance', () => {
 
   it('locks "one file per produce delegation"', () => {
     expect(g).toMatch(/one file per produce delegation/i)
+  })
+})
+
+describe('parallelDelegationRule (shared fan-out helper)', () => {
+  it('mentions delegate_parallel and independent subtasks', () => {
+    const r = parallelDelegationRule({ isLead: true })
+    expect(r).toMatch(/delegate_parallel/)
+    expect(r).toMatch(/independent subtasks/i)
+    expect(r).toMatch(/MULTIPLE/)
+  })
+})
+
+describe('buildRelaySection — parallel fan-out injection', () => {
+  it('includes parallel rule for the Lead branch (regression)', () => {
+    const out = buildRelaySection(0, true, teamFixture)
+    expect(out).toMatch(/Parallel fan-out/)
+    expect(out).toMatch(/delegate_parallel/)
+    expect(out).toMatch(/independent subtasks/i)
+  })
+
+  it('includes parallel rule for a non-Lead manager that has subordinates', () => {
+    const out = buildRelaySection(1, true, teamFixture)
+    expect(out).toMatch(/Parallel fan-out/)
+    expect(out).toMatch(/delegate_parallel/)
+    expect(out).toMatch(/independent subtasks/i)
+  })
+
+  it('omits parallel rule for a non-Lead leaf agent (no subs)', () => {
+    const out = buildRelaySection(1, false, teamFixture)
+    expect(out).not.toMatch(/Parallel fan-out/)
+    expect(out).not.toMatch(/delegate_parallel/)
   })
 })
 
