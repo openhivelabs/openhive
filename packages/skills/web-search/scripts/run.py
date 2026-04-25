@@ -4,7 +4,7 @@
 stdin JSON: {query, count?, region?}
 stdout JSON (success): {ok: true, query, count_requested, count_returned,
                          source: "duckduckgo-lite", results: [...]}
-stdout JSON (failure): {ok: false, error, status?}
+stdout JSON (failure): {ok: false, error_code, error, guidance, status?}
 """
 
 from __future__ import annotations
@@ -40,9 +40,64 @@ def main() -> int:
     try:
         results = search(query=query, count=count_requested, region=region)
     except SearchError as exc:
-        return _emit({"ok": False, "error": str(exc), "status": exc.status})
+        if getattr(exc, "reason", None) == "budget_exceeded":
+            return _emit(
+                {
+                    "ok": False,
+                    "error_code": "search_unavailable",
+                    "error": "DuckDuckGo did not respond within 20s budget",
+                    "guidance": (
+                        "Search is taking too long right now. Do NOT fabricate results "
+                        "from training data. Either retry web-search later, report "
+                        "'web search currently unavailable' to your parent, or ask the "
+                        "user for specific URLs to web-fetch directly. Never invent "
+                        "URLs or facts."
+                    ),
+                    "status": None,
+                }
+            )
+        if exc.status == 202:
+            return _emit(
+                {
+                    "ok": False,
+                    "error_code": "search_rate_limited",
+                    "error": "DuckDuckGo is rate-limiting our requests (HTTP 202 captcha). Search is TEMPORARILY unavailable.",
+                    "guidance": (
+                        "Do NOT fabricate results from training data. Either "
+                        "(1) wait and retry web-search after 60s, "
+                        "(2) report 'web search currently unavailable' to your parent and let them decide, "
+                        "or (3) ask the user if they can supply specific URLs to web-fetch directly. "
+                        "Never invent URLs or release dates."
+                    ),
+                    "status": 202,
+                }
+            )
+        return _emit(
+            {
+                "ok": False,
+                "error_code": "search_unavailable",
+                "error": f"Web search subprocess could not reach DuckDuckGo: {exc}",
+                "guidance": (
+                    "Do NOT fabricate results from training data. "
+                    "Report 'web search currently unavailable' to your parent or ask the user "
+                    "for specific URLs to web-fetch. Never invent URLs, dates, or facts."
+                ),
+                "status": exc.status,
+            }
+        )
     except Exception as exc:  # noqa: BLE001 — last resort for subprocess safety
-        return _emit({"ok": False, "error": f"unexpected: {type(exc).__name__}: {exc}"})
+        return _emit(
+            {
+                "ok": False,
+                "error_code": "search_unavailable",
+                "error": f"unexpected: {type(exc).__name__}: {exc}",
+                "guidance": (
+                    "Do NOT fabricate results from training data. "
+                    "Report 'web search currently unavailable' to your parent or ask the user "
+                    "for specific URLs to web-fetch. Never invent URLs, dates, or facts."
+                ),
+            }
+        )
 
     if not results:
         return _emit(

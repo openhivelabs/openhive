@@ -22,24 +22,85 @@ import type { TeamSpec } from './engine/team'
 import { artifactsRoot, sessionsRoot } from './paths'
 import { enqueueEvent, flushSession } from './sessions/event-writer'
 
-/** Session status — lives independently of any single Node process.
+/** Session status — explicit state machine. Lives in meta.json so the UI and
+ *  any future resume logic have ground truth without rescanning events on
+ *  every load.
+ *
+ *    pending      = created, no engine event yet. Transient — the registry
+ *                   flips to `running` as soon as the first event lands.
  *    running      = a turn is currently being generated (live tokens flowing)
+ *                   AND the owning process is alive. Heartbeat keeps
+ *                   `last_alive_at` fresh; boot reconciliation uses that to
+ *                   tell apart a real running session (impossible at boot —
+ *                   we just started) from one whose process was killed.
  *    needs_input  = parked on an unanswered ask_user question. The engine
  *                   literally cannot proceed until the user answers (or skips).
  *                   Distinct from `idle` because the UI must keep surfacing
  *                   this as a pending action — otherwise the user navigates
  *                   away, the orange dot disappears on their next visit, and
  *                   the session sits forever waiting.
- *    idle         = turn done, waiting for the next user message. Resumable.
- *    error        = errored out in a way we don't auto-recover from.
+ *    idle         = turn done cleanly, waiting for the next user message.
+ *                   Resumable.
+ *    abandoned    = process died mid-turn (kill -9, OOM, hard crash). We
+ *                   detected the gap on boot — the engine generator is gone
+ *                   and there's no clean way to resume mid-tool-call. The
+ *                   user can start a new follow-up message, which spins up a
+ *                   fresh engine via resume() with the persisted history,
+ *                   but the in-flight tool call from the previous process is
+ *                   considered lost. Distinct from `idle` so the UI can show
+ *                   "your previous run was interrupted — continue?" instead
+ *                   of silently pretending nothing happened.
+ *    error        = errored out in a way we don't auto-recover from. */
+export type SessionStatus =
+  | 'pending'
+  | 'running'
+  | 'needs_input'
+  | 'idle'
+  | 'abandoned'
+  | 'error'
+
+/** Structured reason an abandoned session was classified as such. Persisted
+ *  alongside `meta.status='abandoned'` so the UI can surface a precise
+ *  explanation and any future resume code can decide whether to retry.
  *
- *  Notes:
- *  - "Process died while mid-turn" is NOT a status. On boot we demote
- *    `running` → `idle`; the next user message resurrects the generator via
- *    resume(). Old values ('finished', 'interrupted') still on disk from
- *    before this redesign are normalized to `idle` on read — sessions are
- *    always resumable unless the user explicitly deleted them. */
-export type SessionStatus = 'running' | 'needs_input' | 'idle' | 'error'
+ *    process_killed_mid_run  — heartbeat went stale while status was
+ *                              'running'. The owning Node process almost
+ *                              certainly died (kill, OOM, hard crash).
+ *    graceful_shutdown       — SIGTERM/SIGINT fired during a turn; the
+ *                              shutdown handler marked it before exit so we
+ *                              have a clean signal on next boot.
+ *    no_terminal_event       — meta says 'running' but events.jsonl is
+ *                              missing the corresponding terminal event AND
+ *                              we have no heartbeat to confirm liveness.
+ *                              Conservative fallback for legacy sessions
+ *                              that predate the heartbeat field. */
+export interface AbandonedReason {
+  kind:
+    | 'process_killed_mid_run'
+    | 'graceful_shutdown_during_turn'
+    | 'no_terminal_event'
+    | 'provider_silent_exit'
+    | 'skill_subprocess_hung'
+    | 'unknown'
+  last_event_seq: number | null
+  last_event_kind: string | null
+  last_event_ts: number | null
+  detected_at: number
+  /** When kind === 'skill_subprocess_hung', the tool that was in flight at
+   *  the tail of events.jsonl. Lets the UI surface "web-search hung" instead
+   *  of a generic "process died" message. */
+  tool_name?: string | null
+  tool_call_id?: string | null
+}
+
+/** Structured error detail. `meta.error` (string) is kept for backward
+ *  compatibility with existing readers; `error_detail` carries the richer
+ *  classification. */
+export interface ErrorDetail {
+  kind: string
+  message: string
+  ts: number
+}
 
 export interface SessionMeta {
   id: string
@@ -73,12 +134,46 @@ export interface SessionMeta {
    *  registry-level finalize can both call safely — only the first writes
    *  transcript / usage. */
   finalized_at?: number | null
+  /** Heartbeat — epoch ms last refreshed by the owning process while a turn
+   *  was in `running` state. Boot reconciliation compares
+   *  `now - last_alive_at` against `STALE_HEARTBEAT_MS` to classify an
+   *  unfinished `running` session as abandoned. Updated in-place via
+   *  meta.json (no event-log bloat). null/undefined for sessions started
+   *  before this field existed — those fall back to `no_terminal_event`. */
+  last_alive_at?: number | null
+  /** Seq number of the last event emitted by the owning process. Updated by
+   *  the same heartbeat write, so on boot we can decide "did meta drift from
+   *  events.jsonl?" without rescanning the whole file every load. */
+  last_event_seq?: number | null
+  /** When the session entered `abandoned`, in epoch ms. */
+  abandoned_at?: number | null
+  /** Why the session was classified as abandoned. */
+  abandoned_reason?: AbandonedReason | null
+  /** Structured error info — companion to the legacy `error` string. */
+  error_detail?: ErrorDetail | null
 }
 
+/** A turn is considered alive if its heartbeat fired within this window.
+ *  Set comfortably larger than the 30s heartbeat interval so a normal flush
+ *  hiccup doesn't trip a false abandoned classification, but small enough
+ *  that a real crash is detected on the next boot rather than days later. */
+export const STALE_HEARTBEAT_MS = 90_000
+
+/** How often a live `running` session refreshes meta.last_alive_at. Cheap —
+ *  just a meta.json rewrite, no event-log line. */
+export const HEARTBEAT_INTERVAL_MS = 30_000
+
 function normalizeStatus(raw: unknown): SessionStatus {
-  if (raw === 'running') return 'running'
-  if (raw === 'needs_input') return 'needs_input'
-  if (raw === 'error') return 'error'
+  if (
+    raw === 'pending' ||
+    raw === 'running' ||
+    raw === 'needs_input' ||
+    raw === 'idle' ||
+    raw === 'abandoned' ||
+    raw === 'error'
+  ) {
+    return raw
+  }
   // 'finished', 'interrupted', and anything unknown collapse to idle. Idle
   // means "no live generator right now — send a message to continue."
   return 'idle'
@@ -232,6 +327,13 @@ export function startSession(
     // after the original process died, without the client having to re-POST
     // the whole team structure.
     team_snapshot: teamSnapshot ?? undefined,
+    // First heartbeat: we're alive right now. Boot reconciliation needs a
+    // non-null timestamp to even consider this session non-abandoned.
+    last_alive_at: now,
+    last_event_seq: 0,
+    abandoned_at: null,
+    abandoned_reason: null,
+    error_detail: null,
   })
   // Touch events.jsonl so tail-style readers don't ENOENT.
   fs.closeSync(fs.openSync(sessionEventsPath(sessionId), 'a'))
@@ -443,56 +545,280 @@ export function listSessionsFor(opts: {
   return metas.slice(0, lim)
 }
 
-/** Any session whose meta.json still says status='running' on boot was in
- *  flight when the process died. Demote them to `idle` so they stop showing
- *  as live and become resumable. We do NOT finalize the transcript or write
- *  an error — the session isn't failed, it's just waiting. The next user
- *  message re-launches the engine via session-registry.resume(). */
-/** Scan a session's events.jsonl and decide what its "real" status is based
- *  on what happened, not what meta.status happens to say. Used at boot to
- *  reconcile sessions whose meta drifted from reality (e.g. ask_user fired
- *  before the driveSession status-flip transition existed, or a crash
- *  between emitting an event and writing meta). */
-function reconcileStatusFromEvents(sessionId: string): SessionStatus | null {
-  const events = eventsForSession(sessionId)
-  if (events.length === 0) return null
-  // Unanswered ask_user → needs_input. The engine is parked on the tool call
-  // and the user can still answer it (the stored tool_call_id is the key).
-  const answered = new Set<string>()
-  for (const e of events) {
-    if (e.kind === 'user_answered' && e.tool_call_id) answered.add(e.tool_call_id)
-  }
-  const latestQuestion = [...events]
-    .reverse()
-    .find((e) => e.kind === 'user_question' && e.tool_call_id)
-  if (latestQuestion && !answered.has(latestQuestion.tool_call_id!)) {
-    return 'needs_input'
-  }
-  // Hard error already recorded — respect it.
-  const hasError = events.some((e) => e.kind === 'run_error')
-  if (hasError) return 'error'
-  // Everything else: turn-finished parks, mid-turn process deaths, etc. all
-  // collapse to idle. Resumable via follow-up message.
-  return 'idle'
+/** Terminal events the engine emits at the end of a turn. If any of these
+ *  is the last event in events.jsonl, the previous process exited the run
+ *  loop cleanly and the session is `idle`, not abandoned. */
+const TERMINAL_EVENT_KINDS = new Set([
+  'run_finished',
+  'turn_finished',
+  'run_error',
+])
+
+/** Boot-time reconciliation result for one session. */
+export interface ReconcileResult {
+  sessionId: string
+  previousStatus: SessionStatus
+  newStatus: SessionStatus
+  reason: AbandonedReason | null
 }
 
-/** Boot-time reconciliation. Walks every session and fixes meta.status that
- *  can't possibly be `running` anymore (the process just started — nothing
- *  is actively generating). Looks at events.jsonl to tell apart genuine
- *  idle sessions from sessions parked on an unanswered ask_user, so the
- *  inbox surfaces the right color on first paint even without an SSE
- *  attach. */
+/** Inspect a single session's meta + events tail and decide what its real
+ *  status is now that the previous owning process is definitely gone. Pure
+ *  classifier — doesn't touch disk. Caller (`reconcileSessionsOnBoot`)
+ *  applies the result. */
+export function classifyOnBoot(
+  meta: SessionMeta,
+  lastEvent: StoredEventRow | null,
+  now: number = Date.now(),
+): { status: SessionStatus; reason: AbandonedReason | null; errorDetail: ErrorDetail | null } {
+  // Already-terminal statuses are respected as-is — nothing for us to do.
+  if (meta.status === 'idle' || meta.status === 'abandoned' || meta.status === 'error') {
+    return { status: meta.status, reason: meta.abandoned_reason ?? null, errorDetail: meta.error_detail ?? null }
+  }
+
+  // Note: `needs_input` (unanswered ask_user) is decided by the caller in
+  // `reconcileSessionsOnBoot` via a full event scan. This classifier sees
+  // only the meta + last event and focuses on the running/abandoned/error
+  // axis.
+
+  // run_error already on disk → terminal error.
+  if (lastEvent?.kind === 'run_error') {
+    const message =
+      typeof lastEvent.data?.error === 'string' ? (lastEvent.data.error as string) : 'unknown error'
+    return {
+      status: 'error',
+      reason: null,
+      errorDetail: { kind: 'run_error', message, ts: lastEvent.ts },
+    }
+  }
+
+  // Clean park: last event is turn_finished/run_finished → idle.
+  if (lastEvent && TERMINAL_EVENT_KINDS.has(lastEvent.kind)) {
+    return { status: 'idle', reason: null, errorDetail: null }
+  }
+
+  // Status was running/needs_input/pending and no terminal event landed.
+  // Decide between abandoned (process died) and graceful_shutdown by looking
+  // at the heartbeat. (A pre-existing graceful_shutdown abandoned marker
+  // was already returned above by the early-exit on terminal statuses.)
+  const heartbeat = meta.last_alive_at ?? null
+  const lastSeq = lastEvent?.seq ?? null
+  const lastKind = lastEvent?.kind ?? null
+  const lastTs = lastEvent?.ts ?? null
+  const isStaleHeartbeat = heartbeat == null || now - heartbeat > STALE_HEARTBEAT_MS
+
+  // If heartbeat is fresh, we still consider this abandoned at boot — by
+  // definition the process that wrote that heartbeat is no longer running
+  // (this code only runs at boot). We use the freshness to pick a kinder
+  // reason kind.
+  const reason: AbandonedReason = {
+    kind: heartbeat == null
+      ? 'no_terminal_event'
+      : 'process_killed_mid_run',
+    last_event_seq: lastSeq,
+    last_event_kind: lastKind,
+    last_event_ts: lastTs,
+    detected_at: now,
+  }
+  if (!isStaleHeartbeat && heartbeat != null) {
+    // Heartbeat was recent but we're at boot — the process must have died
+    // very recently. Still abandoned, classification stays as
+    // process_killed_mid_run for clarity.
+    reason.kind = 'process_killed_mid_run'
+  }
+  // If the tail event is `tool_called` / `skill.started` / `skill.queued`
+  // — i.e. the engine dispatched a tool/skill but never wrote the matching
+  // `tool_result` / `skill.finished` — the skill subprocess almost
+  // certainly hung past the engine's tool-call timeout (or the parent
+  // process died waiting for it). Distinct from `provider_silent_exit`
+  // (which fires when the provider stream died AFTER a tool_result
+  // landed) so the UI can show "web-search hung" instead of a generic
+  // "provider stalled" message. Stamp the tool name/call id so callers
+  // can surface which tool was in flight. This branch must come BEFORE
+  // the `tool_result → provider_silent_exit` check below.
+  if (
+    lastEvent?.kind === 'tool_called' ||
+    lastEvent?.kind === 'skill.started' ||
+    lastEvent?.kind === 'skill.queued'
+  ) {
+    reason.kind = 'skill_subprocess_hung'
+    reason.tool_name = lastEvent.tool_name ?? null
+    reason.tool_call_id = lastEvent.tool_call_id ?? null
+    return { status: 'abandoned', reason, errorDetail: null }
+  }
+  // If the tail event is a `tool_result` (or any non-terminal kind that
+  // landed AFTER a tool_called and BEFORE a hypothetical
+  // round_finished/node_finished), we know the provider stream silently
+  // exited mid-round — the engine was waiting on the next provider delta
+  // and never got one. This is a structural diagnosis (independent of
+  // heartbeat freshness), so we override the kind here. Sessions where
+  // Fix A (streamTurn try/catch) catches the throw will instead land with
+  // a `node_finished{stop_reason:'provider_error'}` tail and classify as
+  // idle — exactly what we want.
+  if (lastEvent?.kind === 'tool_result') {
+    reason.kind = 'provider_silent_exit'
+  }
+  return { status: 'abandoned', reason, errorDetail: null }
+}
+
+/** Boot-time reconciliation. Walks every session and replaces stale
+ *  in-flight statuses with one of `idle | needs_input | abandoned | error`.
+ *  No session is silently demoted to `idle` anymore — an interrupted run
+ *  becomes `abandoned` with a structured reason so the UI can surface
+ *  "previous run was interrupted" instead of pretending nothing happened.
+ *
+ *  Tolerant of legacy meta.json missing the new fields. Logs at INFO level
+ *  one line per reclassification. */
+export async function reconcileSessionsOnBoot(
+  now: number = Date.now(),
+): Promise<ReconcileResult[]> {
+  const results: ReconcileResult[] = []
+  for (const id of listSessionIds()) {
+    const meta = readMeta(id)
+    if (!meta) continue
+    // Only reconsider non-terminal statuses. `pending` is also reconsidered —
+    // a session created mid-flight that never got its first event is just
+    // garbage state from a process death.
+    if (
+      meta.status !== 'running' &&
+      meta.status !== 'needs_input' &&
+      meta.status !== 'pending'
+    ) {
+      continue
+    }
+    const events = eventsForSession(id)
+    const lastEvent: StoredEventRow | null =
+      events.length > 0 ? (events[events.length - 1] ?? null) : null
+
+    // Full ask_user scan: an unanswered question parks the session in
+    // needs_input regardless of where it sits in the event stream.
+    let needsInput = false
+    if (events.length > 0) {
+      const answered = new Set<string>()
+      for (const e of events) {
+        if (e.kind === 'user_answered' && e.tool_call_id) answered.add(e.tool_call_id)
+      }
+      const latestQuestion = [...events]
+        .reverse()
+        .find((e) => e.kind === 'user_question' && e.tool_call_id)
+      if (latestQuestion && !answered.has(latestQuestion.tool_call_id!)) {
+        needsInput = true
+      }
+    }
+
+    let newStatus: SessionStatus
+    let reason: AbandonedReason | null = null
+    let errorDetail: ErrorDetail | null = null
+
+    if (needsInput) {
+      newStatus = 'needs_input'
+    } else {
+      const cls = classifyOnBoot(meta, lastEvent, now)
+      newStatus = cls.status
+      reason = cls.reason
+      errorDetail = cls.errorDetail
+    }
+
+    if (newStatus === meta.status && !reason && !errorDetail) {
+      // No change — skip the write.
+      continue
+    }
+
+    const patch: Partial<SessionMeta> = {
+      status: newStatus,
+      finished_at: newStatus === 'running' ? null : (meta.finished_at ?? now),
+    }
+    if (newStatus === 'abandoned') {
+      patch.abandoned_at = now
+      patch.abandoned_reason = reason
+    } else {
+      // Clear stale abandoned markers if we transitioned out of abandoned
+      // (e.g. legacy session that actually has a clean turn_finished tail).
+      patch.abandoned_at = null
+      patch.abandoned_reason = null
+    }
+    if (newStatus === 'error') {
+      patch.error_detail = errorDetail
+      if (errorDetail && !meta.error) patch.error = errorDetail.message
+    }
+    updateMeta(id, patch)
+
+    results.push({
+      sessionId: id,
+      previousStatus: meta.status,
+      newStatus,
+      reason,
+    })
+
+    // INFO-level log per reclassification so the operator sees on startup
+    // exactly which sessions were affected and why.
+    if (newStatus === 'abandoned' && reason) {
+      console.log(
+        `boot: session ${id} reclassified ${meta.status} → abandoned ` +
+          `(${reason.kind}, last_event=${reason.last_event_kind}#${reason.last_event_seq})`,
+      )
+    } else if (newStatus !== meta.status) {
+      console.log(`boot: session ${id} reclassified ${meta.status} → ${newStatus}`)
+    }
+  }
+  return results
+}
+
+/** @deprecated Use `reconcileSessionsOnBoot`. Kept ONLY as a thin no-arg
+ *  shim for any in-tree caller that hasn't been updated yet — returns the
+ *  count of reclassified sessions. New code MUST call
+ *  `reconcileSessionsOnBoot()` directly to get structured results. */
 export async function markOrphanedSessionsIdle(): Promise<number> {
+  const r = await reconcileSessionsOnBoot()
+  return r.length
+}
+
+// ---------- heartbeat ----------
+
+/** Update the in-memory + on-disk heartbeat for a live session. Cheap:
+ *  meta.json rewrite, no event-log line. Called periodically by the
+ *  registry's driveSession() while a turn is in `running` state. */
+export function touchHeartbeat(sessionId: string, lastEventSeq: number | null): void {
+  updateMeta(sessionId, {
+    last_alive_at: Date.now(),
+    last_event_seq: lastEventSeq,
+  })
+}
+
+/** Mark every currently-`running` session as abandoned with a graceful
+ *  shutdown reason. Called from the SIGTERM/SIGINT handler so that on the
+ *  next boot, reconciliation has the cleanest possible signal — the user
+ *  sees "your previous run was interrupted by a server restart" instead of
+ *  the noisier "process killed" classification. Synchronous on purpose:
+ *  the shutdown handler is racing exit. */
+export function markRunningSessionsAbandonedSync(now: number = Date.now()): number {
   let n = 0
   for (const id of listSessionIds()) {
     const meta = readMeta(id)
     if (!meta) continue
-    if (meta.status !== 'running') continue
-    const real = reconcileStatusFromEvents(id) ?? 'idle'
+    if (meta.status !== 'running' && meta.status !== 'needs_input' && meta.status !== 'pending') {
+      continue
+    }
+    // needs_input is a legitimate park — the process was waiting on the
+    // user, not actively generating. Don't reclassify those as abandoned;
+    // they're still resumable via the answer endpoint.
+    if (meta.status === 'needs_input') continue
+
+    const events = eventsForSession(id)
+    const lastEvent: StoredEventRow | null =
+      events.length > 0 ? (events[events.length - 1] ?? null) : null
+    const reason: AbandonedReason = {
+      kind: 'graceful_shutdown_during_turn',
+      last_event_seq: lastEvent?.seq ?? null,
+      last_event_kind: lastEvent?.kind ?? null,
+      last_event_ts: lastEvent?.ts ?? null,
+      detected_at: now,
+    }
     updateMeta(id, {
-      status: real,
-      // finished_at only makes sense for non-live states.
-      finished_at: real === 'running' ? null : (meta.finished_at ?? Date.now()),
+      status: 'abandoned',
+      finished_at: meta.finished_at ?? now,
+      abandoned_at: now,
+      abandoned_reason: reason,
     })
     n += 1
   }

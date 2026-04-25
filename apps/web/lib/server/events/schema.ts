@@ -14,6 +14,7 @@ export type EventKind =
   | 'run_error'
   | 'node_started'
   | 'node_finished'
+  | 'node_error'
   | 'token'
   | 'tool_called'
   | 'tool_result'
@@ -27,6 +28,7 @@ export type EventKind =
   | 'todos_changed'
   | 'skill.queued'
   | 'skill.started'
+  | 'skill.progress'
   | 'tool_run.partitioned'
   // A4 — token estimation + window math
   | 'token.estimate.drift'

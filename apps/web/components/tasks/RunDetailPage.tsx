@@ -2463,7 +2463,33 @@ const ChatBubble = memo(
       return true
     }
     if (a.kind === 'tool' && b.kind === 'tool') {
-      return a.summary === b.summary
+      if (a.summary !== b.summary) return false
+      // Delegation chips (delegate_to / delegate_parallel) carry a `children`
+      // array that GROWS over time as the sub-agent does work. The `summary`
+      // string ("↘ delegating to Member") stays constant while children
+      // accumulate, so comparing summary alone left these chips frozen until
+      // a hard refresh — the UI's "must refresh to see updates" symptom.
+      // Compare children identities + each child's own work-state proxy
+      // (its summary or sources count) so re-renders fire as work progresses.
+      const ac = a.children ?? []
+      const bc = b.children ?? []
+      if (ac.length !== bc.length) return false
+      for (let i = 0; i < ac.length; i++) {
+        const x = ac[i]!
+        const y = bc[i]!
+        if (x.kind !== y.kind || x.id !== y.id) return false
+        if (x.kind === 'tool' && y.kind === 'tool') {
+          if (x.summary !== y.summary) return false
+          // One level of recursion — sub-sub work shows as length growth here.
+          if ((x.children?.length ?? 0) !== (y.children?.length ?? 0)) return false
+        } else if (x.kind === 'sources' && y.kind === 'sources') {
+          if (x.sources.length !== y.sources.length) return false
+        }
+      }
+      // delegate.tasks is set at chip creation; a re-render shouldn't change
+      // it, but compare length defensively for delegate_parallel expansions.
+      if ((a.delegate?.tasks.length ?? 0) !== (b.delegate?.tasks.length ?? 0)) return false
+      return true
     }
     if (a.kind === 'tool_group' && b.kind === 'tool_group') {
       if (a.items.length !== b.items.length) return false

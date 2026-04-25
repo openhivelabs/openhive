@@ -25,6 +25,7 @@ import {
   makePersonaTools,
   resolvePersona,
 } from '../agents/runtime'
+import { resolveEffectiveSkills } from '../agents/skill-bundles'
 import * as artifactsStore from '../artifacts'
 import { getSettings } from '../config'
 import { type Event, makeEvent } from '../events/schema'
@@ -36,7 +37,7 @@ import { dataDir } from '../paths'
 import type { ChatMessage, ToolSpec } from '../providers/types'
 import { readArtifactTool, buildArtifactUri } from '../sessions/artifacts'
 import * as sessionsStore from '../sessions'
-import { type SkillDef, getSkill, listSkills, matchSkillHints } from '../skills/loader'
+import { type SkillDef, getSkill, matchSkillHints } from '../skills/loader'
 import { readSkillFile, runSkill, runSkillScript } from '../skills/runner'
 import { type Tool, toolsToOpenAI } from '../tools/base'
 import { teamDataTools } from '../tools/team-data-tool'
@@ -50,6 +51,7 @@ import {
 import { type ThresholdTrigger, recordUsage } from '../usage'
 import * as askuser from './askuser'
 import * as errors from './errors'
+import { getHandle } from './session-registry'
 import {
   buildForkedMessages,
   decideForkOrFresh,
@@ -181,6 +183,10 @@ interface RunState {
   // by `${sessionId}:${nodeId}:${depth}:${todoVersion}`. Not consumed yet —
   // fork children currently inherit the parent's snapshot.systemPrompt.
   forkSystemCache: Map<string, string>
+  // `{sessionId}:{fromId}->{toId}` → count of times the parent re-delegated
+  // this pair AFTER the child returned with `status: 'budget_exhausted'`.
+  // Hard-capped at 1 retry per pair per turn so the LLM can't loop forever.
+  budgetRetries: Map<string, number>
 }
 
 // Phase C1: Cap per-(parent→child) delegations within a TURN. A parent re-
@@ -219,6 +225,7 @@ function state(): RunState {
       todos: new Map(),
       lastTurnSnapshot: new Map(),
       forkSystemCache: new Map(),
+      budgetRetries: new Map(),
     }
   }
   // HMR-safe: if an older incarnation initialised the global without a newer
@@ -231,6 +238,7 @@ function state(): RunState {
   if (!s.todos) s.todos = new Map()
   if (!s.lastTurnSnapshot) s.lastTurnSnapshot = new Map()
   if (!s.forkSystemCache) s.forkSystemCache = new Map()
+  if (!s.budgetRetries) s.budgetRetries = new Map()
   return s
 }
 
@@ -269,6 +277,9 @@ function resetPerTurnCaps(sessionId: string): void {
   const seen = s.readSkillFileSeen.get(sessionId)
   if (seen) seen.clear()
   s.webSearch.delete(sessionId)
+  for (const k of s.budgetRetries.keys()) {
+    if (k.startsWith(`${sessionId}:`)) s.budgetRetries.delete(k)
+  }
 }
 
 // -------- history compaction helpers (Phase B token savings) --------
@@ -569,6 +580,9 @@ export async function* runTeam(
     for (const k of state().forkSystemCache.keys()) {
       if (k.startsWith(forkPrefix)) state().forkSystemCache.delete(k)
     }
+    for (const k of state().budgetRetries.keys()) {
+      if (k.startsWith(`${sessionId}:`)) state().budgetRetries.delete(k)
+    }
     errors.clearSessionFailures(sessionId)
     // Belt-and-suspenders: release is idempotent, so even if runTeamBody
     // already released before its final error path, this is a no-op.
@@ -857,27 +871,17 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
 
   // Skills: typed get a structured tool; agent-format go through activate/read/run.
   //
-  // Resolution:
-  //   1. Start with what the agent declared (node.skills ∪ persona.tools.skills).
-  //   2. If the agent declared NOTHING, fall back to every bundled + user skill
-  //      so legacy teams (created before DEFAULT_AGENT_SKILLS was introduced —
-  //      see 61cae18) still expose pdf/docx/etc. metadata to the LLM. Without
-  //      this, an agent with `skills: []` got zero skill tools registered and
-  //      the LLM had no way to produce files even when they were physically
-  //      available on disk.
-  //   3. team.allowed_skills, if non-empty, narrows whatever we resolved above.
-  //      Empty team.allowed_skills is treated as "no narrowing", matching the
-  //      mental model that whitelist = opt-in restriction.
-  const declared = effectiveSkills(node, persona)
-  const candidates =
-    declared.length > 0 ? declared : Array.from(listSkills().keys())
-  const rawAllowed = team.allowed_skills ?? []
-  const hasAllowlist = rawAllowed.length > 0
-  const allowed = new Set(rawAllowed)
+  // Resolution lives in agents/skill-bundles.ts (`resolveEffectiveSkills`):
+  //   roleDefaults(node.role) ∪ persona.tools.skills ∪ node.skills,
+  //   then coupled-skill rules (web-fetch always pulls in web-search, etc.),
+  //   then team.allowed_skills narrowing if it's non-empty.
+  // The pre-redesign "if declared empty, fall back to every bundled skill"
+  // hack is gone — it accidentally opted Members out of essentials whenever
+  // their persona listed a few file skills (see commit log / Track A brief).
+  const candidates = effectiveSkills(node, persona, team)
   const typedSkills: SkillDef[] = []
   const agentSkills: SkillDef[] = []
   for (const name of candidates) {
-    if (hasAllowlist && !allowed.has(name)) continue
     const skill = getSkill(name)
     if (!skill) continue
     if (skill.kind === 'typed') typedSkills.push(skill)
@@ -1123,7 +1127,7 @@ function buildEmptyRoundFallback(
 
 // -------- provider turn --------
 
-interface StreamTurnOpts {
+export interface StreamTurnOpts {
   sessionId: string
   team: TeamSpec
   node: AgentSpec
@@ -1147,7 +1151,7 @@ interface StreamTurnOpts {
   noHistoryPush?: boolean
 }
 
-async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
+export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
   const { sessionId, team, node, systemPrompt, history, tools, depth } = opts
   // Time-based microcompact: clear stale read-only tool_result bodies before
   // the prompt is built. Only applies to Lead (depth === 0); sub-agent
@@ -1289,13 +1293,20 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
     return cleaned ? [cleaned] : []
   }
 
+  // Track the last delta kind so a provider mid-stream throw can report what
+  // was happening when the iterator died. See Fix A — provider stream
+  // exceptions surface as terminal events.
+  let lastDeltaKind: 'text' | 'tool_call' | 'usage' | 'stop' | null = null
+  try {
   for await (const delta of stream(node.provider_id, node.model, messages, openaiTools, streamOpts)) {
     if (delta.kind === 'text') {
+      lastDeltaKind = 'text'
       textBuf.push(delta.text)
       for (const chunk of emitStripped(delta.text)) {
         yield makeEvent('token', sessionId, { text: chunk }, { depth, node_id: node.id })
       }
     } else if (delta.kind === 'tool_call') {
+      lastDeltaKind = 'tool_call'
       let p = pending.get(delta.index)
       if (!p) {
         p = { id: null, name: null, args: '' }
@@ -1305,6 +1316,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       if (delta.name) p.name = delta.name
       if (delta.arguments_chunk) p.args += delta.arguments_chunk
     } else if (delta.kind === 'usage') {
+      lastDeltaKind = 'usage'
       // Logging shouldn't kill the run — catch-all.
       const actualInput = delta.input_tokens ?? 0
       try {
@@ -1357,9 +1369,48 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
         }
       }
     } else if (delta.kind === 'stop') {
+      lastDeltaKind = 'stop'
       stopReason = delta.reason ?? 'stop'
       break
     }
+  }
+  } catch (err) {
+    // Provider stream blew up mid-iteration (network/abort/parse error).
+    // Without recovery the for-await silently exits, no `_turn_marker`
+    // is emitted, and `runNode`'s round loop never sees terminal events
+    // → SSE consumers see a session that just stops. Emit a structured
+    // `node_error` for diagnostics, then a synthesized `_turn_marker`
+    // `node_finished` so the round loop can complete its bookkeeping
+    // (round_finished + public node_finished). Finally re-throw so the
+    // outer catches still fire `run_error` (depth=0) or
+    // `delegation_closed{error:true}` (depth ≥ 1).
+    const message = err instanceof Error ? err.message : String(err)
+    const partialText = textBuf.join('')
+    yield makeEvent(
+      'node_error',
+      sessionId,
+      {
+        provider_id: node.provider_id,
+        model: node.model,
+        message,
+        last_delta_kind: lastDeltaKind,
+        partial_text_len: partialText.length,
+        pending_tool_calls: pending.size,
+        phase: 'stream',
+      },
+      { depth, node_id: node.id },
+    )
+    yield makeEvent(
+      'node_finished',
+      sessionId,
+      {
+        _turn_marker: true,
+        output: partialText,
+        stop_reason: 'provider_error',
+      },
+      { depth, node_id: node.id },
+    )
+    throw err
   }
   // Flush any tail buffered by the meta-label stripper (last paragraph with
   // no trailing blank line).
@@ -1561,6 +1612,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
           } else if (tool.skill) {
             // Skill tools go through the global Python concurrency limiter;
             // emit queued/started events so the UI can show queue state.
+            const skillSignal = getHandle(sessionId)?.abort.signal
             for await (const subEv of runSkillInvocation({
               sessionId,
               tool,
@@ -1569,6 +1621,7 @@ async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
               toolName: tc.function.name,
               nodeId: node.id,
               depth,
+              signal: skillSignal,
             })) {
               if (subEv.kind === 'tool_result') {
                 content = (subEv.data.content as string | undefined) ?? ''
@@ -2000,6 +2053,107 @@ function delegateTool(team: TeamSpec, node: AgentSpec): Tool {
   }
 }
 
+// -------- delegation preflight --------
+
+/** Minimum-viable signal that a task wants research. We deliberately keep
+ *  this small + bilingual; the cost of a false positive is "parent gets a
+ *  helpful error and either grants the skill or picks a different agent",
+ *  which is exactly what we want when in doubt. */
+const RESEARCH_KEYWORDS = [
+  'search', 'find', 'look up', 'lookup', 'research', 'investigate',
+  'browse', 'web', 'http', 'url', 'fetch',
+  'latest', 'current', 'recent', 'news',
+  '검색', '조사', '찾아', '리서치', '최신', '뉴스', '인터넷', '웹',
+]
+
+function looksLikeResearchTask(text: string): boolean {
+  const lower = text.toLowerCase()
+  for (const k of RESEARCH_KEYWORDS) {
+    if (lower.includes(k)) return true
+  }
+  return false
+}
+
+/** Validate an assignee can plausibly do the requested work. Returns null
+ *  on success, or a structured error message to feed back as the tool_result.
+ *  We don't silently auto-add skills — making the parent surface a real
+ *  config error is better than papering over it. */
+export function preflightDelegation(
+  team: TeamSpec,
+  assignee: AgentSpec,
+  taskText: string,
+): string | null {
+  if (!looksLikeResearchTask(taskText)) return null
+  const persona = resolvePersona(assignee, team)
+  const skills = resolveEffectiveSkills({
+    role: assignee.role,
+    nodeSkills: assignee.skills,
+    personaSkills: persona.tools.skills,
+    allowedSkills: team.allowed_skills ?? null,
+  })
+  const has = new Set(skills)
+  if (has.has('web-search')) return null
+  return (
+    `ERROR: assignee '${assignee.role}' (id ${assignee.id}) lacks the ` +
+    `'web-search' skill but the task you delegated reads as a research / ` +
+    `web-lookup task. Either (a) pick a subordinate that owns web-search, ` +
+    `(b) reformulate the task so it doesn't require browsing the web, or ` +
+    `(c) ask the user to add 'web-search' to this agent's skills via team ` +
+    `config. Do NOT retry the same delegation unchanged.`
+  )
+}
+
+// -------- round-limit re-delegation --------
+
+/** Hard cap on how many times the parent may re-delegate the same pair after
+ *  a `budget_exhausted` return in one turn. 1 = give the LLM one chance to
+ *  narrow the scope and try again, then refuse. */
+export const BUDGET_EXHAUSTED_RETRY_CAP = 1
+
+/** Detect that a sub-node ended via the round-limit fallback. We capture the
+ *  `turn.round_limit` event during the inner stream so we don't have to
+ *  string-match the apology text. */
+interface SubFinishSignal {
+  budgetExhausted: boolean
+  maxRounds: number | null
+}
+
+/** Build the structured tool_result payload for a budget-exhausted child.
+ *  The parent's LLM gets a clear status field (so it doesn't have to parse
+ *  Korean / English apology prose) plus enough partial output to decide
+ *  whether to re-delegate with narrower scope. */
+export function makeBudgetExhaustedResult(opts: {
+  assignee: AgentSpec
+  siblingIndex: number | null
+  maxRounds: number | null
+  partialOutput: string
+  retriesUsed: number
+  retryCap: number
+}): Record<string, unknown> {
+  const partial = opts.partialOutput ?? ''
+  const excerpt = partial.length > 800 ? partial.slice(0, 800) + ' …' : partial
+  const retriesLeft = Math.max(0, opts.retryCap - opts.retriesUsed)
+  const guidance =
+    retriesLeft > 0
+      ? `You may re-delegate ONCE with a narrower scope (smaller subtopic, ` +
+        `fewer sources, or a single concrete deliverable). Do NOT re-issue ` +
+        `the same task verbatim — that will exhaust the budget again.`
+      : `Retry budget for this pair is exhausted this turn. Consolidate the ` +
+        `partial output above into your own answer, or hand off a clearly ` +
+        `different subtask to a different subordinate.`
+  return {
+    status: 'budget_exhausted',
+    assignee_id: opts.assignee.id,
+    assignee_role: opts.assignee.role,
+    sibling_index: opts.siblingIndex,
+    max_rounds: opts.maxRounds,
+    partial_output_excerpt: excerpt,
+    retries_used: opts.retriesUsed,
+    retries_left: retriesLeft,
+    guidance,
+  }
+}
+
 interface DelegationOpts {
   sessionId: string
   team: TeamSpec
@@ -2071,6 +2225,54 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
     return
   }
 
+  // Round-limit re-delegation cap: refuse to re-delegate after the per-pair
+  // budget_exhausted retry quota is spent, so a single turn can't get stuck
+  // looping "exhausted → narrower retry → exhausted again" forever.
+  {
+    const retried = state().budgetRetries.get(pairKey) ?? 0
+    if (retried > BUDGET_EXHAUSTED_RETRY_CAP) {
+      yield makeEvent(
+        'delegation_closed',
+        sessionId,
+        {
+          assignee_id: target.id,
+          assignee_role: target.role,
+          error: true,
+          result:
+            `ERROR: this pair already hit the round-limit retry cap ` +
+            `(${BUDGET_EXHAUSTED_RETRY_CAP}) this turn. The previous ` +
+            `'budget_exhausted' tool_result told you to either narrow the ` +
+            `scope and retry once, or consolidate. Do that now — do not ` +
+            `delegate_to(${target.role}) again until the next user message.`,
+        },
+        { depth, node_id: fromNode.id, tool_call_id: toolCallId },
+      )
+      return
+    }
+  }
+
+  // Preflight: refuse research-shaped tasks delegated to an assignee that
+  // lacks web-search. Surfaces a structured tool_result so the parent's
+  // LLM can fix the team config or pick a different subordinate instead of
+  // burning rounds on guessed URLs / DDG HTML pages.
+  {
+    const preflightErr = preflightDelegation(team, target, task)
+    if (preflightErr) {
+      yield makeEvent(
+        'delegation_closed',
+        sessionId,
+        {
+          assignee_id: target.id,
+          assignee_role: target.role,
+          error: true,
+          result: preflightErr,
+        },
+        { depth, node_id: fromNode.id, tool_call_id: toolCallId },
+      )
+      return
+    }
+  }
+
   if (errors.isAgentExcluded(sessionId, target.id)) {
     const msg = errors.renderError(
       { kind: 'agent_excluded', statusCode: null, detail: '' },
@@ -2115,6 +2317,7 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
 
   let subOutput = ''
   let subToolCallCount = 0
+  const subSignal: SubFinishSignal = { budgetExhausted: false, maxRounds: null }
   try {
     for await (const ev of runNode({
       sessionId,
@@ -2130,6 +2333,15 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
         ev.node_id === target.id
       ) {
         subToolCallCount += 1
+      }
+      if (
+        ev.kind === 'turn.round_limit' &&
+        ev.depth === depth + 1 &&
+        ev.node_id === target.id
+      ) {
+        subSignal.budgetExhausted = true
+        const mr = ev.data.max_rounds
+        if (typeof mr === 'number') subSignal.maxRounds = mr
       }
       if (ev.kind === 'node_finished' && ev.depth === depth + 1 && ev.node_id === target.id) {
         subOutput = (ev.data.output as string | undefined) ?? ''
@@ -2225,6 +2437,25 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
     maxChars,
   })
 
+  // Round-limit re-delegation: when the sub burned its tool-round budget
+  // before producing a real answer, replace the apology prose in the parent's
+  // tool_result with a STRUCTURED note. The LLM can read `status:
+  // 'budget_exhausted'` deterministically and decide to re-delegate with
+  // narrower scope (capped at BUDGET_EXHAUSTED_RETRY_CAP per pair per turn).
+  let resultText = capped.result
+  if (subSignal.budgetExhausted) {
+    const prior = state().budgetRetries.get(pairKey) ?? 0
+    const payload = makeBudgetExhaustedResult({
+      assignee: target,
+      siblingIndex: null,
+      maxRounds: subSignal.maxRounds,
+      partialOutput: capped.result,
+      retriesUsed: prior,
+      retryCap: BUDGET_EXHAUSTED_RETRY_CAP,
+    })
+    state().budgetRetries.set(pairKey, prior + 1)
+    resultText = JSON.stringify(payload)
+  }
 
   yield makeEvent(
     'delegation_closed',
@@ -2232,7 +2463,8 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
     {
       assignee_id: target.id,
       assignee_role: target.role,
-      result: capped.result,
+      result: resultText,
+      ...(subSignal.budgetExhausted && { budget_exhausted: true }),
       ...(capped.truncated && {
         truncated: true,
         original_chars: capped.originalChars,
@@ -2268,11 +2500,12 @@ function delegateParallelTool(team: TeamSpec, node: AgentSpec): Tool {
   return {
     name: 'delegate_parallel',
     description:
-      'Delegate the SAME subordinate to multiple concurrent instances, each with ' +
-      'a distinct, non-overlapping task. Use ONLY when the work splits cleanly ' +
-      'across independent regions — a higher ceiling is not a quota, pick the ' +
-      `smallest count that actually covers the work. Per-assignee ceilings: ${capsHint}. ` +
-      "Each task must describe its own scope so the instances don't duplicate effort.",
+      'Launch the SAME subordinate as N concurrent siblings, one per independent ' +
+      'subtask. USE WHEN: you have N independent subtopics (e.g. "research X", ' +
+      '"research Y", "research Z") AND a subordinate of that role with ' +
+      `max_parallel ≥ N. Each task must be self-contained and non-overlapping. ` +
+      `Per-assignee ceilings: ${capsHint}. Pick the smallest count that covers ` +
+      'the work — a higher ceiling is not a quota.',
     parameters: {
       type: 'object',
       properties: {
@@ -2368,11 +2601,36 @@ async function* runParallelDelegation(opts: DelegationOpts): AsyncGenerator<Even
     return
   }
 
+  // Preflight: check EVERY task before any sibling launches. Same rule as
+  // sequential delegate_to — research-shaped task + assignee lacking
+  // web-search → refuse the whole fan-out so the parent fixes its config.
+  // Doing this up-front prevents partial state where 2/3 siblings ran.
+  for (let i = 0; i < tasks.length; i += 1) {
+    const preflightErr = preflightDelegation(team, target, String(tasks[i]))
+    if (preflightErr) {
+      yield makeEvent(
+        'delegation_closed',
+        sessionId,
+        {
+          assignee_id: target.id,
+          assignee_role: target.role,
+          group_final: true,
+          error: true,
+          result: `[#${i + 1}] ${preflightErr}`,
+        },
+        { depth, node_id: fromNode.id, tool_call_id: toolCallId },
+      )
+      return
+    }
+  }
+
   const siblingGroupId = newId('sib')
   const queue = new AsyncQueue<{ index: number; event: Event | null }>()
   const outputs: string[] = tasks.map(() => '')
   const errs: (string | null)[] = tasks.map(() => null)
+  const budgetExhaustedAt: { siblingIndex: number; maxRounds: number | null }[] = []
   const capturedTarget = target
+  const pairKey = `${sessionId}:${fromNode.id}->${capturedTarget.id}`
 
   // S3 fork: read the parent's turn snapshot once (same for every sibling)
   // and decide per-child whether to fork. Mixed-provider fan-outs decide
@@ -2436,6 +2694,13 @@ async function* runParallelDelegation(opts: DelegationOpts): AsyncGenerator<Even
         if (ev.kind === 'node_finished' && ev.depth === depth + 1) {
           outputs[i] = (ev.data.output as string | undefined) ?? ''
         }
+        if (ev.kind === 'turn.round_limit' && ev.depth === depth + 1) {
+          const mr = ev.data.max_rounds
+          budgetExhaustedAt.push({
+            siblingIndex: i,
+            maxRounds: typeof mr === 'number' ? mr : null,
+          })
+        }
       }
     } catch (exc) {
       errors.noteAgentFailure(sessionId, capturedTarget.id)
@@ -2477,10 +2742,27 @@ async function* runParallelDelegation(opts: DelegationOpts): AsyncGenerator<Even
   }
   await Promise.allSettled(workers)
 
+  const exhaustedSet = new Set(budgetExhaustedAt.map((e) => e.siblingIndex))
   const parts: string[] = []
   for (let i = 0; i < outputs.length; i += 1) {
     if (errs[i] !== null) parts.push(`[#${i + 1} FAILED] ${errs[i]}`)
-    else if (outputs[i]) parts.push(`[#${i + 1}] ${outputs[i]}`)
+    else if (exhaustedSet.has(i)) {
+      const meta = budgetExhaustedAt.find((e) => e.siblingIndex === i)!
+      const prior = state().budgetRetries.get(pairKey) ?? 0
+      const payload = makeBudgetExhaustedResult({
+        assignee: capturedTarget,
+        siblingIndex: i,
+        maxRounds: meta.maxRounds,
+        partialOutput: outputs[i] ?? '',
+        retriesUsed: prior,
+        retryCap: BUDGET_EXHAUSTED_RETRY_CAP,
+      })
+      parts.push(`[#${i + 1} BUDGET_EXHAUSTED] ${JSON.stringify(payload)}`)
+    } else if (outputs[i]) parts.push(`[#${i + 1}] ${outputs[i]}`)
+  }
+  if (exhaustedSet.size > 0) {
+    const prior = state().budgetRetries.get(pairKey) ?? 0
+    state().budgetRetries.set(pairKey, prior + 1)
   }
   const combined = parts.length > 0 ? parts.join('\n\n') : '(no output)'
   const anyError = errs.some((e) => e !== null)
@@ -2515,6 +2797,7 @@ async function* runParallelDelegation(opts: DelegationOpts): AsyncGenerator<Even
       group_final: true,
       result: combined,
       error: anyError && allError,
+      ...(exhaustedSet.size > 0 && { budget_exhausted: true }),
     },
     { depth, node_id: fromNode.id, tool_call_id: toolCallId },
   )
@@ -2628,7 +2911,7 @@ async function* runAskUser(opts: AskUserOpts): AsyncGenerator<Event> {
 
 // -------- skill invocation sub-generator --------
 
-interface SkillInvocationOpts {
+export interface SkillInvocationOpts {
   sessionId: string
   tool: Tool
   args: Record<string, unknown>
@@ -2636,7 +2919,14 @@ interface SkillInvocationOpts {
   toolName: string
   nodeId: string
   depth: number
+  /** Session-level abort signal forwarded to the skill subprocess so user
+   *  stops actually kill the spawned interpreter. Optional in tests. */
+  signal?: AbortSignal
 }
+
+/** How often `runSkillInvocation` emits `skill.progress` heartbeats while a
+ *  long-running skill is executing. Exported for tests. */
+export const SKILL_PROGRESS_INTERVAL_MS = 5000
 
 /** Runs a skill tool while emitting `skill.queued` + `skill.started` events
  *  around the concurrency-limiter boundary. The concurrency limiter fires
@@ -2648,8 +2938,8 @@ interface SkillInvocationOpts {
  *  Yields one synthetic `tool_result` event at the end carrying the handler's
  *  return value in `data.content`; the caller unwraps it and emits the
  *  canonical `tool_result` in the outer loop. */
-async function* runSkillInvocation(opts: SkillInvocationOpts): AsyncGenerator<Event> {
-  const { sessionId, tool, args, toolCallId, toolName, nodeId, depth } = opts
+export async function* runSkillInvocation(opts: SkillInvocationOpts): AsyncGenerator<Event> {
+  const { sessionId, tool, args, toolCallId, toolName, nodeId, depth, signal } = opts
   if (!tool.skill) {
     throw new Error(`runSkillInvocation called on non-skill tool ${toolName}`)
   }
@@ -2665,25 +2955,36 @@ async function* runSkillInvocation(opts: SkillInvocationOpts): AsyncGenerator<Ev
   // (after the first await) queuedFired is already true.
   let resultContent = ''
   let resultError = false
+  let invocationDone = false
+  const startedAt = Date.now()
   const invocationPromise = (async () => {
     try {
-      const raw = await tool.skill!.runWithHooks(args, {
-        onQueued: () => {
-          queuedFired = true
+      const raw = await tool.skill!.runWithHooks(
+        args,
+        {
+          onQueued: () => {
+            queuedFired = true
+          },
+          onStarted: () => {
+            resolveStarted()
+          },
         },
-        onStarted: () => {
-          resolveStarted()
-        },
-      })
+        { signal },
+      )
       resultContent = typeof raw === 'string' ? raw : JSON.stringify(raw)
     } catch (exc) {
       resultContent = `ERROR: ${exc instanceof Error ? exc.message : String(exc)}`
       resultError = true
-      // Make sure we don't hang on startedPromise if the call threw before
-      // the slot was acquired.
-      resolveStarted()
     }
-  })()
+  })().finally(() => {
+    invocationDone = true
+    // Defence-in-depth: any runWithHooks return path (success, throw, or
+    // hook-less early return) MUST release startedPromise. The contract used
+    // to rely on runWithHooks to call onStarted itself; a missed call (cap
+    // hit, validation reject) deadlocks the sibling generator and cascades
+    // into a frozen session. Resolving here is idempotent.
+    resolveStarted()
+  })
 
   // Yield microtask so synchronous onQueued has already fired.
   await Promise.resolve()
@@ -2705,7 +3006,44 @@ async function* runSkillInvocation(opts: SkillInvocationOpts): AsyncGenerator<Ev
     { depth, node_id: nodeId, tool_call_id: toolCallId, tool_name: toolName },
   )
 
-  await invocationPromise
+  // Heartbeat loop: emit skill.progress every SKILL_PROGRESS_INTERVAL_MS so
+  // the parent generator and SSE consumers can see the skill is still alive
+  // and not silently blocking the round. Promise.race doesn't cancel the
+  // loser, so the timer is cleared each iteration and `invocationDone` is
+  // set inside .finally() to disambiguate which side won.
+  while (!invocationDone) {
+    let tickResolve: () => void = () => {}
+    const tick = new Promise<void>((r) => {
+      tickResolve = r
+    })
+    const timer = setTimeout(tickResolve, SKILL_PROGRESS_INTERVAL_MS)
+    const winner = await Promise.race([
+      invocationPromise.then(() => 'done' as const),
+      tick.then(() => 'tick' as const),
+    ])
+    clearTimeout(timer)
+    if (winner === 'tick' && !invocationDone) {
+      yield makeEvent(
+        'skill.progress',
+        sessionId,
+        {
+          skill: tool.skill.name,
+          elapsed_ms: Date.now() - startedAt,
+        },
+        { depth, node_id: nodeId, tool_call_id: toolCallId, tool_name: toolName },
+      )
+    }
+  }
+
+  // If the run was aborted mid-skill, override the result with a clear
+  // marker so the LLM (parked on this tool_call) sees a matching tool_result
+  // and the round can wind down cleanly. The subprocess SIGTERM happens via
+  // the signal plumbing inside runSubprocess; we only own the message here.
+  if (signal?.aborted) {
+    const elapsed = Date.now() - startedAt
+    resultContent = `ABORTED: skill ${tool.skill.name} was cancelled by user stop after ${elapsed}ms`
+    resultError = true
+  }
 
   // Relay the handler result back to the caller via a synthetic tool_result
   // event. The caller strips this and emits the canonical tool_result.
@@ -2727,7 +3065,27 @@ async function* runSkillInvocation(opts: SkillInvocationOpts): AsyncGenerator<Ev
 // Lead verifies assumptions, corrects silently, and only calls ask_user as a
 // genuine last resort (see askUserGuidance()).
 
-function buildRelaySection(
+/**
+ * Shared "Parallel fan-out" guidance. Wording is generic — applies to the Lead
+ * AND any non-Lead manager that has subordinates. The text intentionally uses
+ * "subordinate" (not "delegate") so it reads naturally in either role.
+ */
+export function parallelDelegationRule(_opts: { isLead: boolean }): string {
+  return (
+    `# Parallel fan-out (independent subtasks)\n` +
+    `If two or more subtasks are genuinely independent (no output of one feeds ` +
+    `the other), emit MULTIPLE \`delegate_to\` tool_calls in the SAME assistant ` +
+    `response — the engine runs them concurrently and you'll see each ` +
+    `tool_result as it arrives. Do NOT chain them across turns when they don't ` +
+    `need to be sequential. When you have N independent subtopics AND a ` +
+    `subordinate that supports parallel dispatch (max_parallel > 1), use ` +
+    `\`delegate_parallel\` to launch N siblings of the same role in one shot. ` +
+    `Use both forms ONLY when tasks are truly independent; if one's output ` +
+    `shapes another (research → then write report), keep them sequential.\n`
+  )
+}
+
+export function buildRelaySection(
   depth: number,
   hasSubs: boolean,
   team: TeamSpec,
@@ -2751,13 +3109,8 @@ function buildRelaySection(
       `returns a usable result, accept it or edit yourself — do NOT re-delegate ` +
       `"REVISED TASK" / "please polish X". If you hit the cap mid-turn, consolidate what you ` +
       `have and report to the user; don't end the turn with a vague "system limit" excuse.\n` +
-      `\n# Parallel fan-out (independent subtasks)\n` +
-      `If two or more subtasks are genuinely independent (no output of one feeds the other), ` +
-      `emit MULTIPLE \`delegate_to\` tool_calls in the SAME assistant response — the engine runs ` +
-      `them concurrently and you'll see each tool_result as it arrives. Do NOT chain them across ` +
-      `turns when they don't need to be sequential. Use this ONLY when the tasks are truly ` +
-      `independent; if one's output shapes the other (research → then write report), keep them ` +
-      `sequential so the second sees the first's result.\n`
+      `\n` +
+      parallelDelegationRule({ isLead: true })
     )
   }
   let section =
@@ -2786,7 +3139,9 @@ function buildRelaySection(
       '\n# Relaying from your own delegates\n' +
       'If one of your own delegates returns ambiguity or fails, resolve it ' +
       'yourself or retry with a tighter brief. Do NOT forward their uncertainty ' +
-      'upward; you are the decision-maker at this level.\n'
+      'upward; you are the decision-maker at this level.\n' +
+      '\n' +
+      parallelDelegationRule({ isLead: false })
   }
   return section
 }
@@ -2806,9 +3161,18 @@ function describeTeamForAgent(team: TeamSpec, agentId: string): string {
       if (visited.has(sub.id)) continue
       visited.add(sub.id)
       const label = sub.label && sub.label !== sub.role ? ` (${sub.label})` : ''
-      // Phase F1: surface skill ownership so Lead routes "make PDF" to the
-      // agent that actually has `pdf` instead of delegating blindly by role.
-      const skills = Array.isArray(sub.skills) ? sub.skills : []
+      // Surface RESOLVED effective skills, not raw node.skills. The resolver
+      // applies role-default bundles and coupling rules (e.g. web-fetch always
+      // pulls in web-search), so the LLM sees the same capability set the
+      // sub will actually have at runtime — otherwise managers underestimate
+      // their reports and stop delegating.
+      const subPersona = resolvePersona(sub, team)
+      const skills = resolveEffectiveSkills({
+        role: sub.role,
+        nodeSkills: sub.skills,
+        personaSkills: subPersona.tools.skills,
+        allowedSkills: team.allowed_skills ?? null,
+      })
       const skillTag = skills.length > 0 ? ` [skills: ${skills.join(', ')}]` : ''
       lines.push(`${'  '.repeat(indent)}- ${sub.role}${label}${skillTag}`)
       walk(sub.id, indent + 1)
@@ -2828,10 +3192,12 @@ function describeTeamForAgent(team: TeamSpec, agentId: string): string {
   )
 }
 
-function composeSystemPrompt(base: string, agentSkills: SkillDef[], teamSection: string): string {
-  if (agentSkills.length === 0 && !teamSection) return base
+export function composeSystemPrompt(base: string, agentSkills: SkillDef[], teamSection: string): string {
+  const today = todayBlock()
+  if (agentSkills.length === 0 && !teamSection) return base ? base.trimEnd() + today : today.trimStart()
   const parts: string[] = []
   if (base) parts.push(base.trimEnd())
+  parts.push(today)
   if (teamSection) {
     parts.push('\n\n')
     parts.push(teamSection)
@@ -2840,19 +3206,51 @@ function composeSystemPrompt(base: string, agentSkills: SkillDef[], teamSection:
   parts.push('\n\n# Skills available to you\n')
   parts.push(
     'You have access to the skills listed below. For each, you only see the ' +
-      'name and a one-line description right now. When a task looks like it ' +
-      "matches one, call `activate_skill(name)` to load that skill's full guide " +
-      '(SKILL.md) and file tree into the conversation. Then use ' +
-      '`read_skill_file` to fetch supplementary docs and `run_skill_script` to ' +
-      'execute scripts inside it.\n',
+      'name and a one-line "when to use" hint right now. When a task looks ' +
+      "like it matches one, call `activate_skill(name)` to load that skill's " +
+      'full guide (SKILL.md) and file tree into the conversation. Then use ' +
+      '`read_skill_file` to fetch supplementary docs and `run_skill_script` ' +
+      'to execute scripts inside it.\n',
   )
   for (const skill of agentSkills) {
-    let desc = (skill.description || '(no description)').trim()
-    if (desc.includes('\n')) desc = desc.split('\n', 1)[0]!.trimEnd() + ' …'
-    if (desc.length > 120) desc = desc.slice(0, 120).trimEnd() + ' …'
-    parts.push(`- \`${skill.name}\` — ${desc}\n`)
+    parts.push(`- \`${skill.name}\` — ${formatSkillHint(skill)}\n`)
   }
   return parts.join('')
+}
+
+/** Inject the current date as ambient context so LLMs stop anchoring web
+ *  queries to their training-cutoff year. Rebuilt every turn (no caching),
+ *  so long-running sessions stay on the right calendar day. UTC ISO date —
+ *  no timezone math needed for the "what year is it" framing. */
+function todayBlock(now: Date = new Date()): string {
+  const iso = now.toISOString().slice(0, 10)
+  const dow = now.toLocaleDateString('en-US', { weekday: 'long' })
+  const year = now.getUTCFullYear()
+  return (
+    `\n\n# Today\n` +
+    `Today is ${iso} (${dow}). When you write web-search queries or reason ` +
+    `about "latest" / "recent" / "current" content, anchor to ${year} — ` +
+    `do NOT default to your training-cutoff year. If a query needs a year ` +
+    `token, prefer ${year}; include earlier years only when you specifically ` +
+    `need historical context.\n`
+  )
+}
+
+/** One-line "when to use" hint for the system-prompt skill enumeration.
+ *  Uses the SKILL.md frontmatter description; keeps the full first paragraph
+ *  so imperative guards ("Use AFTER web-search", "NEVER fetch search-engine
+ *  pages", etc.) survive. Caps at ~400 chars at the last sentence boundary
+ *  so multi-paragraph decision trees / examples stay out of the prompt. */
+function formatSkillHint(skill: SkillDef): string {
+  const raw = (skill.description || '').trim()
+  if (!raw) return '(no description — call activate_skill to learn more)'
+  const para = raw.split(/\n\s*\n/, 1)[0]!.replace(/\s+/g, ' ').trim()
+  const HARD_CAP = 400
+  if (para.length <= HARD_CAP) return para
+  const slice = para.slice(0, HARD_CAP)
+  const m = slice.match(/^.*[.!?](?=\s|$)/)
+  if (m && m[0].length > HARD_CAP / 2) return m[0]
+  return slice.trimEnd() + ' …'
 }
 
 function skillActivateTool(agentSkills: SkillDef[]): Tool {
@@ -3074,7 +3472,7 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
     hint: 'Running skill script…',
     skill: {
       name: 'run_skill_script',
-      runWithHooks: async (args, hooks) => {
+      runWithHooks: async (args, hooks, runOpts) => {
         const skillName = String(args.skill ?? '')
         const script = String(args.script ?? '')
         const rawScriptArgs = args.args ?? []
@@ -3107,6 +3505,7 @@ function skillRunTool(agentSkills: SkillDef[], ctx: SkillToolContext): Tool {
           args: scriptArgs,
           stdinText: typeof stdinText === 'string' ? stdinText : null,
           hooks,
+          signal: runOpts?.signal,
         })
         const registered = registerSkillArtifacts(result.files, {
           sessionId: ctx.sessionId,
@@ -3277,7 +3676,7 @@ function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
     hint: `Running ${skill.name}…`,
     skill: {
       name: skill.name,
-      runWithHooks: async (args, hooks) => {
+      runWithHooks: async (args, hooks, runOpts) => {
         // Per-turn cap on `web-search`. Mirrors the `read_skill_file` cap
         // pattern: check → increment → short-circuit with a structured error
         // the LLM can read in the tool_result. Reset happens on every new
@@ -3288,6 +3687,12 @@ function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
             MAX_WEB_SEARCH_PER_TURN_FALLBACK
           const used = state().webSearch.get(ctx.sessionId) ?? 0
           if (used >= cap) {
+            // Skill never enters the concurrency limiter — fire the hooks
+            // synchronously so `runSkillInvocation`'s startedPromise resolves.
+            // Without this the parallel sibling generator hangs forever and
+            // freezes the entire session (regression observed 2026-04-25).
+            hooks.onQueued?.()
+            hooks.onStarted?.()
             return JSON.stringify({
               ok: false,
               error:
@@ -3298,7 +3703,7 @@ function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
           }
           state().webSearch.set(ctx.sessionId, used + 1)
         }
-        const result = await runSkill(skill, args, outputDir, { hooks })
+        const result = await runSkill(skill, args, outputDir, { hooks, signal: runOpts?.signal })
         const registered = registerSkillArtifacts(result.files, {
           sessionId: ctx.sessionId,
           teamId: ctx.team.id,

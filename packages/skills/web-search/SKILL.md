@@ -1,6 +1,6 @@
 ---
 name: web-search
-description: Search the web and return a ranked list of candidate URLs with titles and snippets. Use this BEFORE `web-fetch` when you don't already know the right URL — never guess domain names, just search. Free (no API key), powered by DuckDuckGo's static HTML endpoint. Default 10 results per call; prefer fewer searches + reformulated queries over many broad ones.
+description: If this tool returns `ok:false` with `error_code:'search_rate_limited'` or `'search_unavailable'`, follow the `guidance` field — DO NOT continue research from training data alone. Search the web for candidate URLs+titles+snippets. Use BEFORE `web-fetch` when you don't know the URL. Anchor year tokens to `# Today`, not your training cutoff. Free DuckDuckGo HTML; default 10 results.
 triggers:
   keywords: [search, find, look up, look for, query, lookup]
 runtime: python
@@ -80,8 +80,16 @@ On success, one JSON line on stdout:
 On failure:
 
 ```json
-{ "ok": false, "error": "…", "status": 429 }
+{
+  "ok": false,
+  "error_code": "search_rate_limited",
+  "error": "DuckDuckGo is rate-limiting our requests (HTTP 202 captcha). Search is TEMPORARILY unavailable.",
+  "guidance": "Do NOT fabricate results from training data. Either (1) wait and retry web-search after 60s, (2) report 'web search currently unavailable' to your parent and let them decide, or (3) ask the user if they can supply specific URLs to web-fetch directly. Never invent URLs or release dates.",
+  "status": 202
+}
 ```
+
+`error_code` is one of `search_rate_limited` (DDG 202 captcha) or `search_unavailable` (network/transport/5xx/unexpected). Always honor `guidance` — never fall back to training-data answers.
 
 ## Limits & caveats
 

@@ -25,6 +25,11 @@ type Envelope = Event | typeof END
 export interface SessionHandle {
   sessionId: string
   events: Event[]
+  /** seq number of the FIRST event this run will emit. 0 for fresh starts;
+   *  the on-disk events.jsonl line count for resumes. Lets `liveEventsFor`
+   *  assign canonical seq numbers to in-memory events without consulting
+   *  the event-writer (which is async). */
+  seqStart: number
   listeners: Set<AsyncPushQueue<Envelope>>
   finished: boolean
   /** Set when the caller wants to cancel the run. */
@@ -122,6 +127,7 @@ export async function start(
   const handle: SessionHandle = {
     sessionId: '',
     events: [],
+    seqStart: 0,
     listeners: new Set(),
     finished: false,
     abort: new AbortController(),
@@ -154,6 +160,7 @@ export async function resume(
   const handle: SessionHandle = {
     sessionId,
     events: [],
+    seqStart: sessionsStore.eventsForSession(sessionId).length,
     listeners: new Set(),
     finished: false,
     abort: new AbortController(),
@@ -216,13 +223,34 @@ async function driveSession(
 ): Promise<void> {
   // Start at seq=current events count when resuming so appendSessionEvent
   // keeps monotonic ordering across sessions that span multiple processes.
+  // Also pin handle.seqStart so liveEventsFor can synthesize seq numbers
+  // for in-memory events without racing the async event-writer.
   let seq = resume
     ? sessionsStore.eventsForSession(resume.sessionId).length
     : 0
+  handle.seqStart = seq
   let capturedSessionId: string | null = null
   // On resume the on-disk meta already exists — skip the fresh startSession
   // + auto-title work. On cold start, run_started triggers both.
   let dbStarted = !!resume
+
+  // Periodic heartbeat — refreshes meta.last_alive_at while a turn is in
+  // flight so boot reconciliation can tell apart a clean idle session from
+  // one whose owning process was killed mid-run. Cheap (meta.json rewrite,
+  // no event-log line). Started on the first event we observe; cleared in
+  // the finally block.
+  let heartbeatTimer: NodeJS.Timeout | null = null
+  const startHeartbeat = (sid: string) => {
+    if (heartbeatTimer) return
+    heartbeatTimer = setInterval(() => {
+      try {
+        sessionsStore.touchHeartbeat(sid, seq - 1)
+      } catch {
+        /* best-effort — next tick will retry */
+      }
+    }, sessionsStore.HEARTBEAT_INTERVAL_MS)
+    heartbeatTimer.unref?.()
+  }
 
   try {
     for await (const event of runTeam(team, goal, { teamSlugs, locale, resume: resume ?? undefined })) {
@@ -238,6 +266,7 @@ async function driveSession(
         handle.sessionId = capturedSessionId
         state().active.set(capturedSessionId, handle)
         ready(capturedSessionId)
+        startHeartbeat(capturedSessionId)
       }
 
       if (event.kind === 'run_started' && !dbStarted) {
@@ -330,6 +359,10 @@ async function driveSession(
   } finally {
     handle.finished = true
     for (const q of handle.listeners) q.push(END)
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+    }
     if (capturedSessionId) {
       state().active.delete(capturedSessionId)
       // Drop any Codex `previous_response_id` chain head left from the
@@ -365,3 +398,35 @@ class AsyncPushQueue<T> {
 }
 
 export { AsyncPushQueue, END }
+
+/** Return events for a session, preferring in-memory state when active.
+ *
+ *  Background: the event-writer batches disk writes (~100ms / 10 events).
+ *  Reading events.jsonl directly during an active run can lag the in-memory
+ *  truth by a full flush window — that's the root of the "must refresh to
+ *  see updates" UI bug. This helper merges the on-disk prefix (anything
+ *  emitted in earlier process lifetimes / runs) with the live in-memory
+ *  ring (`handle.events`), assigning canonical seq numbers from the run's
+ *  pinned `seqStart`.
+ *
+ *  When the session is idle / unknown, falls back to disk read. */
+export function liveEventsFor(sessionId: string): sessionsStore.StoredEventRow[] {
+  const handle = state().active.get(sessionId)
+  if (!handle) return sessionsStore.eventsForSession(sessionId)
+  const seqStart = handle.seqStart
+  const prefix =
+    seqStart > 0
+      ? sessionsStore.eventsForSession(sessionId).filter((r) => r.seq < seqStart)
+      : []
+  const live: sessionsStore.StoredEventRow[] = handle.events.map((e, i) => ({
+    seq: seqStart + i,
+    ts: e.ts,
+    kind: e.kind,
+    depth: e.depth,
+    node_id: e.node_id,
+    tool_call_id: e.tool_call_id,
+    tool_name: e.tool_name,
+    data: e.data,
+  }))
+  return prefix.concat(live)
+}

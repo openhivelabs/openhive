@@ -207,6 +207,7 @@ interface SpawnOpts {
   stdinBytes: Buffer
   timeoutMs: number
   outputDir: string
+  signal?: AbortSignal
 }
 
 async function runSubprocess(
@@ -242,10 +243,65 @@ async function runSubprocess(
     let timedOut = false
     const timer = setTimeout(() => {
       timedOut = true
-      child.kill('SIGKILL')
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        /* dead pid */
+      }
     }, opts.timeoutMs)
 
+    // SIGTERM-then-SIGKILL escalation on caller-side abort. Listener and
+    // kill timer cleaned up synchronously inside close/error so we don't
+    // SIGKILL a corpse if the process exits naturally first.
+    let abortHandler: (() => void) | null = null
+    let killTimer: NodeJS.Timeout | null = null
+
+    const cleanup = () => {
+      if (abortHandler && opts.signal) {
+        opts.signal.removeEventListener('abort', abortHandler)
+      }
+      abortHandler = null
+      if (killTimer) {
+        clearTimeout(killTimer)
+        killTimer = null
+      }
+    }
+
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        try {
+          child.kill('SIGTERM')
+        } catch {
+          /* dead pid */
+        }
+        killTimer = setTimeout(() => {
+          try {
+            child.kill('SIGKILL')
+          } catch {
+            /* dead pid */
+          }
+        }, 2000)
+      } else {
+        abortHandler = () => {
+          try {
+            child.kill('SIGTERM')
+          } catch {
+            /* dead pid */
+          }
+          killTimer = setTimeout(() => {
+            try {
+              child.kill('SIGKILL')
+            } catch {
+              /* dead pid */
+            }
+          }, 2000)
+        }
+        opts.signal.addEventListener('abort', abortHandler, { once: true })
+      }
+    }
+
     child.on('close', (code) => {
+      cleanup()
       clearTimeout(timer)
       resolve({
         stdout: truncate(Buffer.concat(stdoutChunks).toString('utf8'), STDOUT_CAP_BYTES),
@@ -256,6 +312,7 @@ async function runSubprocess(
     })
 
     child.on('error', (err) => {
+      cleanup()
       clearTimeout(timer)
       resolve({
         stdout: '',
@@ -294,7 +351,7 @@ export async function runSkill(
   skill: SkillDef,
   args: Record<string, unknown>,
   outputDir: string,
-  opts: { timeoutMs?: number; hooks?: SkillSlotHooks } = {},
+  opts: { timeoutMs?: number; hooks?: SkillSlotHooks; signal?: AbortSignal } = {},
 ): Promise<SkillResult> {
   if (skill.kind !== 'typed' || !skill.entrypoint || !skill.runtime) {
     throw new Error(`runSkill requires a typed skill with an entrypoint, got ${skill.kind}`)
@@ -319,6 +376,7 @@ export async function runSkill(
     stdinBytes: Buffer.from(JSON.stringify(args), 'utf8'),
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     outputDir,
+    signal: opts.signal,
   }
   // Python runs go through the global concurrency limiter; Node skills
   // spawn freely (they're cheap and uncontended).
@@ -374,6 +432,7 @@ export async function runSkillScript(
     stdinText?: string | null
     timeoutMs?: number
     hooks?: SkillSlotHooks
+    signal?: AbortSignal
   } = {},
 ): Promise<SkillResult> {
   const resolved = resolveWithinSkill(skill, scriptRelPath)
@@ -406,6 +465,7 @@ export async function runSkillScript(
     stdinBytes: Buffer.from(opts.stdinText ?? '', 'utf8'),
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     outputDir,
+    signal: opts.signal,
   }
   const result =
     runtime === 'python'

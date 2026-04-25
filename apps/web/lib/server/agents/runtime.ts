@@ -17,6 +17,7 @@ import {
 } from './loader'
 import type { AgentSpec, TeamSpec } from '../engine/team'
 import type { Tool } from '../tools/base'
+import { resolveEffectiveSkills } from './skill-bundles'
 
 export function resolvePersona(
   node: AgentSpec,
@@ -39,16 +40,27 @@ export function resolvePersona(
   })
 }
 
-export function effectiveSkills(node: AgentSpec, persona: PersonaDef): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const s of [...(node.skills ?? []), ...(persona.tools.skills ?? [])]) {
-    if (s && !seen.has(s)) {
-      seen.add(s)
-      out.push(s)
-    }
-  }
-  return out
+/**
+ * Compute the effective skill set the LLM sees for a node. Wraps the pure
+ * resolver in `./skill-bundles.ts` with the team allow-list pulled from the
+ * caller's TeamSpec so the engine has one entry point.
+ *
+ * Resolution model (no empty→all fallback — that footgun is dead):
+ *   roleDefaults(node.role) ∪ persona.tools.skills ∪ node.skills
+ *     | apply coupled-skill rules (e.g. web-fetch → +web-search)
+ *     ∩ team.allowed_skills (only if non-empty)
+ */
+export function effectiveSkills(
+  node: AgentSpec,
+  persona: PersonaDef,
+  team?: TeamSpec | null,
+): string[] {
+  return resolveEffectiveSkills({
+    role: node.role,
+    nodeSkills: node.skills,
+    personaSkills: persona.tools.skills,
+    allowedSkills: team?.allowed_skills ?? null,
+  })
 }
 
 export function effectiveMcpServers(

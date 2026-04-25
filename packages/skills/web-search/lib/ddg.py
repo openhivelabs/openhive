@@ -59,6 +59,28 @@ MAX_COUNT = 20
 # timeout.
 MAX_ATTEMPTS = 3
 
+# Total wall-clock budget for a single `search()` call. DDG can stall in three
+# places (rate-limit lock wait, retry backoff sleep, httpx network read) and
+# without an outer cap a single web-search subprocess can hang for 60+s while
+# the engine sits waiting on the tool_result. The classifier upstream then
+# tags the session `provider_silent_exit` and the chat is stuck. Default 20s
+# is comfortably above the steady-state path (warm cookies + POST < 3s) but
+# well under the engine's tool-call timeout. Env-overridable for power users.
+_BUDGET_MS = int(os.environ.get("OPENHIVE_WEB_SEARCH_BUDGET_MS", "20000"))
+
+
+def _remaining_ms(deadline_monotonic: float) -> float:
+    return max(0.0, (deadline_monotonic - time.monotonic()) * 1000.0)
+
+
+def _budget_check(deadline_monotonic: float) -> None:
+    if time.monotonic() >= deadline_monotonic:
+        raise SearchError(
+            "DuckDuckGo did not respond within 20s budget",
+            status=None,
+            reason="budget_exceeded",
+        )
+
 
 class _LiteResultParser(HTMLParser):
     """Walks DDG's lite SERP. Each result spans a few `<tr>` rows: the
@@ -230,9 +252,15 @@ def _domain_of(url: str, fallback_display: str = "") -> str:
 
 
 class SearchError(Exception):
-    def __init__(self, message: str, status: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        status: Optional[int] = None,
+        reason: Optional[str] = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
+        self.reason = reason
 
 
 # Global cross-process rate limiter — every `web-search` skill subprocess
@@ -248,14 +276,22 @@ _MIN_INTERVAL_S = float(os.environ.get("OPENHIVE_WEB_SEARCH_MIN_INTERVAL", "2.5"
 _JITTER_S = float(os.environ.get("OPENHIVE_WEB_SEARCH_JITTER", "1.5"))
 
 
-def _enforce_rate_limit() -> None:
+def _enforce_rate_limit(deadline_monotonic: float) -> None:
     """Block until at least the configured interval has passed since the
     last web-search call on this machine. Implementation: an `fcntl`
     advisory lock around a tiny timestamp file — concurrent sub-agent
     calls serialize cleanly, each one waiting its turn rather than all
-    bursting DDG together."""
+    bursting DDG together.
+
+    Honors the search() wall-clock budget — caps any sleep at the
+    remaining budget and raises SearchError(reason='budget_exceeded')
+    if we'd otherwise sleep past the deadline. Without this guard a
+    burst of N concurrent sub-agents could each queue behind the lock
+    for _MIN_INTERVAL_S, blowing the budget without ever issuing an
+    HTTP request."""
     if _MIN_INTERVAL_S <= 0:
         return
+    _budget_check(deadline_monotonic)
     try:
         _RATE_DIR.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(_RATE_FILE), os.O_RDWR | os.O_CREAT, 0o644)
@@ -265,6 +301,7 @@ def _enforce_rate_limit() -> None:
         return
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
+        _budget_check(deadline_monotonic)
         target = _MIN_INTERVAL_S + random.random() * _JITTER_S
         os.lseek(fd, 0, os.SEEK_SET)
         raw = os.read(fd, 64).decode("utf-8", "ignore").strip()
@@ -275,6 +312,15 @@ def _enforce_rate_limit() -> None:
         now = time.time()
         wait = target - (now - last)
         if wait > 0:
+            remaining_s = _remaining_ms(deadline_monotonic) / 1000.0
+            if wait >= remaining_s:
+                # Sleeping the full throttle would blow the budget. Bail
+                # now with a clear reason rather than silently stalling.
+                raise SearchError(
+                    "DuckDuckGo did not respond within 20s budget",
+                    status=None,
+                    reason="budget_exceeded",
+                )
             time.sleep(wait)
             now = time.time()
         os.lseek(fd, 0, os.SEEK_SET)
@@ -344,16 +390,24 @@ def _try_endpoint(
     region: str,
     timeout: float,
     parser_cls: type[HTMLParser],
+    deadline_monotonic: float,
 ) -> Optional[list[dict[str, str]]]:
     """Run the retry loop against one endpoint. Returns parsed raw results
     (pre-redirect-unwrap) on success, or None if every attempt failed with
     a retriable error (caller may then try the other endpoint). Raises
-    SearchError immediately on non-retriable errors."""
+    SearchError immediately on non-retriable errors. Raises
+    SearchError(reason='budget_exceeded') if the wall-clock budget is
+    exhausted at any check-point (before fetch, before backoff sleep)."""
     last_exc: Optional[SearchError] = None
     for attempt in range(MAX_ATTEMPTS):
+        _budget_check(deadline_monotonic)
         ua = USER_AGENTS[attempt % len(USER_AGENTS)]
+        # Clamp httpx timeout to what's left of the budget so a stalled
+        # connect/read can't outlast the outer deadline.
+        remaining_s = _remaining_ms(deadline_monotonic) / 1000.0
+        effective_timeout = min(timeout, max(0.5, remaining_s))
         try:
-            body = _fetch_serp(endpoint, query, region, timeout, ua)
+            body = _fetch_serp(endpoint, query, region, effective_timeout, ua)
         except SearchError as exc:
             last_exc = exc
             retriable = exc.status == 202 or exc.status is None
@@ -367,7 +421,17 @@ def _try_endpoint(
             # avoids a synchronized retry storm when multiple sub-agents
             # fail at the same time.
             base = 1.0 * (2 ** attempt)
-            time.sleep(base + random.random())
+            sleep_s = base + random.random()
+            remaining_s = _remaining_ms(deadline_monotonic) / 1000.0
+            if sleep_s >= remaining_s:
+                # No point sleeping past the budget — bail with a clear
+                # reason instead of stalling and timing out.
+                raise SearchError(
+                    "DuckDuckGo did not respond within 20s budget",
+                    status=None,
+                    reason="budget_exceeded",
+                ) from exc
+            time.sleep(sleep_s)
             continue
         parser = parser_cls()
         parser.feed(body)
@@ -395,14 +459,25 @@ def search(
         raise SearchError("query is empty")
     count = max(1, min(int(count), MAX_COUNT))
 
+    # Single wall-clock budget for the entire call. Threaded through the
+    # rate limiter, retry sleeps, and httpx timeout so no individual stall
+    # can blow past the outer deadline.
+    deadline_monotonic = time.monotonic() + (_BUDGET_MS / 1000.0)
+
     # Cross-process throttle so concurrent sub-agent calls don't burst DDG.
     # See `_enforce_rate_limit` for the lock-based mechanism.
-    _enforce_rate_limit()
+    _enforce_rate_limit(deadline_monotonic)
 
-    raw = _try_endpoint(LITE_URL, query, region, timeout, _LiteResultParser)
+    raw = _try_endpoint(
+        LITE_URL, query, region, timeout, _LiteResultParser, deadline_monotonic
+    )
     if raw is None:
+        # Budget check before paying for an endpoint switch.
+        _budget_check(deadline_monotonic)
         # Lite kept 202'ing — try /html/ once with a single attempt.
-        raw = _try_endpoint(HTML_URL, query, region, timeout, _HtmlResultParser)
+        raw = _try_endpoint(
+            HTML_URL, query, region, timeout, _HtmlResultParser, deadline_monotonic
+        )
     if raw is None:
         raise SearchError("duckduckgo returned HTTP 202", status=202)
 

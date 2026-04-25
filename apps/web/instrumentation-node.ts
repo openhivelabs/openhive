@@ -20,17 +20,26 @@ export async function registerNode() {
     console.error('boot: legacy DB migration failed', exc)
   }
 
-  const { backfillTranscripts, markOrphanedSessionsIdle, pruneLegacyArtifactsRoot } = await import(
+  const { backfillTranscripts, reconcileSessionsOnBoot, pruneLegacyArtifactsRoot } = await import(
     './lib/server/sessions'
   )
 
   try {
-    const n = await markOrphanedSessionsIdle()
-    if (n > 0) {
-      console.log(`boot: demoted ${n} orphaned running session(s) to idle (resumable)`)
+    const results = await reconcileSessionsOnBoot()
+    if (results.length > 0) {
+      // reconcileSessionsOnBoot already logs per-session reclassifications
+      // at INFO. This is the rolled-up summary.
+      const counts = results.reduce<Record<string, number>>((acc, r) => {
+        acc[r.newStatus] = (acc[r.newStatus] ?? 0) + 1
+        return acc
+      }, {})
+      const summary = Object.entries(counts)
+        .map(([k, v]) => `${k}:${v}`)
+        .join(', ')
+      console.log(`boot: reconciled ${results.length} session(s) — ${summary}`)
     }
   } catch (exc) {
-    console.error('boot: orphan cleanup failed', exc)
+    console.error('boot: session reconciliation failed', exc)
   }
 
   try {
