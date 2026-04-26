@@ -124,6 +124,12 @@ async function execMcp(config: Record<string, unknown>): Promise<unknown> {
   if (!args || typeof args !== 'object' || Array.isArray(args)) {
     throw new SourceError('mcp source args must be an object')
   }
+  // Apply path is strictly read-only across every MCP server. The binder
+  // could otherwise be talked into picking a mutating tool (apply_migration,
+  // delete_branch, INSERT via execute_sql, …) and the user's real DB would
+  // change every time a panel refreshes. Mutating in-app data lives on the
+  // separate install/setup_sql path — never here.
+  assertReadOnlyMcpCall(tool, args as Record<string, unknown>)
   const text = await withTimeout(
     mcpCallTool(server, tool, args as Record<string, unknown>),
     DEFAULT_TIMEOUT_MS,
@@ -134,6 +140,79 @@ async function execMcp(config: Record<string, unknown>): Promise<unknown> {
   } catch {
     return text
   }
+}
+
+/** Allowlist of tool-name prefixes treated as read-only across MCP servers.
+ *  Conservative: when in doubt, block. The Apply / preview / refresh path
+ *  fires whatever binding the AI produced on every interval, so a single
+ *  mutating call would compound. Setup/seed work runs on the install path
+ *  with its own DDL whitelist; it never reaches here. */
+const READ_ONLY_PREFIXES = [
+  'list_',
+  'search_',
+  'get_',
+  'fetch_',
+  'read_',
+  'describe_',
+  'inspect_',
+  'count_',
+  'preview_',
+  'lookup_',
+  'find_',
+  'show_',
+  'view_',
+  'select_',
+]
+
+/** Tools that look like SQL execution shells. We let them through only when
+ *  the SQL itself parses as a single SELECT/WITH (same rule team_data SQL
+ *  goes through). Any DDL/DML or stacked statements bounce. */
+const SQL_TOOL_NAMES = new Set([
+  'execute_sql',
+  'run_sql',
+  'run_query',
+  'query',
+  'sql',
+  'pg_query',
+  'mysql_query',
+])
+
+function assertReadOnlyMcpCall(
+  tool: string,
+  args: Record<string, unknown>,
+): void {
+  if (READ_ONLY_PREFIXES.some((p) => tool.startsWith(p))) return
+  if (SQL_TOOL_NAMES.has(tool)) {
+    const sql = String(
+      (args.query ?? args.sql ?? args.statement ?? '') as unknown,
+    ).trim()
+    if (!sql) {
+      throw new SourceError(
+        `mcp tool ${JSON.stringify(tool)} called with empty SQL`,
+      )
+    }
+    if (!SELECT_RE.test(sql)) {
+      throw new SourceError(
+        `mcp tool ${JSON.stringify(tool)} blocked: panel SQL must start with SELECT or WITH (read-only)`,
+      )
+    }
+    // Reject stacked statements — single trailing `;` is fine, anything
+    // after it is not. Comments stripped first so `;-- note` is allowed.
+    const stripped = sql.replace(/--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
+    const idx = stripped.indexOf(';')
+    if (idx >= 0 && stripped.slice(idx + 1).trim().length > 0) {
+      throw new SourceError(
+        `mcp tool ${JSON.stringify(tool)} blocked: only a single SELECT/WITH statement is allowed`,
+      )
+    }
+    return
+  }
+  throw new SourceError(
+    `mcp tool ${JSON.stringify(tool)} blocked on the panel apply/refresh path: ` +
+      `only read-only tools (list_*, get_*, search_*, describe_*, …) and SELECT-only execute_sql are allowed. ` +
+      `Mutating data from a panel binding would change the user's real source on every refresh; ` +
+      `seed/setup work belongs on the install path.`,
+  )
 }
 
 async function execTeamData(

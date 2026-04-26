@@ -1,0 +1,87 @@
+id: calendar
+name: Calendar
+description: >-
+  Interactive month calendar — left grid, right detail with vertical hour
+  rail. Click a date to load its events; click an event card to expand
+  full row data; drag a card up/down to reschedule (15-min snap, duration
+  preserved); + to add a new event. Events have a start (When) and an
+  optional end (To); default duration when end is missing is 1 hour.
+author: OpenHive
+category: calendar
+tags: [calendar, schedule, month, events, editable, time, range]
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS task (
+    team_id    TEXT NOT NULL,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    title      TEXT,
+    status     TEXT DEFAULT 'todo',
+    due_date   TEXT,
+    end_at     TEXT,
+    note       TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: calendar
+  title: Calendar
+  colSpan: 5
+  rowSpan: 4
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT id, title, status, due_date, end_at, note
+          FROM task
+          WHERE team_id = :team_id
+            AND due_date IS NOT NULL
+    map:
+      rows: "$.rows[*]"
+      ts: due_date
+      ts_end: end_at
+      title: title
+      kind: status
+    refresh_seconds: 60
+    actions:
+      - id: create
+        kind: create
+        label: Add
+        target:
+          kind: team_data
+          config:
+            sql: |
+              INSERT INTO task (title, status, due_date, end_at, note, team_id)
+              VALUES (:title, :status, :due_date, :end_at, :note, :team_id)
+        form:
+          fields:
+            - { name: title,    label: Title,  type: text,           required: true }
+            - { name: status,   label: Status, type: select,         options: [todo, doing, done], default: todo }
+            - { name: due_date, label: From,   type: datetime-local, required: true }
+            - { name: end_at,   label: To,     type: datetime-local }
+            - { name: note,     label: Note,   type: textarea }
+      - id: update
+        kind: update
+        label: Save
+        target:
+          kind: team_data
+          config:
+            sql: |
+              UPDATE task
+              SET title = :title, status = :status, due_date = :due_date, end_at = :end_at, note = :note
+              WHERE id = :id AND team_id = :team_id
+        form:
+          fields:
+            - { name: title,    label: Title,  type: text,           required: true }
+            - { name: status,   label: Status, type: select,         options: [todo, doing, done] }
+            - { name: due_date, label: From,   type: datetime-local, required: true }
+            - { name: end_at,   label: To,     type: datetime-local }
+            - { name: note,     label: Note,   type: textarea }
+      - id: delete
+        kind: delete
+        label: Delete
+        target:
+          kind: team_data
+          config:
+            sql: |
+              DELETE FROM task WHERE id = :id AND team_id = :team_id

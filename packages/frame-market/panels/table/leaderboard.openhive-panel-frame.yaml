@@ -1,0 +1,43 @@
+id: leaderboard
+name: Leaderboard
+description: >-
+  Ranked list — top N rows by a numeric column, descending. Use for
+  "top sales", "most active users", "highest scoring posts". Same data
+  shape as Data Table; the binder ensures ORDER BY value DESC + LIMIT N.
+author: OpenHive
+category: table
+tags: [leaderboard, ranking, top, sorted]
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS customer (
+    team_id    TEXT NOT NULL,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT,
+    email      TEXT,
+    stage      TEXT DEFAULT 'prospect',
+    value      REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: table
+  title: Top 10
+  colSpan: 3
+  rowSpan: 3
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT
+            ROW_NUMBER() OVER (ORDER BY value DESC) AS rank,
+            name,
+            value
+          FROM customer
+          WHERE team_id = :team_id
+          ORDER BY value DESC
+          LIMIT 10
+    map:
+      rows: "$.rows[*]"
+      columns: [rank, name, value]
+    refresh_seconds: 600

@@ -1,0 +1,48 @@
+id: kpi-goal
+name: Goal Progress
+description: >-
+  현재 값 + 목표값 + 진행 바. "₩7.2M / ₩10M (72%)" 같이 OKR /
+  매출 목표 / 사용량 한도 추적할 때. SQL은 한 행에 두 컬럼(현재 / 목표)을
+  같이 돌려주면 됨. 목표가 고정이면 SELECT 안에 상수로 박아도 OK
+  (예: SELECT SUM(value) AS now, 10000000 AS goal ...).
+author: OpenHive
+category: kpi
+tags: [kpi, goal, target, progress, okr]
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS customer (
+    team_id    TEXT NOT NULL,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT,
+    email      TEXT,
+    stage      TEXT DEFAULT 'prospect',
+    value      REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: kpi
+  title: Monthly Target
+  colSpan: 2
+  rowSpan: 1
+  props:
+    hint: 이번 달 목표
+    format: currency
+    currency: "₩"
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT
+            COALESCE(SUM(value), 0) AS achieved,
+            10000000                AS goal
+          FROM customer
+          WHERE team_id = :team_id
+            AND date(created_at) >= date('now','start of month')
+    map:
+      rows: "$.rows[*]"
+      aggregate: first
+      aggregate_field: achieved
+      target_field: goal
+    refresh_seconds: 600

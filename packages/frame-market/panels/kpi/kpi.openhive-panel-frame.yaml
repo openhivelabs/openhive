@@ -1,0 +1,41 @@
+id: kpi
+name: KPI
+description: >-
+  Single big number with a label. Use for "총 사용자", "오늘 매출",
+  "이번 주 신규 가입" 같은 한 줄 핵심 지표. SQL은 한 행 한 컬럼만
+  돌려주면 되고, 포맷(원화 / 퍼센트 / 시간)은 props.format 으로 지정.
+author: OpenHive
+category: kpi
+tags: [kpi, number, metric, summary, universal]
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS customer (
+    team_id    TEXT NOT NULL,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT,
+    email      TEXT,
+    stage      TEXT DEFAULT 'prospect',
+    value      REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: kpi
+  title: Total
+  colSpan: 2
+  rowSpan: 1
+  props:
+    hint: 총합
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT COUNT(*) AS n
+          FROM customer
+          WHERE team_id = :team_id
+    map:
+      rows: "$.rows[*]"
+      aggregate: first
+      aggregate_field: n
+    refresh_seconds: 600

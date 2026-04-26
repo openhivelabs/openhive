@@ -1,0 +1,41 @@
+id: data-table
+name: Data Table
+description: >-
+  Sortable grid showing every row of a table. Default lists all columns;
+  the binder can narrow them via map.columns. Use for "raw lookup" needs
+  — every fact visible, no aggregation.
+author: OpenHive
+category: table
+tags: [table, grid, raw, lookup, universal]
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS customer (
+    team_id    TEXT NOT NULL,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT,
+    email      TEXT,
+    stage      TEXT DEFAULT 'prospect',
+    value      REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: table
+  title: Records
+  colSpan: 4
+  rowSpan: 3
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT id, name, email, stage, value, created_at
+          FROM customer
+          WHERE team_id = :team_id
+          ORDER BY created_at DESC
+          LIMIT 100
+    map:
+      rows: "$.rows[*]"
+      columns: [id, name, email, stage, value, created_at]
+      on_click: { kind: detail }
+    refresh_seconds: 600

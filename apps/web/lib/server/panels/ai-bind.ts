@@ -14,12 +14,20 @@ interface AiBindInput {
   userIntent: string | null
 }
 
+export interface AiBindResult {
+  binding: PanelBinding
+  /** Optional CREATE TABLE statement the binder produced when the user
+   *  explicitly asked for a new table. Install path runs this idempotently
+   *  before applying the binding. */
+  setupSql?: string
+}
+
 export async function aiBindPanel({
   panel,
   description,
   schema,
   userIntent,
-}: AiBindInput): Promise<PanelBinding> {
+}: AiBindInput): Promise<AiBindResult> {
   const tdLines = (schema.tables ?? []).map(
     (t) =>
       `  - ${t.name}(${t.columns.map((col) => `${col.name}:${col.type ?? ''}`).join(', ')})`,
@@ -37,6 +45,7 @@ export async function aiBindPanel({
   // has to follow up. Capped to 3 discovery tools per server, 5s budget.
   const mcpLines: string[] = []
   const idLines: string[] = []
+  const schemaLines: string[] = []
   for (const name of Object.keys(listServers())) {
     try {
       const tools = await getTools(name)
@@ -54,20 +63,75 @@ export async function aiBindPanel({
       const discoveryTools = tools
         .filter((t) => /^(list_|search_)/.test(t.name) && !hasRequiredArgs(t.inputSchema))
         .slice(0, 3)
-      const pairs = await Promise.all(
+      const discoveryResults = await Promise.all(
         discoveryTools.map(async (t) => {
           try {
             const text = await callTool(name, t.name, {})
-            return summarizeDiscovery(t.name, text)
+            return { toolName: t.name, items: extractDiscoveryItems(text) }
           } catch {
-            return ''
+            return { toolName: t.name, items: [] }
           }
         }),
       )
-      const collected = pairs.filter((s) => s.length > 0)
+      const collected = discoveryResults
+        .map((r) => formatDiscovery(r.toolName, r.items))
+        .filter((s) => s.length > 0)
       if (collected.length > 0) {
         idLines.push(`  ${name}:`)
         for (const block of collected) idLines.push(block)
+      }
+      // Second-pass discovery: when the server has `execute_sql` and we
+      // resolved opaque project IDs from list_projects, run a Postgres
+      // information_schema dump per project so the binder sees real
+      // table/column names instead of inventing them from the user's prose.
+      // Triggered generically (any MCP server matching both criteria) but
+      // the SQL is Postgres-flavoured — non-Postgres servers fail the call
+      // silently and bind without schema context, same as before.
+      const projectIds = discoveryResults
+        .filter((r) => r.toolName === 'list_projects')
+        .flatMap((r) => r.items.map((i) => i.id))
+        .filter((id): id is string => typeof id === 'string')
+        .slice(0, 5)
+      const hasExecuteSql = tools.some((t) => t.name === 'execute_sql')
+      if (hasExecuteSql && projectIds.length > 0) {
+        // Compact one-row-per-table form via string_agg. The naive
+        // one-row-per-column shape blows past the 20KB MCP body cap on real
+        // schemas (40+ tables × verbose type strings); once the response is
+        // truncated the JSON parse fails and the schema disappears from the
+        // prompt entirely — leaving the binder to hallucinate names again.
+        const sql =
+          "SELECT s.table_name, " +
+          "  string_agg(s.column_name || ':' || s.data_type, ',' " +
+          "             ORDER BY s.ordinal_position) AS cols, " +
+          "  MAX(s.approx_rows) AS approx_rows " +
+          "FROM ( " +
+          "  SELECT c.table_name, c.column_name, c.data_type, c.ordinal_position, " +
+          "    COALESCE(pc.reltuples::bigint, 0) AS approx_rows " +
+          "  FROM information_schema.columns c " +
+          "  LEFT JOIN pg_class pc ON pc.relname = c.table_name " +
+          "    AND pc.relnamespace = 'public'::regnamespace " +
+          "  WHERE c.table_schema = 'public' " +
+          ") s " +
+          "GROUP BY s.table_name " +
+          "ORDER BY s.table_name"
+        const blocks = await Promise.all(
+          projectIds.map(async (pid) => {
+            try {
+              const text = await callTool(name, 'execute_sql', {
+                project_id: pid,
+                query: sql,
+              })
+              return formatColumns(pid, text)
+            } catch {
+              return ''
+            }
+          }),
+        )
+        const used = blocks.filter((b) => b.length > 0)
+        if (used.length > 0) {
+          schemaLines.push(`  ${name}:`)
+          for (const block of used) schemaLines.push(block)
+        }
       }
     } catch (exc) {
       const message = exc instanceof Error ? exc.message : String(exc)
@@ -87,7 +151,7 @@ current_binding: ${JSON.stringify(panel.binding ?? null)}
 
 AVAILABLE MCP SERVERS (with tool names):
 ${mcpLines.length > 0 ? mcpLines.join('\n') : '  (none connected)'}
-${idLines.length > 0 ? `\nKNOWN IDENTIFIERS (resolved by calling discovery tools — use these IDs directly, do NOT pass the human-readable name as an opaque ID):\n${idLines.join('\n')}\n` : ''}
+${idLines.length > 0 ? `\nKNOWN IDENTIFIERS (resolved by calling discovery tools — use these IDs directly, do NOT pass the human-readable name as an opaque ID):\n${idLines.join('\n')}\n` : ''}${schemaLines.length > 0 ? `\nKNOWN MCP SCHEMAS (real tables resolved by calling discovery — when writing SQL for these projects, pick a table from this list and use its actual columns; do NOT invent table/column names from the user's prose):\n${schemaLines.join('\n')}\n` : ''}
 TEAM DATA TABLES:
 ${tdLines.length > 0 ? tdLines.join('\n') : '  (no tables)'}
 
@@ -122,7 +186,63 @@ USER GOAL: ${goal}`
   ) {
     throw new Error('AI binder output missing source/map')
   }
-  return parsed as unknown as PanelBinding
+  // Pull setup_sql aside so it doesn't leak into the binding object that
+  // gets persisted on the dashboard panel.
+  const { setup_sql: setupSqlRaw, ...rest } = parsed as Record<string, unknown>
+  const setupSql =
+    typeof setupSqlRaw === 'string' && setupSqlRaw.trim().length > 0
+      ? setupSqlRaw
+      : undefined
+
+  // Sanity check: when binder writes team_data SQL referencing a table
+  // that's not in the live schema AND no setup_sql was emitted, the SELECT
+  // will fail at runtime with a confusing "no such table" error. Catch
+  // that here so the caller can surface a clear "AI invented a table"
+  // message instead of an empty panel.
+  const source = (rest.source ?? {}) as { kind?: unknown; config?: unknown }
+  if (source.kind === 'team_data') {
+    const sql = String(
+      (source.config as { sql?: unknown } | undefined)?.sql ?? '',
+    )
+    const tableNames = extractFromTables(sql)
+    const known = new Set((schema.tables ?? []).map((t) => t.name))
+    const createdHere = setupSql ? extractCreatedTables(setupSql) : new Set<string>()
+    const missing = tableNames.filter((t) => !known.has(t) && !createdHere.has(t))
+    if (missing.length > 0) {
+      throw new Error(
+        `AI binder referenced unknown team_data table(s): ${missing.join(', ')}. ` +
+          'It needed to emit a CREATE TABLE in setup_sql but did not. Try ' +
+          'rephrasing your request with "새 테이블 <name> 만들어" or pick an ' +
+          'existing table by name.',
+      )
+    }
+  }
+  return {
+    binding: rest as unknown as PanelBinding,
+    ...(setupSql ? { setupSql } : {}),
+  }
+}
+
+/** Pull table names from FROM/JOIN clauses in a SELECT. Lowercased,
+ *  unquoted. Doesn't try to handle subqueries or CTEs deeply — good
+ *  enough for the simple SELECTs the binder writes. */
+function extractFromTables(sql: string): string[] {
+  const out = new Set<string>()
+  const re = /\b(?:from|join)\s+["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(sql)) !== null) {
+    out.add(m[1]!.toLowerCase())
+  }
+  return [...out]
+}
+function extractCreatedTables(sql: string): Set<string> {
+  const out = new Set<string>()
+  const re = /create\s+table\s+(?:if\s+not\s+exists\s+)?["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(sql)) !== null) {
+    out.add(m[1]!.toLowerCase())
+  }
+  return out
 }
 
 function hasRequiredArgs(schema: Record<string, unknown> | undefined): boolean {
@@ -131,19 +251,17 @@ function hasRequiredArgs(schema: Record<string, unknown> | undefined): boolean {
   return Array.isArray(required) && required.length > 0
 }
 
-/** Best-effort summary of a discovery-tool response: pull `id`/`uuid`/`ref`
- *  + `name`/`title`/`slug` pairs out of any array-shaped result so the AI
- *  can map a human name to the opaque identifier. Caps at 20 entries to
- *  keep the prompt small. Returns '' if nothing useful was found. */
-function summarizeDiscovery(toolName: string, text: string): string {
+/** Pull `{id, name}` pairs out of any array-shaped MCP discovery payload.
+ *  Returns [] if nothing useful was found. Caps at 20 entries. */
+function extractDiscoveryItems(
+  text: string,
+): { id: string | null; name: string | null }[] {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
-    return ''
+    return []
   }
-  // Unwrap one level if the payload is { items: [...] } / { projects: [...] }
-  // — common MCP shape.
   let items: unknown[] = []
   if (Array.isArray(parsed)) {
     items = parsed
@@ -155,10 +273,10 @@ function summarizeDiscovery(toolName: string, text: string): string {
       }
     }
   }
-  if (items.length === 0) return ''
+  if (items.length === 0) return []
   const ID_KEYS = ['id', 'uuid', 'ref', 'slug', 'key']
   const NAME_KEYS = ['name', 'title', 'label', 'display_name', 'slug']
-  const lines: string[] = []
+  const out: { id: string | null; name: string | null }[] = []
   for (const it of items.slice(0, 20)) {
     if (!it || typeof it !== 'object') continue
     const o = it as Record<string, unknown>
@@ -172,16 +290,77 @@ function summarizeDiscovery(toolName: string, text: string): string {
       }
     }
     for (const k of NAME_KEYS) {
-      if (k === id) continue
       const v = o[k]
       if (typeof v === 'string' && v !== id) {
         name = v
         break
       }
     }
+    if (id || name) out.push({ id, name })
+  }
+  return out
+}
+
+function formatDiscovery(
+  toolName: string,
+  items: { id: string | null; name: string | null }[],
+): string {
+  const lines: string[] = []
+  for (const { id, name } of items) {
     if (id && name) lines.push(`      - ${name} → ${id}`)
     else if (id) lines.push(`      - ${id}`)
   }
   if (lines.length === 0) return ''
   return `    ${toolName}:\n${lines.join('\n')}`
 }
+
+/** Group an information_schema.columns dump into `table(col:type, …)` lines
+ *  the binder can read. Caps at ~30 tables / 40 cols per table to keep the
+ *  prompt bounded. */
+function formatColumns(projectId: string, text: string): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return ''
+  }
+  let rows: unknown[] = []
+  if (Array.isArray(parsed)) {
+    rows = parsed
+  } else if (parsed && typeof parsed === 'object') {
+    for (const v of Object.values(parsed as Record<string, unknown>)) {
+      if (Array.isArray(v)) {
+        rows = v
+        break
+      }
+    }
+  }
+  if (rows.length === 0) return ''
+  // Normalise then sort by row count desc. Small binder models pick the
+  // first table that "looks right" by name, so position is a stronger
+  // tiebreaker than any prompt rule. Putting populated tables first means
+  // when two siblings (e.g. `precedents` vs `external_precedents`) both
+  // expose the same column, the populated one wins by default — without
+  // hiding the empty sibling, which the user is still free to query
+  // explicitly via the Code editor.
+  const entries: { table: string; cols: string; approx: number }[] = []
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue
+    const o = r as Record<string, unknown>
+    const table = typeof o.table_name === 'string' ? o.table_name : null
+    const cols = typeof o.cols === 'string' ? o.cols : ''
+    const approx = Number(o.approx_rows)
+    if (!table || !cols) continue
+    entries.push({ table, cols, approx: Number.isFinite(approx) ? approx : 0 })
+  }
+  if (entries.length === 0) return ''
+  entries.sort((a, b) => b.approx - a.approx || a.table.localeCompare(b.table))
+  const lines: string[] = [`    ${projectId}:`]
+  for (const e of entries.slice(0, 30)) {
+    const rowSuffix = e.approx > 0 ? ` ~${e.approx} rows` : ' EMPTY'
+    const colsCapped = e.cols.length > 600 ? `${e.cols.slice(0, 600)}…` : e.cols
+    lines.push(`      - ${e.table}(${colsCapped})${rowSuffix}`)
+  }
+  return lines.join('\n')
+}
+

@@ -607,6 +607,37 @@ const en: Dict = {
   'panel.edit.rows': '{n} row',
   'panel.edit.save': 'Save',
   'panel.edit.cancel': 'Cancel',
+  'panel.edit.code': 'Code',
+  'panel.edit.codeRun': 'Run',
+  'panel.edit.codeInvalid': 'Invalid JSON',
+  'chart.noData': '(no data)',
+  'kpi.unit.compact': 'Brief',
+  'kpi.unit.full': 'Exact',
+  'calendar.today': 'Today',
+  'calendar.pickDay': 'Pick a day',
+  'calendar.empty': 'No events',
+  'calendar.add': 'Add event',
+  'calendar.save': 'Save',
+  'calendar.delete': 'Delete',
+  'calendar.edit': 'Edit',
+  'calendar.cancel': 'Cancel',
+  'calendar.confirmDelete': 'Delete?',
+  'calendar.noKind': 'Other',
+  'calendar.more': '+{n} more',
+  'calendar.dow.mon': 'Mon',
+  'calendar.dow.tue': 'Tue',
+  'calendar.dow.wed': 'Wed',
+  'calendar.dow.thu': 'Thu',
+  'calendar.dow.fri': 'Fri',
+  'calendar.dow.sat': 'Sat',
+  'calendar.dow.sun': 'Sun',
+  'calendar.preview.date': 'Apr 26',
+  'calendar.preview.event1': '9:00 Sync',
+  'calendar.preview.event2': '14:00 Review',
+  'calendar.allDay': 'All-day',
+  'calendar.field.date': 'Date',
+  'calendar.field.from': 'From',
+  'calendar.field.to': 'To',
   // panel freshness + actions
   'panel.justNow': 'just now',
   'panel.minutesAgo': '{n}m ago',
@@ -616,8 +647,6 @@ const en: Dict = {
   'panel.lastUpdated': 'Last updated {relative}',
   'panel.retry': 'Retry',
   'panel.error': 'Error',
-  'panel.shapeChanged': 'Upstream response structure changed — mapper may be outdated.',
-  'panel.shapeChangedShort': 'schema drift',
   'panel.err.noTable': '"{name}" table does not exist yet',
   'panel.err.noColumn': '"{name}" column does not exist yet',
   // chart panel toggle / overflow bucket
@@ -1262,6 +1291,37 @@ const ko: Dict = {
   'panel.edit.rows': '{n}행',
   'panel.edit.save': '저장',
   'panel.edit.cancel': '취소',
+  'panel.edit.code': '코드',
+  'panel.edit.codeRun': '실행',
+  'panel.edit.codeInvalid': 'JSON 형식 오류',
+  'chart.noData': '(데이터 없음)',
+  'kpi.unit.compact': '요약',
+  'kpi.unit.full': '정밀',
+  'calendar.today': '오늘',
+  'calendar.pickDay': '날짜를 선택하세요',
+  'calendar.empty': '일정 없음',
+  'calendar.add': '추가',
+  'calendar.save': '저장',
+  'calendar.delete': '삭제',
+  'calendar.edit': '수정',
+  'calendar.cancel': '취소',
+  'calendar.confirmDelete': '삭제할까요?',
+  'calendar.noKind': '기타',
+  'calendar.more': '+{n}개 더',
+  'calendar.dow.mon': '월',
+  'calendar.dow.tue': '화',
+  'calendar.dow.wed': '수',
+  'calendar.dow.thu': '목',
+  'calendar.dow.fri': '금',
+  'calendar.dow.sat': '토',
+  'calendar.dow.sun': '일',
+  'calendar.preview.date': '4월 26일',
+  'calendar.preview.event1': '9:00 회의',
+  'calendar.preview.event2': '14:00 리뷰',
+  'calendar.allDay': '종일',
+  'calendar.field.date': '날짜',
+  'calendar.field.from': '시작',
+  'calendar.field.to': '종료',
   // panel freshness + actions
   'panel.justNow': '방금 전',
   'panel.minutesAgo': '{n}분 전',
@@ -1271,8 +1331,6 @@ const ko: Dict = {
   'panel.lastUpdated': '{relative} 업데이트',
   'panel.retry': '다시 시도',
   'panel.error': '오류',
-  'panel.shapeChanged': '소스 응답 구조가 변경됨 — 매퍼가 더 이상 맞지 않을 수 있어요.',
-  'panel.shapeChangedShort': '스키마 변경',
   'panel.err.noTable': '"{name}" 테이블이 아직 없어요',
   'panel.err.noColumn': '"{name}" 컬럼이 아직 없어요',
   // chart panel toggle / overflow bucket
@@ -1333,6 +1391,14 @@ export function useT() {
     const raw = d[key] ?? en[key] ?? key
     return interpolate(raw, vars)
   }
+}
+
+const BCP47: Record<Locale, string> = { en: 'en-US', ko: 'ko-KR' }
+/** BCP-47 tag for the current app locale — pass to Intl.* / toLocaleString
+ *  so Date / number formatting matches the user's chosen language. */
+export function useLocaleTag(): string {
+  const locale = useAppStore((s) => s.locale)
+  return BCP47[locale] ?? 'en-US'
 }
 
 export function t(locale: Locale, key: string, vars?: Record<string, string | number>) {

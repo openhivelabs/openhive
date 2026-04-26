@@ -217,7 +217,7 @@ export function buildFrame(companySlug: string, teamSlug: string): Frame {
     entryIdx = idToIdx.get(eid) ?? null
   }
 
-  const dashboard = loadDashboard(companySlug, teamSlug)
+  const dashboard = stripProjectIds(loadDashboard(companySlug, teamSlug))
   const teamIdForSchema =
     typeof team.id === 'string' && team.id ? team.id : teamSlug
   const dataSchema = extractSchema(companySlug, teamIdForSchema)
@@ -620,4 +620,35 @@ export function listGallery(): GalleryEntry[] {
     })
   }
   return out
+}
+
+/** Scrub `project_id` out of every MCP panel binding before exporting the
+ *  frame. The id alone isn't a credential (the access token lives in the
+ *  installer's mcp.yaml, never in the frame), but it identifies the
+ *  exporter's exact Supabase project — and if a recipient happens to be
+ *  authenticated to the same organization, the SQL would silently run
+ *  against that project on their install. Replacing it with a placeholder
+ *  forces the install-time AI rebinder (or the user's manual edit) to fill
+ *  it in for the new environment. SQL body, table names, and other args are
+ *  preserved deliberately — they're useful as documentation and the user
+ *  considers them low-risk. */
+const PROJECT_ID_PLACEHOLDER = '<NEEDS_REBIND>'
+
+function stripProjectIds<T>(dashboard: T): T {
+  if (!dashboard || typeof dashboard !== 'object') return dashboard
+  const d = dashboard as unknown as { blocks?: unknown }
+  const blocks = Array.isArray(d.blocks) ? d.blocks : []
+  for (const b of blocks) {
+    if (!b || typeof b !== 'object') continue
+    const block = b as { binding?: { source?: { kind?: unknown; config?: unknown } } }
+    const src = block.binding?.source
+    if (!src || src.kind !== 'mcp') continue
+    const cfg = src.config
+    if (!cfg || typeof cfg !== 'object') continue
+    const args = (cfg as { args?: unknown }).args
+    if (!args || typeof args !== 'object' || Array.isArray(args)) continue
+    const a = args as Record<string, unknown>
+    if ('project_id' in a) a.project_id = PROJECT_ID_PLACEHOLDER
+  }
+  return dashboard
 }
