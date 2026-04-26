@@ -339,7 +339,17 @@ function isPendingConfirmed(
     if (summary.started_at >= cutoffMs) return true
   }
   for (const e of summary.transcript) {
-    if (e.kind !== 'user_message' && e.kind !== 'goal') continue
+    // Drop the optimistic bubble as soon as ANY server-side bubble for the
+    // same text lands — confirmed (`user_message`) OR queued
+    // (`user_message_queued`). The queued one is what survives a page
+    // reload, so once it's in the transcript the FE-only optimistic state
+    // is redundant and would render a duplicate pending bubble.
+    if (
+      e.kind !== 'user_message' &&
+      e.kind !== 'goal' &&
+      e.kind !== 'user_message_queued'
+    )
+      continue
     if (String(e.text ?? '').trim() !== wanted) continue
     const tsMs = typeof e.ts === 'number' ? e.ts * 1000 : 0
     if (tsMs >= cutoffMs) return true
@@ -847,6 +857,17 @@ function buildChat(
         // Follow-up user message in a continuous chat session.
         const txt = String(e.text ?? '').trim()
         if (txt) out.push({ kind: 'user', id, text: txt })
+        break
+      }
+      case 'user_message_queued': {
+        // Server-side pending bubble — the message landed in the engine
+        // inbox but hasn't been popped into a turn yet. The transcript
+        // builder already drops queued entries that have a matching
+        // confirmed `user_message`, so anything that reaches here is
+        // genuinely still pending. Render below the spinner via the
+        // existing `pending: true` partition.
+        const txt = String(e.text ?? '').trim()
+        if (txt) out.push({ kind: 'user', id, text: txt, pending: true })
         break
       }
       default:

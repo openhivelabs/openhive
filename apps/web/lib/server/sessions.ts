@@ -978,11 +978,19 @@ export function buildTranscript(
   // delegate_parallel tool_called row — the call event itself doesn't
   // carry it, only the opening event does.
   const openedByCallId = new Map<string, StoredEventRow>()
+  // Pre-index user_message events by queued_id so we can dedupe an earlier
+  // `user_message_queued` (pending bubble) against its confirmed twin.
+  // Engine stamps the same queued_id on both sides; once the engine has
+  // popped the message, only the canonical user_message renders.
+  const confirmedQueuedIds = new Set<string>()
   for (const ev of events) {
     if (ev.kind === 'tool_result' && ev.tool_call_id) {
       resultByCallId.set(ev.tool_call_id, ev)
     } else if (ev.kind === 'delegation_opened' && ev.tool_call_id) {
       openedByCallId.set(ev.tool_call_id, ev)
+    } else if (ev.kind === 'user_message') {
+      const qid = typeof ev.data.queued_id === 'string' ? ev.data.queued_id : null
+      if (qid) confirmedQueuedIds.add(qid)
     }
   }
   for (const ev of events) {
@@ -997,7 +1005,25 @@ export function buildTranscript(
       lines.push({ kind: 'user_answer', ts: ev.ts, result: ev.data.result })
     } else if (ev.kind === 'user_message') {
       // Follow-up user message in an ongoing chat session.
-      lines.push({ kind: 'user_message', ts: ev.ts, text: ev.data.text })
+      lines.push({
+        kind: 'user_message',
+        ts: ev.ts,
+        text: ev.data.text,
+        queued_id: ev.data.queued_id ?? null,
+      })
+    } else if (ev.kind === 'user_message_queued') {
+      // Pending bubble for a follow-up that landed in the inbox but the
+      // engine hasn't popped yet. Skip if a matching `user_message` (same
+      // queued_id) is already in the log — otherwise the chat would show
+      // the same message twice.
+      const qid = typeof ev.data.queued_id === 'string' ? ev.data.queued_id : ''
+      if (qid && confirmedQueuedIds.has(qid)) continue
+      lines.push({
+        kind: 'user_message_queued',
+        ts: ev.ts,
+        text: ev.data.text,
+        queued_id: qid,
+      })
     } else if (ev.kind === 'tool_called') {
       // Lead-level (depth=0) tool calls always surface. Sub-agent tool calls
       // normally stay in events.jsonl only, EXCEPT for the few tools the

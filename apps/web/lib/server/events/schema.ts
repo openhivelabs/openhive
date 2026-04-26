@@ -24,6 +24,7 @@ export type EventKind =
   | 'user_question'
   | 'user_answered'
   | 'user_message'
+  | 'user_message_queued'
   | 'turn_finished'
   | 'todos_changed'
   | 'skill.queued'

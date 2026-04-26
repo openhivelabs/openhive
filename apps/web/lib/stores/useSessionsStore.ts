@@ -271,7 +271,11 @@ async function consumeStream(
           })
           break
         case 'user_message':
-          // 새 턴 시작 — 다시 running 으로 flip.
+        case 'user_message_queued':
+          // 새 턴 시작(또는 queued — 엔진이 곧 pop) — running 으로 flip.
+          // user_message_queued 는 inbox 에 들어간 직후 즉시 fire 되므로
+          // idle 상태에서 user 가 메시지를 보냈을 때 즉시 spinner 가 뜨도록
+          // 같이 처리.
           get().updateSession(session.id, {
             status: 'running',
             endedAt: undefined,
