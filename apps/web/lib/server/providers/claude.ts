@@ -308,15 +308,36 @@ export async function* streamMessages(
     ;(payload as { tools?: unknown[] }).tools = list
   }
 
-  const resp = await fetch(MESSAGES_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${access}`,
-      ...ANTHROPIC_HEADERS,
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(180_000),
-  })
+  // Anthropic returns 429 with `x-should-retry: true` and no rate-limit
+  // detail headers when the per-minute input-token rate is tripped (large
+  // prompts in close succession). Auto-retry with exponential backoff:
+  // attempt 1 = immediate, attempt 2 after ~6s, attempt 3 after ~18s.
+  // Total wait ≤ 30s. Beyond that, the burst is over and bubbling the
+  // error up gives the caller a chance to surface it. 5xx are treated
+  // the same — Anthropic's transient error class.
+  let resp: Response
+  let attempt = 0
+  while (true) {
+    resp = await fetch(MESSAGES_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${access}`,
+        ...ANTHROPIC_HEADERS,
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(180_000),
+    })
+    const retriable =
+      resp.status === 429 ||
+      resp.status === 529 ||
+      (resp.status >= 500 && resp.status <= 599)
+    if (resp.ok || !retriable || attempt >= 2) break
+    // Drain body (avoid socket leak), then back off.
+    try { await resp.text() } catch { /* ignore */ }
+    attempt += 1
+    const waitMs = 6000 * attempt + Math.floor(Math.random() * 2000)
+    await new Promise((r) => setTimeout(r, waitMs))
+  }
   if (!resp.ok || !resp.body) {
     const body = resp.body ? await resp.text() : ''
     throw new Error(`Claude messages stream ${resp.status}: ${body}`)

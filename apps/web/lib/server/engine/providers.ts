@@ -35,6 +35,12 @@ export interface StreamOpts {
    *  `previous_response_id` chaining store so concurrent sessions don't
    *  clobber each other's state. */
   sessionId?: string
+  /** Per-agent chain key. Multiple concurrent streams within a single
+   *  engine session (parallel sibling delegates, or any two codex agents
+   *  running at once) must NOT share reasoning anchors — see codex.ts
+   *  StreamOpts.chainKey for the full reasoning. The engine mints one
+   *  chainKey per `runNode` invocation. */
+  chainKey?: string
   /** Enable the provider's hosted server-side web_search builtin
    *  (Codex `web_search`, Anthropic `web_search_20250305`). The flag is
    *  per-call so callers that explicitly want to disable it (regression
@@ -70,6 +76,7 @@ export async function* stream(
       tools,
       opts?.sessionId,
       nativeWebSearch,
+      opts?.chainKey,
     )
     return
   }
@@ -281,6 +288,7 @@ async function* streamCodex(
   tools: ToolSpec[] | undefined,
   sessionId: string | undefined,
   nativeWebSearch: boolean,
+  chainKey: string | undefined,
 ): AsyncIterable<StreamDelta> {
   const toolOrd = new Map<string, number>()
   let nextToolIdx = 0
@@ -311,6 +319,7 @@ async function* streamCodex(
     messages,
     tools,
     sessionId,
+    chainKey,
     nativeWebSearch,
   })) {
     const t = (ev as { type?: string }).type

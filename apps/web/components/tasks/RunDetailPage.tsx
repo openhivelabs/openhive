@@ -2408,7 +2408,7 @@ const Markdown = memo(function MarkdownInner({ text }: { text: string }) {
   // bubbles to re-parse — visible stutter on long messages. React.memo's
   // default shallow equality on `{text}` is sufficient here.
   return (
-    <div className="space-y-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+    <div className="space-y-2 break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         // react-markdown's default urlTransform only allows http/https/mailto/tel
@@ -2505,7 +2505,7 @@ const Markdown = memo(function MarkdownInner({ text }: { text: string }) {
                 href={href}
                 target="_blank"
                 rel="noreferrer"
-                className="underline underline-offset-2 hover:text-blue-600"
+                className="underline underline-offset-2 hover:text-blue-600 break-all"
               >
                 {children}
               </a>

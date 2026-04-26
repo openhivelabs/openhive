@@ -262,6 +262,18 @@ export interface StreamOpts {
    *  concurrent sessions. Without it, parallel chats would share one
    *  global slot and clobber each other's reasoning anchors. */
   sessionId?: string
+  /** Per-agent chain key. Within a single engine session, multiple
+   *  concurrent streams (e.g. parallel `delegate_parallel` siblings, or
+   *  any time two codex agents in the same session run at once) MUST
+   *  NOT share reasoning/function-call anchors — sibling A's reasoning
+   *  IDs spliced into sibling B's request makes the ChatGPT backend
+   *  drop the socket mid-stream (`TypeError: terminated`). The engine
+   *  mints one chainKey per `runNode` invocation so rounds within a
+   *  single agent's turn-loop share state but separate agents never do.
+   *  Falls back to `sessionId` for legacy callers. Convention:
+   *  `${sessionId}:<random>` so `clearCodexChain(sessionId)` can sweep
+   *  every chain belonging to a session by prefix on session exit. */
+  chainKey?: string
   /** Expose Codex's server-side `web_search` builtin tool. When true,
    *  appends `{type: "web_search"}` to the Responses API tools array so
    *  the model can run searches on the ChatGPT backend's own infra
@@ -326,12 +338,12 @@ function stateMap(): Map<string, CodexSessionState> {
   return globalForState.__openhive_codex_session_state
 }
 
-function sessionKey(sessionId: string | undefined): string {
-  return sessionId && sessionId.length > 0 ? sessionId : '__default__'
+function chainStateKey(key: string | undefined): string {
+  return key && key.length > 0 ? key : '__default__'
 }
 
-function getState(sessionId: string | undefined): CodexSessionState {
-  const k = sessionKey(sessionId)
+function getState(key: string | undefined): CodexSessionState {
+  const k = chainStateKey(key)
   let s = stateMap().get(k)
   if (!s) {
     s = { lastReasonings: [], funcItemIds: new Map() }
@@ -340,10 +352,41 @@ function getState(sessionId: string | undefined): CodexSessionState {
   return s
 }
 
+/** Drop only the reasoning anchors for one chain, preserving function-call
+ *  id mappings. Use when an agent has just received a delegation result
+ *  and we want it to re-reason from the tool_result instead of letting
+ *  its prior round's reasoning items (which encoded its training-prior
+ *  beliefs about the topic) get re-spliced into the next request and
+ *  override the fresh data. Without this, gpt-5.5 reliably ignores the
+ *  delegation report and regurgitates its training memory. */
+export function resetReasoningForChain(chainKey: string): void {
+  const k = chainStateKey(chainKey)
+  const s = stateMap().get(k)
+  if (s) s.lastReasonings = []
+}
+
 /** Drop a session's attach-items state — call when a session ends so we
- *  don't leak entries indefinitely. Safe to call for unknown sessions. */
+ *  don't leak entries indefinitely. Safe to call for unknown sessions.
+ *
+ *  Sweeps every chain whose key starts with `${sessionId}:` (the engine
+ *  mints chainKeys as `${sessionId}:<random>` per runNode), plus the
+ *  bare `sessionId` entry for legacy single-chain callers. */
 export function clearCodexChain(sessionId: string): void {
-  stateMap().delete(sessionId)
+  const map = stateMap()
+  map.delete(sessionId)
+  const prefix = `${sessionId}:`
+  for (const k of [...map.keys()]) {
+    if (k.startsWith(prefix)) map.delete(k)
+  }
+}
+
+/** Test-only: peek into internal chain state for the given key. Never
+ *  call from production code — the shape and lifetime of the state is
+ *  an implementation detail of the codex adapter. */
+export const __test = {
+  getState,
+  stateMap,
+  chainStateKey,
 }
 
 /** Apply the attach-items overlay + reasoning splice to a translated
@@ -385,6 +428,36 @@ function applyAttachItemIds(
 export async function* streamResponses(
   opts: StreamOpts,
 ): AsyncIterable<Record<string, unknown>> {
+  // The codex/chatgpt backend intermittently drops the SSE socket mid-
+  // `web_search` (`TypeError: terminated`), even on solo non-concurrent
+  // calls. The model has produced no useful text by that point — only
+  // observability lifecycle events (`response.web_search_call.in_progress`
+  // / `searching`). Retry once with the native web_search tool disabled:
+  // the model falls back to the function-shaped `web-search` skill (still
+  // registered) and the request completes normally. Without this, a
+  // single Member node failing here pushes the whole turn into placeholder-
+  // hallucinate territory at the parent.
+  let attempt = 0
+  while (true) {
+    try {
+      yield* streamResponsesOnce(opts)
+      return
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const transient = /terminated|fetch failed|socket hang up|ECONNRESET/i.test(msg)
+      if (transient && attempt < 1 && opts.nativeWebSearch) {
+        attempt += 1
+        opts = { ...opts, nativeWebSearch: false }
+        continue
+      }
+      throw err
+    }
+  }
+}
+
+async function* streamResponsesOnce(
+  opts: StreamOpts,
+): AsyncIterable<Record<string, unknown>> {
   const providerId = opts.providerId ?? 'codex'
   const session = await getSession(providerId)
   const { system, items } = toResponsesInput(opts.messages)
@@ -403,7 +476,7 @@ export async function* streamResponses(
     (system ?? '').trim() ||
     "You are Codex, a helpful coding assistant. Follow the user's request directly."
 
-  const state = getState(opts.sessionId)
+  const state = getState(opts.chainKey ?? opts.sessionId)
   const inputItems = applyAttachItemIds(items, state)
 
   const payload = cachingStrategy.applyToRequest({

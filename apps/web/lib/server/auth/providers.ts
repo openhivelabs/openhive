@@ -15,13 +15,6 @@ export interface ProviderDef {
 /** Display order in the UI. */
 export const PROVIDERS: ProviderDef[] = [
   {
-    id: 'claude-code',
-    label: 'Claude Code',
-    kind: 'auth_code',
-    description:
-      'Use your Claude Code subscription to power agents with Claude models.',
-  },
-  {
     id: 'codex',
     label: 'OpenAI Codex',
     kind: 'auth_code',
@@ -34,12 +27,6 @@ export const PROVIDERS: ProviderDef[] = [
     kind: 'device_code',
     description:
       'Use your GitHub Copilot subscription. Activates via device-code login.',
-  },
-  {
-    id: 'anthropic',
-    label: 'Anthropic',
-    kind: 'api_key',
-    description: 'Direct Anthropic API access via API key (claude.ai console).',
   },
   {
     id: 'openai',
