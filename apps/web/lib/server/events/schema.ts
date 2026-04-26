@@ -34,6 +34,7 @@ export type EventKind =
   | 'token.estimate.drift'
   | 'turn.blocked'
   | 'turn.round_limit'
+  | 'turn.early_exit'
   | 'autocompact.disabled'
   // Round-level observability (multi-round tool-calling turns)
   | 'round_started'
