@@ -37,7 +37,7 @@ import {
 } from '@/lib/api/market'
 import { BindingCodeEditor } from '@/components/dashboard/BindingCodeEditor'
 import { PanelShape } from '@/components/dashboard/BoundPanel'
-import type { PanelBinding } from '@/lib/api/dashboards'
+import type { PanelAction, PanelBinding } from '@/lib/api/dashboards'
 import {
   Area,
   AreaChart,
@@ -345,6 +345,12 @@ export function FrameMarketModal({
             (bindingOverride as unknown as Record<string, unknown> | null) ??
             aiPreview?.binding ??
             null,
+          // Pair the prebuilt binding with its setup_sql so install runs the
+          // CREATE TABLE the user just previewed against. Skip when the
+          // user hand-edited the binding via the Code editor — we can't
+          // assume the original DDL still matches their changes.
+          prebuilt_setup_sql:
+            bindingOverride == null ? aiPreview?.setup_sql ?? null : null,
           col_span: installColSpan,
           row_span: installRowSpan,
         })
@@ -1141,6 +1147,14 @@ function PreviewCard({
               propsFromPreview(entry.preview) ??
               undefined
             }
+            groupBy={(() => {
+              const m = (aiPreview?.binding as { map?: { group_by?: unknown } } | undefined)?.map
+              return typeof m?.group_by === 'string' ? m.group_by : undefined
+            })()}
+            allActions={(() => {
+              const a = (aiPreview?.binding as { actions?: unknown } | undefined)?.actions
+              return Array.isArray(a) ? (a as PanelAction[]) : []
+            })()}
           />
         ) : preview ? (
           renderPreview(preview)
@@ -1309,6 +1323,14 @@ function PanelPreview({
                 <PanelShape
                   panelType={aiPreview.panel_type}
                   data={aiPreview.data}
+                  groupBy={(() => {
+                    const m = (aiPreview.binding as { map?: { group_by?: unknown } })?.map
+                    return typeof m?.group_by === 'string' ? m.group_by : undefined
+                  })()}
+                  allActions={(() => {
+                    const a = (aiPreview.binding as { actions?: unknown })?.actions
+                    return Array.isArray(a) ? (a as PanelAction[]) : []
+                  })()}
                 />
               ) : preview ? (
                 renderPreview(preview)

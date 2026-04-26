@@ -273,6 +273,81 @@ export function describeSchema(
   })
 }
 
+/** Schema-only column info for a single team_data table — used by the
+ *  synthesized-action layer to derive create/update form fields without
+ *  re-running a full describeSchema across every table. Returns [] when
+ *  the table is missing or the company DB can't be opened. */
+export function getTableColumns(
+  companySlug: string,
+  tableName: string,
+): ColumnInfo[] {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) return []
+  try {
+    return withCompanyDb(companySlug, (conn) => {
+      const rows = conn
+        .prepare(`PRAGMA table_info(${tableName})`)
+        .all() as { name: string; type: string; notnull: number; pk: number; dflt_value: unknown }[]
+      return rows.map((c) => ({
+        name: c.name,
+        type: c.type,
+        notnull: !!c.notnull,
+        pk: !!c.pk,
+      }))
+    })
+  } catch {
+    return []
+  }
+}
+
+/** Pull the original CREATE TABLE statement for a team_data table. SQLite
+ *  stores the raw DDL alongside each row in sqlite_master, which is the
+ *  only place the CHECK constraint survives untouched (PRAGMA collapses
+ *  it). Returns null when the table doesn't exist or the company DB is
+ *  missing — caller treats either as "no extra metadata available". */
+export function getTableCreateSql(
+  companySlug: string,
+  tableName: string,
+): string | null {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) return null
+  try {
+    return withCompanyDb(companySlug, (conn) => {
+      const row = conn
+        .prepare(
+          `SELECT sql FROM sqlite_master WHERE type='table' AND name = :name`,
+        )
+        .get({ name: tableName }) as { sql?: string } | undefined
+      return typeof row?.sql === 'string' ? row.sql : null
+    })
+  } catch {
+    return null
+  }
+}
+
+/** Parse `CHECK (col IN ('a','b','c'))` from a CREATE TABLE statement.
+ *  The renderer uses this for kanban stage taxonomy: live DB schema is
+ *  the source of truth, and bindings can omit the duplicate copy.
+ *  Returns [] when no matching CHECK is present. */
+export function extractCheckOptions(
+  createSql: string,
+  columnName: string,
+): string[] {
+  if (!columnName) return []
+  const escaped = columnName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = new RegExp(
+    `CHECK\\s*\\(\\s*["\`]?${escaped}["\`]?\\s+IN\\s*\\(([^)]+)\\)\\s*\\)`,
+    'i',
+  )
+  const m = re.exec(createSql)
+  if (!m || !m[1]) return []
+  const out: string[] = []
+  for (const tok of m[1].split(',')) {
+    const t = tok.trim()
+    const sm = /^['"](.*)['"]$/.exec(t)
+    if (sm?.[1]) out.push(sm[1])
+  }
+  return out
+}
+
 // -------- query / exec --------
 
 const SELECT_RE = /^\s*(SELECT|WITH)\b/i

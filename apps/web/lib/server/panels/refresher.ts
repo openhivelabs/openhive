@@ -11,9 +11,11 @@
 
 import { listCompanies } from '../companies'
 import { loadDashboard } from '../dashboards'
+import { extractCheckOptions, getTableCreateSql } from '../team-data'
 import * as panelCache from './cache'
 import { apply as applyMapper } from './mapper'
 import { execute as executeSource, type SourceContext } from './sources'
+import { synthesizeKanbanActions } from './synthesize'
 
 /** Per-panel in-flight promise. When a refresh is already running we hand
  *  the same promise to subsequent callers instead of kicking off a parallel
@@ -97,11 +99,16 @@ async function refreshOne(
   const start = performance.now()
   try {
     const raw = await executeSource(binding.source ?? {}, ctx)
+    const panelType = typeof block.type === 'string' ? block.type : ''
     const shaped = applyMapper(
       raw,
       (binding.map as Record<string, unknown> | undefined) ?? {},
-      typeof block.type === 'string' ? block.type : '',
+      panelType,
     )
+    if (ctx.companySlug) {
+      enrichKanbanTaxonomy(shaped, panelType, binding, ctx.companySlug)
+      enrichSynthesizedActions(shaped, panelType, binding, ctx.companySlug)
+    }
     const durationMs = Math.round(performance.now() - start)
     panelCache.upsertSuccess({
       panelId,
@@ -152,4 +159,50 @@ export async function refreshOneNow(panelId: string): Promise<ReturnType<typeof 
     }
   }
   return null
+}
+
+/** Attach `stage_taxonomy` to the shaped data of a kanban panel sourced
+ *  from team_data. The DB schema's CHECK constraint on the group_by
+ *  column is the canonical source — KanbanView reads it to render every
+ *  stage as its own column even when only some have rows, and to seed
+ *  the create form's stage select even on bindings the AI emitted before
+ *  we required `actions[]`. Quietly no-ops for non-kanban panels and for
+ *  sources we can't introspect (mcp / http / etc.). */
+function enrichKanbanTaxonomy(
+  shaped: Record<string, unknown>,
+  panelType: string,
+  binding: Record<string, unknown>,
+  companySlug: string,
+): void {
+  if (panelType !== 'kanban') return
+  const source = (binding.source ?? {}) as { kind?: unknown; config?: unknown }
+  if (source.kind !== 'team_data') return
+  const groupBy = (binding.map as { group_by?: unknown } | undefined)?.group_by
+  if (typeof groupBy !== 'string' || groupBy.length === 0) return
+  const sql = String((source.config as { sql?: unknown } | undefined)?.sql ?? '')
+  // Match the same FROM/JOIN regex the binder uses; first table is the
+  // one whose schema actually owns the group_by column.
+  const tableMatch = /\b(?:from|join)\s+["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/i.exec(sql)
+  const tableName = tableMatch?.[1]
+  if (!tableName) return
+  const createSql = getTableCreateSql(companySlug, tableName)
+  if (!createSql) return
+  const taxonomy = extractCheckOptions(createSql, groupBy)
+  if (taxonomy.length > 0) shaped.stage_taxonomy = taxonomy
+}
+
+/** Attach actions the binding doesn't carry but the panel type implies
+ *  — today the kanban CRUD set (move, create, update, delete). The
+ *  action objects are shipped to the client so the renderer knows which
+ *  surfaces to draw (toolbar Add, drag-to-move, row Edit/Delete) and
+ *  which IDs to invoke; the server resolves those same IDs by re-running
+ *  the synthesis on the action endpoint. */
+function enrichSynthesizedActions(
+  shaped: Record<string, unknown>,
+  panelType: string,
+  binding: Record<string, unknown>,
+  companySlug: string,
+): void {
+  const synthesized = synthesizeKanbanActions(panelType, binding, companySlug)
+  if (synthesized.length > 0) shaped.synthesized_actions = synthesized
 }

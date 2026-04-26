@@ -6,6 +6,7 @@ import {
   executeAction,
   ActionError,
 } from '@/lib/server/panels/actions'
+import { synthesizeKanbanActions } from '@/lib/server/panels/synthesize'
 import { get } from '@/lib/server/panels/cache'
 import { apply as applyMapper } from '@/lib/server/panels/mapper'
 import { refreshOneNow } from '@/lib/server/panels/refresher'
@@ -192,7 +193,25 @@ panels.post('/:panelId/actions/:actionId', async (c) => {
   const panel = blocks.find((b) => b && b.id === panelId)
   if (!panel) return c.json({ detail: 'panel not found' }, 404)
   const binding = panel.binding as { actions?: PanelActionSpec[] } | undefined
-  const action = binding?.actions?.find((a) => a.id === actionId)
+  const persistedAction = binding?.actions?.find((a) => a.id === actionId)
+  // Fall back to synthesized actions (e.g. kanban move on bindings that
+  // don't carry an explicit drag update) so drag-to-move still works
+  // without requiring a re-bind. refresher attaches the same synthesis
+  // to panel data so client and server agree on which IDs are valid.
+  // Fall back to synthesized actions (e.g. kanban CRUD on bindings that
+  // don't carry explicit actions) so users can add/edit/move/delete
+  // without requiring a re-bind. refresher attaches the same synthesis
+  // to panel data so client and server agree on which IDs are valid.
+  let action: PanelActionSpec | null = persistedAction ?? null
+  if (!action && typeof panel.type === 'string') {
+    const synthesized = synthesizeKanbanActions(
+      panel.type,
+      (panel.binding ?? {}) as Record<string, unknown>,
+      slugs.companySlug,
+    )
+    const match = synthesized.find((a) => a.id === actionId)
+    if (match) action = match as unknown as PanelActionSpec
+  }
   if (!action) return c.json({ detail: 'action not found' }, 404)
 
   try {
