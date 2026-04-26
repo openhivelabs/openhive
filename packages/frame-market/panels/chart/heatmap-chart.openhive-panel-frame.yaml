@@ -1,0 +1,50 @@
+id: heatmap-chart
+name: Heatmap
+description: >-
+  Two-dimensional density grid. Each cell is the value at the intersection
+  of a row category and a column category, shaded by intensity. Use for
+  patterns line/bar can't show — usage by day-of-week × hour, signups by
+  region × month, feature use by user × module. Needs two grouping
+  columns (`group_by` for cols, `series_by` for rows).
+author: OpenHive
+category: chart
+tags: [chart, heatmap, matrix, 2d, density, pattern]
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS customer (
+    team_id    TEXT NOT NULL,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT,
+    email      TEXT,
+    stage      TEXT DEFAULT 'prospect',
+    source     TEXT DEFAULT 'direct',
+    value      REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: chart
+  title: Density
+  colSpan: 3
+  rowSpan: 2
+  props:
+    variant: heatmap
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT
+            strftime('%w', created_at) AS dow,
+            strftime('%H', created_at) AS hour,
+            COUNT(*) AS n
+          FROM customer
+          WHERE team_id = :team_id
+          GROUP BY dow, hour
+          ORDER BY dow, hour
+    map:
+      rows: "$.rows[*]"
+      group_by: hour
+      series_by: dow
+      value: n
+    refresh_seconds: 600

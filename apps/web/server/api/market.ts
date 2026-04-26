@@ -9,7 +9,7 @@ import { buildInstallPlan } from '@/lib/server/panels/install-plan'
 import { apply as applyMapper } from '@/lib/server/panels/mapper'
 import { execute as executeSource } from '@/lib/server/panels/sources'
 import { resolveTeamSlugs } from '@/lib/server/companies'
-import { describeSchema, runExec } from '@/lib/server/team-data'
+import { describeSchema, dryRunWithSetup, runExec } from '@/lib/server/team-data'
 import {
   type MarketType,
   fetchMarketFrame,
@@ -253,15 +253,39 @@ market.post('/install/apply', async (c) => {
       // Trust the prebuilt binding from a prior preview call when present —
       // the user already saw it render in the modal preview, no point re-asking
       // the LLM and risking a different answer.
-      const binding =
-        body.prebuilt_binding && typeof body.prebuilt_binding === 'object'
-          ? body.prebuilt_binding
-          : ((await aiBindPanel({
-              panel,
-              description,
-              schema,
-              userIntent,
-            })) as unknown as Record<string, unknown>)
+      let binding: Record<string, unknown>
+      let aiSetupSql: string | undefined
+      if (body.prebuilt_binding && typeof body.prebuilt_binding === 'object') {
+        binding = body.prebuilt_binding as Record<string, unknown>
+      } else {
+        const aiResult = await aiBindPanel({
+          panel,
+          description,
+          schema,
+          userIntent,
+        })
+        binding = aiResult.binding as unknown as Record<string, unknown>
+        aiSetupSql = aiResult.setupSql
+      }
+      // Run any AI-generated CREATE TABLE so the new table exists before
+      // the panel's first refresh hits its source SELECT. The preview
+      // route already runs the same statements idempotently when the user
+      // previewed first, so this typically no-ops on install.
+      if (aiSetupSql) {
+        for (const stmt of splitStatements(aiSetupSql)) {
+          if (!stmt.trim()) continue
+          try {
+            runExec(targetCompany, stmt, {
+              source: `panel-install:${id}`,
+              note: `ai setup_sql for ${id}`,
+              teamId,
+            })
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            if (!/already exists|duplicate column/i.test(msg)) throw e
+          }
+        }
+      }
       panel.binding = binding
     } else {
       // 1) Run ALTERs for `extend`, then setup.sql filtered by skip list.
@@ -356,12 +380,13 @@ market.post('/install/ai-bind-preview', async (c) => {
         return { tables: [], recent_migrations: [] }
       }
     })()
-    const binding = await aiBindPanel({
+    const aiResult = await aiBindPanel({
       panel,
       description,
       schema,
       userIntent,
     })
+    const binding = aiResult.binding
     const panelType = String(panel.type ?? '')
     const resolved = resolveTeamSlugs(teamId)
     if (!resolved) {
@@ -375,15 +400,38 @@ market.post('/install/ai-bind-preview', async (c) => {
     let data: unknown = null
     let execError: string | null = null
     try {
-      const raw = await executeSource(
-        binding.source as unknown as Record<string, unknown>,
-        ctx,
-      )
-      data = applyMapper(
-        raw,
-        binding.map as unknown as Record<string, unknown>,
-        panelType,
-      )
+      // Dry-run path: when binder produced setup_sql, run it inside a
+      // SAVEPOINT alongside the SELECT so the preview shows the new
+      // table's empty result without committing the CREATE to the live
+      // DB. Without this, hitting Apply would silently mutate the
+      // schema even if the user closes the modal without installing.
+      if (
+        aiResult.setupSql &&
+        (binding.source as { kind?: unknown } | undefined)?.kind === 'team_data'
+      ) {
+        const sql = String(
+          ((binding.source as { config?: { sql?: unknown } }).config?.sql) ?? '',
+        )
+        const setupStmts = splitStatements(aiResult.setupSql)
+        const result = dryRunWithSetup(targetCompany, setupStmts, sql, {
+          teamId,
+        })
+        data = applyMapper(
+          result,
+          binding.map as unknown as Record<string, unknown>,
+          panelType,
+        )
+      } else {
+        const raw = await executeSource(
+          binding.source as unknown as Record<string, unknown>,
+          ctx,
+        )
+        data = applyMapper(
+          raw,
+          binding.map as unknown as Record<string, unknown>,
+          panelType,
+        )
+      }
     } catch (exc) {
       execError = exc instanceof Error ? exc.message : String(exc)
     }

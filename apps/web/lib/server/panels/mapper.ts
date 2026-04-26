@@ -12,13 +12,27 @@ import { JSONPath } from 'jsonpath-plus'
 export interface MapSpec {
   rows?: string
   group_by?: string
+  /** Second grouping axis. When set on a chart binding, the mapper builds
+   *  a multi-series matrix (group_by → x, series_by → series) — used by
+   *  stacked bar/area and heatmap. */
+  series_by?: string
   title?: string
   value?: string
   columns?: string[]
   filter?: string
   aggregate?: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'first'
   aggregate_field?: string
+  /** KPI only — pick a prior-period value out of the same first row so the
+   *  renderer can derive a percent delta. Works in tandem with SQL that
+   *  computes both current and prior in one row. */
+  delta_field?: string
+  /** KPI only — pick a target / goal value out of the first row so the
+   *  renderer can draw a progress bar. */
+  target_field?: string
   ts?: string
+  /** Calendar only — end timestamp column. When set, calendar event cards
+   *  span from `ts` to `ts_end`; missing means a default 1-hour duration. */
+  ts_end?: string
   kind?: string
   text?: string
   cells?: MetricCellSpec[]
@@ -69,6 +83,8 @@ export function apply(
   if (panelType === 'timeline') return shapeTimeline(rows, spec)
   if (panelType === 'markdown') return shapeMarkdown(raw, rows, spec)
   if (panelType === 'metric_grid') return shapeMetricGrid(rows, spec)
+  if (panelType === 'stat_row') return shapeMetricGrid(rows, spec)
+  if (panelType === 'calendar') return shapeCalendar(rows, spec)
   return { rows }
 }
 
@@ -186,7 +202,32 @@ function shapeKpi(rows: unknown[], spec: MapSpec): Record<string, unknown> {
   else if (agg === 'first')
     result = values[0] ?? (rows.length > 0 ? rows[0] : null)
   else result = rows.length
-  return { value: result, rows_considered: rows.length }
+  const out: Record<string, unknown> = {
+    value: result,
+    rows_considered: rows.length,
+  }
+  // Pull prior / target out of the first row so the SQL can compute them
+  // alongside the main value. Renderer interprets prior → delta, target →
+  // progress bar. We always emit the keys when the field is configured —
+  // even if the lookup fails this refresh — so the cached shape stays
+  // stable across data variability and the schema-drift detector doesn't
+  // false-positive on a transient NULL.
+  const first = rows[0]
+  if (spec.delta_field) {
+    const p =
+      first && typeof first === 'object'
+        ? Number(getPath(first, spec.delta_field))
+        : Number.NaN
+    out.prior = Number.isFinite(p) ? p : null
+  }
+  if (spec.target_field) {
+    const t =
+      first && typeof first === 'object'
+        ? Number(getPath(first, spec.target_field))
+        : Number.NaN
+    out.target = Number.isFinite(t) ? t : null
+  }
+  return out
 }
 
 function shapeTable(rows: unknown[], spec: MapSpec): Record<string, unknown> {
@@ -234,8 +275,63 @@ function shapeKanban(rows: unknown[], spec: MapSpec): Record<string, unknown> {
 
 function shapeChart(rows: unknown[], spec: MapSpec): Record<string, unknown> {
   const xField = spec.group_by
+  const seriesField = spec.series_by
   const yField = spec.value
   if (!xField) return { series: [], x: [], y: [] }
+
+  // Two-dimensional path: each row contributes to a (xKey, sKey) bucket.
+  // Output exposes both flat-stacked (`series[]` indexed by xKey) and a
+  // matrix (`rows`/`cols`/`values`) so the chart view can render either
+  // a stacked bar/area or a heatmap from the same shape.
+  if (seriesField) {
+    const matrix = new Map<string, Map<string, number>>()
+    const xKeys = new Set<string>()
+    const sKeys = new Set<string>()
+    for (const r of rows) {
+      const x = getPath(r, xField)
+      const s = getPath(r, seriesField)
+      const xKey = x === null || x === undefined ? '—' : String(x)
+      const sKey = s === null || s === undefined ? '—' : String(s)
+      const v = yField ? Number(getPath(r, yField)) : 1
+      const delta = Number.isFinite(v) ? v : 0
+      xKeys.add(xKey)
+      sKeys.add(sKey)
+      let row = matrix.get(sKey)
+      if (!row) {
+        row = new Map<string, number>()
+        matrix.set(sKey, row)
+      }
+      row.set(xKey, (row.get(xKey) ?? 0) + delta)
+    }
+    const x = [...xKeys]
+    const seriesNames = [...sKeys]
+    const series = seriesNames.map((name) => {
+      const row = matrix.get(name)
+      return {
+        name,
+        data: x.map((xKey) => row?.get(xKey) ?? 0),
+      }
+    })
+    // Total per x — handy for tooltips and for back-compat with consumers
+    // that still read a flat `y[]`.
+    const y = x.map((xKey) =>
+      series.reduce((sum, s) => sum + (s.data[x.indexOf(xKey)] ?? 0), 0),
+    )
+    return {
+      x,
+      y,
+      series,
+      matrix: {
+        rows: seriesNames,
+        cols: x,
+        values: seriesNames.map((name) => {
+          const row = matrix.get(name)
+          return x.map((xKey) => row?.get(xKey) ?? 0)
+        }),
+      },
+    }
+  }
+
   const buckets = new Map<string, number>()
   for (const r of rows) {
     const x = getPath(r, xField)
@@ -289,6 +385,77 @@ function shapeTimeline(rows: unknown[], spec: MapSpec): Record<string, unknown> 
     raw: r,
   }))
   return { events }
+}
+
+/** Calendar panel — interactive month grid + detail pane. Input is a list
+ *  of dated rows; output normalizes ts to YYYY-MM-DD (cheap string equality
+ *  per cell), pulls out `id` for update/delete actions, and preserves the
+ *  full row in `raw` so the detail card can render every column without a
+ *  second round-trip. `kind` is optional and drives chip color in the UI. */
+function shapeCalendar(rows: unknown[], spec: MapSpec): Record<string, unknown> {
+  const tsField = spec.ts ?? 'ts'
+  const tsEndField = spec.ts_end ?? null
+  const titleField = spec.title
+  const kindField = spec.kind
+  const events: {
+    id: unknown
+    date: string | null
+    time: string | null
+    endTime: string | null
+    endDate: string | null
+    title: unknown
+    kind: unknown
+    raw: unknown
+  }[] = []
+  for (const r of rows) {
+    const rawTs = r && typeof r === 'object' ? getPath(r, tsField) : null
+    const rawEnd = tsEndField && r && typeof r === 'object' ? getPath(r, tsEndField) : null
+    events.push({
+      id: r && typeof r === 'object' ? getPath(r, 'id') : null,
+      date: toIsoDate(rawTs),
+      time: toClockTime(rawTs),
+      endDate: toIsoDate(rawEnd),
+      endTime: toClockTime(rawEnd),
+      title: titleField && r && typeof r === 'object' ? getPath(r, titleField) : null,
+      kind: kindField && r && typeof r === 'object' ? getPath(r, kindField) : null,
+      raw: r,
+    })
+  }
+  // Renderer needs to know which raw column holds start/end so drag-to-
+  // reschedule + the From/To form labels can target the right keys without
+  // re-reading the binding.
+  return { events, fields: { start: tsField, end: tsEndField } }
+}
+
+function toClockTime(v: unknown): string | null {
+  if (typeof v === 'string') {
+    const m = /T(\d{2}:\d{2})/.exec(v) ?? /\s(\d{2}:\d{2})/.exec(v)
+    if (m) return m[1] ?? null
+    return null
+  }
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    const ms = v < 1e12 ? v * 1000 : v
+    const d = new Date(ms)
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  }
+  return null
+}
+
+function toIsoDate(v: unknown): string | null {
+  if (typeof v === 'string') {
+    // Already ISO date or datetime — slice the YYYY-MM-DD prefix.
+    const m = /^(\d{4}-\d{2}-\d{2})/.exec(v)
+    if (m) return m[1] ?? null
+    const t = Date.parse(v)
+    if (Number.isFinite(t)) return new Date(t).toISOString().slice(0, 10)
+    return null
+  }
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    // Heuristic: < 10^12 → seconds, else milliseconds.
+    const ms = v < 1e12 ? v * 1000 : v
+    return new Date(ms).toISOString().slice(0, 10)
+  }
+  return null
 }
 
 function shapeMarkdown(

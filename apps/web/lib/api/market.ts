@@ -42,9 +42,23 @@ export type PanelPreview =
   | { kind: 'area'; data: number[]; subtitle?: string }
   | { kind: 'bar'; bars: { label: string; value: number }[]; subtitle?: string; format?: 'currency'; orientation?: 'vertical' | 'horizontal' }
   | { kind: 'pie'; slices: { label: string; value: number }[]; subtitle?: string }
-  | { kind: 'kpi'; value: string; hint: string; tone?: 'positive' | 'negative'; subtitle?: string }
+  | {
+      kind: 'kpi'
+      value: string
+      hint: string
+      tone?: 'positive' | 'negative'
+      subtitle?: string
+      /** Inline delta caption shown under the big number — "▲ 18.0% vs 지난 주". */
+      delta?: string
+      /** "12 / 50" target ratio + visible bar at `progress` percent (0..100). */
+      target?: string
+      progress?: number
+    }
   | { kind: 'kanban'; columns: { label: string; cards: string[] }[]; subtitle?: string }
   | { kind: 'table'; columns: string[]; rows: string[][]; subtitle?: string }
+  | { kind: 'heatmap'; rowLabels: string[]; colLabels: string[]; values: number[][]; subtitle?: string }
+  | { kind: 'stat_row'; stats: { label: string; value: string }[]; subtitle?: string }
+  | { kind: 'calendar'; month: string; days: { day: number; events?: number; today?: boolean; muted?: boolean }[]; subtitle?: string }
 
 export interface MarketIndex {
   companies: MarketEntry[]

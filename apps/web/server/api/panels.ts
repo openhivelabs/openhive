@@ -10,7 +10,11 @@ import { get } from '@/lib/server/panels/cache'
 import { apply as applyMapper } from '@/lib/server/panels/mapper'
 import { refreshOneNow } from '@/lib/server/panels/refresher'
 import { execute as executeSource } from '@/lib/server/panels/sources'
-import { describeSchema } from '@/lib/server/team-data'
+import { describeSchema, dryRunWithSetup } from '@/lib/server/team-data'
+
+function splitStatements(sql: string): string[] {
+  return sql.split(/;\s*(?:\n|$)/).map((s) => s.trim()).filter(Boolean)
+}
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 
@@ -93,11 +97,12 @@ panels.post('/rebind', async (c) => {
     }
   })()
   try {
-    const binding = await aiBindPanel({
+    const aiResult = await aiBindPanel({
       panel: body.spec,
       schema,
       userIntent,
     })
+    const binding = aiResult.binding
     const panelType = String((body.spec as { type?: unknown }).type ?? '')
     const ctx = {
       companySlug: resolved.companySlug,
@@ -107,15 +112,36 @@ panels.post('/rebind', async (c) => {
     let data: unknown = null
     let execError: string | null = null
     try {
-      const raw = await executeSource(
-        binding.source as unknown as Record<string, unknown>,
-        ctx,
-      )
-      data = applyMapper(
-        raw,
-        binding.map as unknown as Record<string, unknown>,
-        panelType,
-      )
+      // Dry-run rebind preview when the AI emitted setup_sql, so the
+      // proposed-but-not-yet-applied schema doesn't pollute the live DB
+      // on every preview tick.
+      if (
+        aiResult.setupSql &&
+        (binding.source as { kind?: unknown } | undefined)?.kind === 'team_data'
+      ) {
+        const sql = String(
+          ((binding.source as { config?: { sql?: unknown } }).config?.sql) ?? '',
+        )
+        const setupStmts = splitStatements(aiResult.setupSql)
+        const result = dryRunWithSetup(resolved.companySlug, setupStmts, sql, {
+          teamId: body.team_id,
+        })
+        data = applyMapper(
+          result,
+          binding.map as unknown as Record<string, unknown>,
+          panelType,
+        )
+      } else {
+        const raw = await executeSource(
+          binding.source as unknown as Record<string, unknown>,
+          ctx,
+        )
+        data = applyMapper(
+          raw,
+          binding.map as unknown as Record<string, unknown>,
+          panelType,
+        )
+      }
     } catch (exc) {
       execError = exc instanceof Error ? exc.message : String(exc)
     }

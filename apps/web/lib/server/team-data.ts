@@ -442,6 +442,75 @@ function applyBinds<T>(
   return run(binds.values)
 }
 
+/** Apply DDL (CREATE TABLE …) inside a SAVEPOINT, run the SELECT against
+ *  the resulting in-transaction schema, then ROLLBACK so the live DB is
+ *  left untouched. Used by the install-preview path to render a panel
+ *  preview against an AI-generated table without committing it. */
+export function dryRunWithSetup(
+  companySlug: string,
+  setupStatements: string[],
+  selectSql: string,
+  opts: RunQueryOptions = {},
+): QueryResult {
+  if (hasMultipleStatements(selectSql)) {
+    const err = new Error('multi_statement: only one SQL statement per call')
+    ;(err as Error & { code?: string }).code = 'multi_statement'
+    throw err
+  }
+  if (!SELECT_RE.test(selectSql)) {
+    throw new Error('dry_run accepts only SELECT/WITH statements')
+  }
+  return withCompanyDb(companySlug, (conn) => {
+    conn.exec('SAVEPOINT panel_dry_run')
+    try {
+      for (const stmt of setupStatements) {
+        if (!stmt.trim()) continue
+        if (hasMultipleStatements(stmt)) {
+          throw new Error('setup contained multi-statement SQL')
+        }
+        if (!DDL_RE.test(stmt)) {
+          throw new Error('setup must be DDL (CREATE TABLE / ALTER / …)')
+        }
+        conn.prepare(stmt).run()
+      }
+      const sel = conn.prepare(selectSql)
+      let columns: string[] = []
+      try {
+        columns = sel.columns().map((c) => c.name)
+      } catch {
+        /* not a SELECT with named columns */
+      }
+      const binds = mergeBinds(opts)
+      const rows = applyBinds(
+        (args) =>
+          (args === undefined
+            ? sel.all()
+            : Array.isArray(args)
+              ? sel.all(...args)
+              : sel.all(args)) as Record<string, unknown>[],
+        binds,
+      )
+      if (columns.length === 0 && rows.length > 0) {
+        columns = Object.keys(rows[0] ?? {})
+      }
+      return { columns, rows }
+    } finally {
+      // Always rewind the schema/data changes, even on success — this is
+      // a preview, not a commit.
+      try {
+        conn.exec('ROLLBACK TO SAVEPOINT panel_dry_run')
+      } catch {
+        /* ignore — savepoint may have been auto-released by an error */
+      }
+      try {
+        conn.exec('RELEASE SAVEPOINT panel_dry_run')
+      } catch {
+        /* ignore */
+      }
+    }
+  })
+}
+
 export function runQuery(
   companySlug: string,
   sql: string,

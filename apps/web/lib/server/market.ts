@@ -66,9 +66,21 @@ export type PanelPreview =
   | { kind: 'area'; data: number[]; subtitle?: string }
   | { kind: 'bar'; bars: { label: string; value: number }[]; subtitle?: string; format?: 'currency'; orientation?: 'vertical' | 'horizontal' }
   | { kind: 'pie'; slices: { label: string; value: number }[]; subtitle?: string }
-  | { kind: 'kpi'; value: string; hint: string; tone?: 'positive' | 'negative'; subtitle?: string }
+  | {
+      kind: 'kpi'
+      value: string
+      hint: string
+      tone?: 'positive' | 'negative'
+      subtitle?: string
+      delta?: string
+      target?: string
+      progress?: number
+    }
   | { kind: 'kanban'; columns: { label: string; cards: string[] }[]; subtitle?: string }
   | { kind: 'table'; columns: string[]; rows: string[][]; subtitle?: string }
+  | { kind: 'heatmap'; rowLabels: string[]; colLabels: string[]; values: number[][]; subtitle?: string }
+  | { kind: 'stat_row'; stats: { label: string; value: string }[]; subtitle?: string }
+  | { kind: 'calendar'; month: string; days: { day: number; events?: number; today?: boolean; muted?: boolean }[]; subtitle?: string }
 
 export interface MarketIndex {
   companies: MarketEntry[]
@@ -173,7 +185,13 @@ function coercePreview(raw: unknown): PanelPreview | undefined {
       const hint = typeof r.hint === 'string' ? r.hint : ''
       if (!value) return undefined
       const tone = r.tone === 'positive' || r.tone === 'negative' ? r.tone : undefined
-      return { kind: 'kpi', value, hint, tone, subtitle }
+      const delta = typeof r.delta === 'string' ? r.delta : undefined
+      const target = typeof r.target === 'string' ? r.target : undefined
+      const progress =
+        typeof r.progress === 'number' && Number.isFinite(r.progress)
+          ? Math.max(0, Math.min(100, r.progress))
+          : undefined
+      return { kind: 'kpi', value, hint, tone, subtitle, delta, target, progress }
     }
     case 'kanban': {
       if (!Array.isArray(r.columns)) return undefined
@@ -201,6 +219,57 @@ function coercePreview(raw: unknown): PanelPreview | undefined {
         }
       }
       return columns.length > 0 ? { kind: 'table', columns, rows, subtitle } : undefined
+    }
+    case 'calendar': {
+      const month = typeof r.month === 'string' ? r.month : ''
+      const daysRaw = Array.isArray(r.days) ? r.days : []
+      const days: { day: number; events?: number; today?: boolean; muted?: boolean }[] = []
+      for (const d of daysRaw) {
+        if (!d || typeof d !== 'object') continue
+        const o = d as Record<string, unknown>
+        const day = Number(o.day)
+        if (!Number.isFinite(day)) continue
+        days.push({
+          day,
+          events: typeof o.events === 'number' ? o.events : undefined,
+          today: o.today === true ? true : undefined,
+          muted: o.muted === true ? true : undefined,
+        })
+      }
+      if (!month || days.length === 0) return undefined
+      return { kind: 'calendar', month, days, subtitle }
+    }
+    case 'stat_row': {
+      if (!Array.isArray(r.stats)) return undefined
+      const stats: { label: string; value: string }[] = []
+      for (const s of r.stats as unknown[]) {
+        if (!s || typeof s !== 'object') continue
+        const o = s as Record<string, unknown>
+        const label = typeof o.label === 'string' ? o.label : null
+        const value =
+          typeof o.value === 'string' ? o.value : typeof o.value === 'number' ? String(o.value) : null
+        if (label && value !== null) stats.push({ label, value })
+      }
+      return stats.length > 0 ? { kind: 'stat_row', stats, subtitle } : undefined
+    }
+    case 'heatmap': {
+      const rowLabels = Array.isArray(r.rowLabels)
+        ? (r.rowLabels as unknown[]).filter((x): x is string => typeof x === 'string')
+        : []
+      const colLabels = Array.isArray(r.colLabels)
+        ? (r.colLabels as unknown[]).filter((x): x is string => typeof x === 'string')
+        : []
+      const values: number[][] = []
+      if (Array.isArray(r.values)) {
+        for (const row of r.values as unknown[]) {
+          if (!Array.isArray(row)) continue
+          values.push((row as unknown[]).map((v) => Number(v)).map((v) => (Number.isFinite(v) ? v : 0)))
+        }
+      }
+      if (rowLabels.length === 0 || colLabels.length === 0 || values.length === 0) {
+        return undefined
+      }
+      return { kind: 'heatmap', rowLabels, colLabels, values, subtitle }
     }
     default:
       return undefined

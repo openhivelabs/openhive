@@ -120,6 +120,24 @@
 html,
 body {
   height: 100%;
+  /* Kill the document-level rubber-band bounce. The app is a SPA whose own
+   * scroll containers handle all scrolling — letting the document bounce
+   * makes scroll-end overscroll feel like the UI is lagging on the way back. */
+  overscroll-behavior: none;
+}
+
+/* Stop scroll-chaining from inner scroll containers up to ancestors. Without
+ * this, wheel events past a container's bottom propagate to the next scroller
+ * and eventually the document, triggering the same bounce + delayed-recovery
+ * feel the user reported across pages. `contain` keeps natural scrolling
+ * inside the container while killing the chain. */
+[class*="overflow-auto"],
+[class*="overflow-scroll"],
+[class*="overflow-y-auto"],
+[class*="overflow-y-scroll"],
+[class*="overflow-x-auto"],
+[class*="overflow-x-scroll"] {
+  overscroll-behavior: contain;
 }
 
 .dark body {

@@ -1,0 +1,44 @@
+id: kpi-delta
+name: KPI with Delta
+description: >-
+  현재 값 + 전기 대비 변화율. "이번 주 142명 (+18% vs 지난 주)" 같이
+  방향성과 함께 보고 싶을 때. SQL은 한 행에 두 컬럼(현재 / 직전 기간)을
+  같이 돌려주면 됨. 렌더러가 % 차이 자동 계산하고 ▲▼ 색으로 표시.
+author: OpenHive
+category: kpi
+tags: [kpi, delta, comparison, trend, week-over-week]
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS customer (
+    team_id    TEXT NOT NULL,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT,
+    email      TEXT,
+    stage      TEXT DEFAULT 'prospect',
+    value      REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: kpi
+  title: Weekly Change
+  colSpan: 2
+  rowSpan: 1
+  props:
+    hint: 이번 주
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT
+            SUM(CASE WHEN date(created_at) >= date('now','-6 days') THEN 1 ELSE 0 END) AS current_n,
+            SUM(CASE WHEN date(created_at) BETWEEN date('now','-13 days') AND date('now','-7 days') THEN 1 ELSE 0 END) AS prior_n
+          FROM customer
+          WHERE team_id = :team_id
+    map:
+      rows: "$.rows[*]"
+      aggregate: first
+      aggregate_field: current_n
+      delta_field: prior_n
+    refresh_seconds: 600

@@ -18,12 +18,6 @@ export interface CacheRow {
   error: string | null
   fetched_at: number
   duration_ms: number | null
-  /** `shape_hash` of the latest successful response (undefined before first success). */
-  shape_hash?: string
-  /** True when the most recent successful fetch had a different shape than the
-   *  one before it. UI uses this to show a "upstream response changed" badge,
-   *  warning the user that the mapper may be out of date. */
-  shape_changed?: boolean
 }
 
 interface Stored {
@@ -33,39 +27,6 @@ interface Stored {
   error: string | null
   fetched_at: number
   duration_ms: number | null
-  shape_hash?: string
-  shape_changed?: boolean
-}
-
-/**
- * Structural fingerprint of a response — captures key set + nesting shape
- * without data values. Two responses with the same shape hash have compatible
- * mapper output; a change signals the source's schema drifted.
- */
-function computeShapeHash(value: unknown, depth = 0): string {
-  if (depth > 5) return '…'
-  if (value === null) return 'n'
-  if (Array.isArray(value)) {
-    if (value.length === 0) return '[]'
-    return `[${computeShapeHash(value[0], depth + 1)}]`
-  }
-  if (typeof value === 'object') {
-    const keys = Object.keys(value as Record<string, unknown>).sort()
-    if (keys.length === 0) return '{}'
-    const parts = keys.map(
-      (k) => `${k}:${computeShapeHash((value as Record<string, unknown>)[k], depth + 1)}`,
-    )
-    return `{${parts.join(',')}}`
-  }
-  return typeof value
-}
-
-function fnvHash(s: string): string {
-  let h = 2166136261 >>> 0
-  for (let i = 0; i < s.length; i++) {
-    h = Math.imul(h ^ s.charCodeAt(i), 16777619)
-  }
-  return (h >>> 0).toString(16).padStart(8, '0')
 }
 
 function cacheRoot(): string {
@@ -105,9 +66,6 @@ export function upsertSuccess(input: {
   data: unknown
   durationMs: number
 }): void {
-  const prior = readStored(input.panelId)
-  const shape = fnvHash(computeShapeHash(input.data))
-  const changed = !!(prior?.shape_hash && prior.shape_hash !== shape)
   writeStored(input.panelId, {
     panel_id: input.panelId,
     team_id: input.teamId,
@@ -115,8 +73,6 @@ export function upsertSuccess(input: {
     error: null,
     fetched_at: Date.now(),
     duration_ms: input.durationMs,
-    shape_hash: shape,
-    shape_changed: changed,
   })
 }
 
@@ -148,8 +104,6 @@ export function get(panelId: string): CacheRow | null {
     error: s.error,
     fetched_at: s.fetched_at,
     duration_ms: s.duration_ms,
-    shape_hash: s.shape_hash,
-    shape_changed: s.shape_changed,
   }
 }
 

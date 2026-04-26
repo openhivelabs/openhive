@@ -9,6 +9,7 @@ export type PanelType =
   | 'timeline'
   | 'markdown'
   | 'metric_grid'
+  | 'calendar'
 
 /** Where a block's data comes from. The shape inside `config` varies by kind:
  *   - mcp:        { server, tool, args }
@@ -37,6 +38,8 @@ export type FormFieldType =
   | 'number'
   | 'date'
   | 'datetime'
+  | 'datetime-local'
+  | 'time'
   | 'select'
   | 'toggle'
 

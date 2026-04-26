@@ -82,6 +82,175 @@
           { "label": "Lost", "value": 6 }
         ]
       }
+    },
+    {
+      "id": "kpi",
+      "name": "KPI",
+      "description": "Single big number with a label. Use for total counts, sums, today's revenue — anything that fits in one bold metric.",
+      "author": "OpenHive",
+      "category": "kpi",
+      "tags": ["kpi", "number", "metric", "summary", "universal"],
+      "preview": {
+        "kind": "kpi",
+        "value": "1,234",
+        "hint": "총 사용자",
+        "subtitle": "Single value"
+      }
+    },
+    {
+      "id": "kpi-delta",
+      "name": "KPI with Delta",
+      "description": "Current value plus % change vs the prior period. Single number alone tells you the level — delta tells you whether it's good or bad.",
+      "author": "OpenHive",
+      "category": "kpi",
+      "tags": ["kpi", "delta", "comparison", "trend"],
+      "preview": {
+        "kind": "kpi",
+        "value": "142",
+        "hint": "이번 주 신규",
+        "delta": "+18%"
+      }
+    },
+    {
+      "id": "kpi-goal",
+      "name": "Goal Progress",
+      "description": "Current value vs a target with a progress bar. Use for OKRs, monthly sales targets, usage quotas.",
+      "author": "OpenHive",
+      "category": "kpi",
+      "tags": ["kpi", "goal", "target", "progress", "okr"],
+      "preview": {
+        "kind": "kpi",
+        "value": "₩7.2M",
+        "target": "₩10M",
+        "hint": "이번 달 목표",
+        "progress": 72
+      }
+    },
+    {
+      "id": "data-table",
+      "name": "Data Table",
+      "description": "Sortable grid of every row in a table. Use for raw lookup — every fact visible, no aggregation.",
+      "author": "OpenHive",
+      "category": "table",
+      "tags": ["table", "grid", "raw", "lookup", "universal"],
+      "preview": {
+        "kind": "table",
+        "subtitle": "Records",
+        "columns": ["name", "stage"],
+        "rows": [
+          ["Acme", "won"],
+          ["Globex", "prospect"]
+        ]
+      }
+    },
+    {
+      "id": "leaderboard",
+      "name": "Leaderboard",
+      "description": "Ranked list — top N rows by a numeric column, descending. Use for top sales, most active users, highest scoring.",
+      "author": "OpenHive",
+      "category": "table",
+      "tags": ["leaderboard", "ranking", "top", "sorted"],
+      "preview": {
+        "kind": "table",
+        "subtitle": "Top",
+        "columns": ["#", "name", "value"],
+        "rows": [
+          ["1", "Acme", "28K"],
+          ["2", "Initech", "24K"]
+        ]
+      }
+    },
+    {
+      "id": "data-entry",
+      "name": "Data Entry Form",
+      "description": "Form for inserting rows into a team_data table. Tell the AI which table on install — it auto-generates fields from the schema. NOT NULL columns get a red *. External (MCP) writes need manual SQL via the Code editor.",
+      "author": "OpenHive",
+      "category": "table",
+      "tags": ["form", "input", "entry", "create", "insert"],
+      "preview": {
+        "kind": "table",
+        "subtitle": "Add row",
+        "columns": ["field", "value"],
+        "rows": [
+          ["Title *", "..."],
+          ["Status *", "todo"]
+        ]
+      }
+    },
+    {
+      "id": "kanban-board",
+      "name": "Kanban Board",
+      "description": "Cards organized into columns by a status / stage column. Use for task boards, sales pipelines, or any flow-style data.",
+      "author": "OpenHive",
+      "category": "kanban",
+      "tags": ["kanban", "board", "status", "pipeline", "flow", "cards"],
+      "preview": {
+        "kind": "kanban",
+        "subtitle": "Board",
+        "columns": [
+          { "label": "TODO", "cards": ["Implement OAuth", "Update copy"] },
+          { "label": "DOING", "cards": ["Refactor cache"] },
+          { "label": "DONE", "cards": ["Ship v1"] }
+        ]
+      }
+    },
+    {
+      "id": "calendar",
+      "name": "Calendar",
+      "description": "Interactive month grid + detail pane. Click a date to see its events, click an event card to expand full row data, edit / delete inline, + Add to create new ones.",
+      "author": "OpenHive",
+      "category": "calendar",
+      "tags": ["calendar", "schedule", "month", "events", "editable", "universal"],
+      "preview": {
+        "kind": "calendar",
+        "subtitle": "April 2026",
+        "month": "April 2026",
+        "days": [
+          { "day": 30, "muted": true }, { "day": 31, "muted": true }, { "day": 1 }, { "day": 2 }, { "day": 3, "events": 1 }, { "day": 4 }, { "day": 5 },
+          { "day": 6 }, { "day": 7, "events": 2 }, { "day": 8 }, { "day": 9 }, { "day": 10, "events": 1 }, { "day": 11 }, { "day": 12 },
+          { "day": 13 }, { "day": 14 }, { "day": 15, "events": 3 }, { "day": 16 }, { "day": 17 }, { "day": 18 }, { "day": 19 },
+          { "day": 20 }, { "day": 21 }, { "day": 22, "events": 1 }, { "day": 23 }, { "day": 24 }, { "day": 25 }, { "day": 26, "today": true, "events": 2 },
+          { "day": 27 }, { "day": 28 }, { "day": 29 }, { "day": 30 }, { "day": 1, "muted": true }, { "day": 2, "muted": true }, { "day": 3, "muted": true }
+        ]
+      }
+    },
+    {
+      "id": "stat-row",
+      "name": "Stat Row",
+      "description": "Compact horizontal row of 2-6 sibling counters. Use for queue states, deploy stats, status summaries — anywhere multiple related metrics should be scanned together.",
+      "author": "OpenHive",
+      "category": "stat-row",
+      "tags": ["stat", "row", "summary", "counters", "compact", "header"],
+      "preview": {
+        "kind": "stat_row",
+        "subtitle": "Status",
+        "stats": [
+          { "label": "ACTIVE", "value": "12" },
+          { "label": "DONE", "value": "47" }
+        ]
+      }
+    },
+    {
+      "id": "heatmap-chart",
+      "name": "Heatmap",
+      "description": "Two-dimensional density grid. Each cell is shaded by intensity. Use for patterns line/bar can't show — usage by day-of-week × hour, signups by region × month.",
+      "author": "OpenHive",
+      "category": "chart",
+      "tags": ["chart", "heatmap", "matrix", "2d", "density", "pattern"],
+      "preview": {
+        "kind": "heatmap",
+        "subtitle": "Density",
+        "colLabels": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+        "rowLabels": ["08", "10", "12", "14", "16", "18"],
+        "values": [
+          [1, 2, 3, 2, 1],
+          [4, 5, 7, 5, 3],
+          [6, 8, 11, 9, 7],
+          [9, 12, 15, 13, 10],
+          [7, 9, 11, 10, 6],
+          [3, 5, 6, 5, 2]
+        ]
+      }
     }
   ]
 }

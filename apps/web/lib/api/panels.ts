@@ -5,8 +5,6 @@ export interface PanelCacheRow {
   error: string | null
   fetched_at: number | null
   duration_ms: number | null
-  shape_hash?: string
-  shape_changed?: boolean
 }
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
@@ -74,6 +72,7 @@ export interface ActionResult {
   rows_changed?: number
   detail?: string
 }
+
 
 export async function executePanelAction(
   panelId: string,

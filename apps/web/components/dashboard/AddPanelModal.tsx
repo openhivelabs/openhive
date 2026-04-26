@@ -1,6 +1,7 @@
 import { CircleNotch, X } from '@phosphor-icons/react'
 import type React from 'react'
 import { useEffect, useState } from 'react'
+import { BindingCodeEditor } from '@/components/dashboard/BindingCodeEditor'
 import { PanelShape } from '@/components/dashboard/BoundPanel'
 import type { PanelBinding, PanelSpec } from '@/lib/api/dashboards'
 import { previewBinding, rebindPanel } from '@/lib/api/panels'
@@ -210,6 +211,13 @@ export function AddPanelModal({
                     {error}
                   </div>
                 )}
+                <BindingCodeEditor
+                  binding={binding ?? (existingSpec.binding as PanelBinding)}
+                  panelType={existingSpec.type}
+                  teamId={teamId}
+                  onChange={setBinding}
+                  onPreview={setData}
+                />
               </Section>
 
               {/* Section: size */}

@@ -1,0 +1,45 @@
+id: stat-row
+name: Stat Row
+description: >-
+  Compact horizontal row of 2-6 related counters. Use when several sibling
+  metrics should be scanned together — queue states (todo/doing/done),
+  deploy stats (builds/failed/avg), active/pending/done summaries.
+  Lighter than multiple KPI panels for the same width.
+author: OpenHive
+category: stat-row
+tags: [stat, row, summary, counters, compact, header]
+
+setup_sql: |
+  CREATE TABLE IF NOT EXISTS task (
+    team_id    TEXT NOT NULL,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    title      TEXT,
+    status     TEXT DEFAULT 'todo',
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+
+panel:
+  type: stat_row
+  title: Status
+  colSpan: 4
+  rowSpan: 1
+  binding:
+    source:
+      kind: team_data
+      config:
+        sql: |
+          SELECT
+            SUM(CASE WHEN status = 'todo'     THEN 1 ELSE 0 END) AS todo,
+            SUM(CASE WHEN status = 'doing'    THEN 1 ELSE 0 END) AS doing,
+            SUM(CASE WHEN status = 'review'   THEN 1 ELSE 0 END) AS review,
+            SUM(CASE WHEN status = 'done'     THEN 1 ELSE 0 END) AS done
+          FROM task
+          WHERE team_id = :team_id
+    map:
+      rows: "$.rows[*]"
+      cells:
+        - { label: TODO,   aggregate: first, field: todo }
+        - { label: DOING,  aggregate: first, field: doing }
+        - { label: REVIEW, aggregate: first, field: review }
+        - { label: DONE,   aggregate: first, field: done }
+    refresh_seconds: 600
