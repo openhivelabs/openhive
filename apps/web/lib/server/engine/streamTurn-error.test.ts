@@ -71,6 +71,7 @@ function baseOpts(over: Partial<StreamTurnOpts> = {}): StreamTurnOpts {
     history: [{ role: 'user', content: 'hello' }],
     tools: [],
     depth: 0,
+    chainKey: 'sess-test:chain-test',
     ...over,
   }
 }

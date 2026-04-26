@@ -163,7 +163,7 @@ export function toTeamSpec(raw: Record<string, unknown>): TeamSpec {
         limitsRaw.max_read_skill_file_per_turn ?? 8,
       ),
       max_web_search_per_turn: Number(
-        limitsRaw.max_web_search_per_turn ?? 5,
+        limitsRaw.max_web_search_per_turn ?? 3,
       ),
     },
     domain: typeof raw.domain === 'string' ? raw.domain : undefined,

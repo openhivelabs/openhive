@@ -34,6 +34,7 @@ import { isLedgerDisabled } from '../ledger/db'
 import { ledgerTools } from '../ledger/tools'
 import { maybeWriteLedger } from '../ledger/write'
 import { dataDir } from '../paths'
+import { resetReasoningForChain } from '../providers/codex'
 import type { ChatMessage, ToolSpec } from '../providers/types'
 import { readArtifactTool, buildArtifactUri } from '../sessions/artifacts'
 import * as sessionsStore from '../sessions'
@@ -187,6 +188,14 @@ interface RunState {
   // this pair AFTER the child returned with `status: 'budget_exhausted'`.
   // Hard-capped at 1 retry per pair per turn so the LLM can't loop forever.
   budgetRetries: Map<string, number>
+  // `{sessionId}:{fromId}->{toId}` → true once a successful synthesis-mode
+  // delegation result was wrapped and pushed to the parent's history. After
+  // this, any further delegate_to / delegate_parallel call between the same
+  // pair in the same turn is rejected — the parent already has the data and
+  // its only remaining job is synthesis. Hard guard against the "re-verify
+  // in different framing" loop the LLM falls into when the prompt rule alone
+  // isn't enough. Resets on next user message via `resetPerTurnCaps`.
+  delegationSatisfied: Map<string, boolean>
 }
 
 // Phase C1: Cap per-(parent→child) delegations within a TURN. A parent re-
@@ -201,12 +210,14 @@ export const MAX_DELEGATIONS_PER_PAIR_FALLBACK = 4
 // only — resolved from team.limits.max_read_skill_file_per_turn.
 export const MAX_READ_SKILL_FILE_PER_TURN_FALLBACK = 8
 
-// Phase C4: Cap `web-search` calls per turn. Claude Code hardcaps at 8; we
-// scale down to 5 because our multi-agent fan-out (Lead + researcher siblings)
-// multiplies query volume. Without this the LLM loops on "just one more
-// search" when results aren't perfect. Fallback only — resolved from
-// team.limits.max_web_search_per_turn.
-export const MAX_WEB_SEARCH_PER_TURN_FALLBACK = 5
+// Phase C4: Cap `web-search` calls per turn. Claude Code hardcaps at 8;
+// we hold at 3 because (a) codex's native `web_search` builtin already
+// opens 4-7 result pages per query, so 3 queries pull 12-21 full pages
+// into context, and (b) cap=2 was tested and observed to starve N≥4-axis
+// research tasks (4-bank comparison lost 2 entities to "unverified"
+// gaps that cap=3 covered). 3 is the sweet spot between latency and
+// breadth. Teams can lift via team.limits for sweep-heavy work.
+export const MAX_WEB_SEARCH_PER_TURN_FALLBACK = 3
 
 const globalForRun = globalThis as unknown as {
   __openhive_engine_run?: RunState
@@ -226,6 +237,7 @@ function state(): RunState {
       lastTurnSnapshot: new Map(),
       forkSystemCache: new Map(),
       budgetRetries: new Map(),
+      delegationSatisfied: new Map(),
     }
   }
   // HMR-safe: if an older incarnation initialised the global without a newer
@@ -239,6 +251,7 @@ function state(): RunState {
   if (!s.lastTurnSnapshot) s.lastTurnSnapshot = new Map()
   if (!s.forkSystemCache) s.forkSystemCache = new Map()
   if (!s.budgetRetries) s.budgetRetries = new Map()
+  if (!s.delegationSatisfied) s.delegationSatisfied = new Map()
   return s
 }
 
@@ -279,6 +292,9 @@ function resetPerTurnCaps(sessionId: string): void {
   s.webSearch.delete(sessionId)
   for (const k of s.budgetRetries.keys()) {
     if (k.startsWith(`${sessionId}:`)) s.budgetRetries.delete(k)
+  }
+  for (const k of s.delegationSatisfied.keys()) {
+    if (k.startsWith(`${sessionId}:`)) s.delegationSatisfied.delete(k)
   }
 }
 
@@ -583,6 +599,9 @@ export async function* runTeam(
     for (const k of state().budgetRetries.keys()) {
       if (k.startsWith(`${sessionId}:`)) state().budgetRetries.delete(k)
     }
+    for (const k of state().delegationSatisfied.keys()) {
+      if (k.startsWith(`${sessionId}:`)) state().delegationSatisfied.delete(k)
+    }
     errors.clearSessionFailures(sessionId)
     // Belt-and-suspenders: release is idempotent, so even if runTeamBody
     // already released before its final error path, this is a no-op.
@@ -831,6 +850,14 @@ interface SessionNodeOpts {
 async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   const { sessionId, team, node, task, depth, externalHistory, injectedSystemSuffix } = opts
   const teamSlugs = state().teamSlugs.get(sessionId) ?? null
+  // One chain per runNode invocation. Round-to-round state (codex
+  // reasoning anchors, function-call id mappings) carries within this
+  // node's turn-loop, but separate concurrent runNode calls — most
+  // notably parallel `delegate_parallel` siblings — get independent
+  // chains so they don't clobber each other's anchors. Prefix is the
+  // sessionId so `clearCodexChain(sessionId)` sweeps every chain
+  // belonging to a session in one shot at session exit.
+  const chainKey = `${sessionId}:${newId('chain')}`
   // Lead (depth 0) is always 'user' — it owns the session's artifact
   // namespace. Sub-agents inherit visibility from their parent's
   // `delegate_to(mode)`; absent opts.visibility keeps legacy behaviour
@@ -1040,6 +1067,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
       history,
       tools,
       depth,
+      chainKey,
     })) {
       if (ev.kind === 'node_finished' && ev.data._turn_marker === true) {
         const stopReason = ev.data.stop_reason as string | undefined
@@ -1135,6 +1163,13 @@ export interface StreamTurnOpts {
   history: ChatMessage[]
   tools: Tool[]
   depth: number
+  /** Per-agent chain key for codex prior-item buffers. Required so
+   *  concurrent siblings within the same session don't share reasoning
+   *  anchors (which causes the ChatGPT backend to drop the socket
+   *  mid-stream with `TypeError: terminated`). Threaded down to the
+   *  provider via streamOpts. Mint with `${sessionId}:<random>` once
+   *  per `runNode` invocation. */
+  chainKey: string
   /** S3 fork: when provided, bypass `toolsToOpenAI(tools)` and use these
    *  already-serialized specs verbatim. Required for sibling byte-identity. */
   toolsOverride?: ToolSpec[]
@@ -1152,7 +1187,7 @@ export interface StreamTurnOpts {
 }
 
 export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
-  const { sessionId, team, node, systemPrompt, history, tools, depth } = opts
+  const { sessionId, team, node, systemPrompt, history, tools, depth, chainKey } = opts
   // Time-based microcompact: clear stale read-only tool_result bodies before
   // the prompt is built. Only applies to Lead (depth === 0); sub-agent
   // histories are short and ephemeral so ROI is zero. No-op when the last
@@ -1259,14 +1294,33 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
   // invent section structure on simple turns. 0.3 keeps them focused on the
   // answer without zeroing out creativity. Sub-agents keep the default 0.7.
   const leadTemperature = depth === 0 ? 0.3 : undefined
-  // Always pass sessionId through so the Codex adapter can key its
-  // `previous_response_id` chaining Map per-session (concurrent sessions
-  // otherwise stomp on each other's chain head via the globalThis slot).
+  // Always pass sessionId + chainKey through so the Codex adapter can
+  // key its prior-item buffers correctly: chainKey isolates per-agent
+  // reasoning anchors so concurrent siblings within the same session
+  // don't poison each other (ChatGPT backend drops the socket on
+  // mismatched reasoning IDs); sessionId is kept for clearCodexChain
+  // prefix-sweep on session exit.
+  // Once any delegation result has come back to this agent in this turn,
+  // its remaining work is synthesis — re-running web_search at the parent
+  // level is pure duplication and observed to make the codex backend drop
+  // the stream mid-flight (`terminated`) when paired with a tool_result-
+  // heavy input. Hard-disable the provider-side `web_search` builtin once
+  // the satisfied flag is set for any pair this agent owns.
+  const satisfiedPairPrefix = `${sessionId}:${node.id}->`
+  let agentSatisfied = false
+  for (const k of state().delegationSatisfied.keys()) {
+    if (k.startsWith(satisfiedPairPrefix) && state().delegationSatisfied.get(k)) {
+      agentSatisfied = true
+      break
+    }
+  }
   const streamOpts = {
     useExactTools: opts.useExactTools,
     overrideSystem: opts.systemPromptOverride,
     temperature: leadTemperature,
     sessionId,
+    chainKey,
+    nativeWebSearch: agentSatisfied ? false : undefined,
   }
   // Meta-label stripper buffer — only applied to Lead (depth 0) turns where
   // small-model slop is the concern. Sub-agent output goes through un-stripped
@@ -1484,12 +1538,65 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
     const parallelTrajCap = parallelDelegationMax()
     const v2 = toolPartitionV2Enabled()
     let runs: ToolRun<TC>[]
+    const overflowIds = new Set<string>()
+    const overflowLabel = new Map<string, { role: string; cap: number; n: number }>()
     if (v2) {
       const partitioned = partitionRuns<TC>(toolCallsForHistory, {
         safe_parallel: safeParallelCap,
         parallel_trajectory: parallelTrajCap,
       })
       runs = partitioned.runs
+      // Per-assignee max_parallel enforcement for batched delegate_to.
+      // If the LLM emits N>cap delegate_to calls to the SAME assignee in one
+      // response (e.g. 3× delegate_to(Researcher) when Researcher.max_parallel=1),
+      // ALL of those calls are refused with a structured error directing the
+      // LLM to merge into ONE umbrella task. We do NOT silently chunk + run
+      // the first while blocking the rest — that loses work (axes 2..N get
+      // hard-blocked by the satisfied guard) and the user sees a partial
+      // answer. Refusing the whole same-assignee group forces a retry.
+      // Different assignees in the same batch are unaffected.
+      const subsHere = teamSubordinates(team, node.id)
+      const capByAssignee = new Map<string, number>()
+      const labelByAssignee = new Map<string, string>()
+      for (const s of subsHere) {
+        capByAssignee.set(s.role, Math.max(1, s.max_parallel))
+        capByAssignee.set(s.id, Math.max(1, s.max_parallel))
+        labelByAssignee.set(s.role, s.role)
+        labelByAssignee.set(s.id, s.role)
+      }
+      const assigneeOf = (tc: TC): string | null => {
+        if (tc.function.name !== 'delegate_to') return null
+        try {
+          const a = JSON.parse(tc.function.arguments || '{}') as { assignee?: unknown }
+          if (typeof a.assignee !== 'string') return null
+          const key = a.assignee.includes('#') ? a.assignee.split('#', 2)[1]! : a.assignee
+          return key
+        } catch {
+          return null
+        }
+      }
+      // Compute set of tool_call_ids that overflow same-assignee cap.
+      for (const r of runs) {
+        if (r.kind !== 'parallel' || r.cls !== 'parallel_trajectory') continue
+        const groups = new Map<string, TC[]>()
+        for (const it of r.items) {
+          const a = assigneeOf(it)
+          if (!a) continue
+          const arr = groups.get(a) ?? []
+          arr.push(it)
+          groups.set(a, arr)
+        }
+        for (const [a, arr] of groups) {
+          const cap = capByAssignee.get(a) ?? Infinity
+          if (arr.length > cap) {
+            const role = labelByAssignee.get(a) ?? a
+            for (const it of arr) {
+              overflowIds.add(it.id)
+              overflowLabel.set(it.id, { role, cap, n: arr.length })
+            }
+          }
+        }
+      }
       if (toolCallsForHistory.length > 0) {
         yield makeEvent(
           'tool_run.partitioned',
@@ -1524,6 +1631,28 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
         { arguments: parsedArgs },
         { depth, node_id: node.id, tool_call_id: tc.id, tool_name: tc.function.name },
       )
+
+      // Same-assignee max_parallel overflow: if this tc was tagged as part
+      // of a same-role group exceeding the assignee's cap, refuse with a
+      // directive error. ALL tcs in the overflow group get this error
+      // (computed above) so the LLM cannot keep a partial result. Return
+      // before dispatch — no actual delegation work happens.
+      if (overflowIds.has(tc.id)) {
+        const lbl = overflowLabel.get(tc.id)!
+        return {
+          content:
+            `ERROR: you emitted ${lbl.n} \`delegate_to(${lbl.role})\` calls in ` +
+            `one response, but ${lbl.role}.max_parallel = ${lbl.cap}. The ` +
+            `engine refuses ALL ${lbl.n} of them — none ran — because ` +
+            `silently dropping ${lbl.n - lbl.cap} of them would lose work. ` +
+            `Fix: emit ONE \`delegate_to(${lbl.role})\` whose task covers ` +
+            `every axis you wanted to split. ${lbl.role} is an orchestrator ` +
+            `with its own subordinates; it will fan out internally to its ` +
+            `Members. Do NOT split N axes into N delegate_to calls to the ` +
+            `SAME role — give one umbrella task and let it dispatch.`,
+          isError: true,
+        }
+      }
 
       // [A2 HOOK] PreToolUse — runs after the tool_called event is visible in
       // the stream, before dispatch to the actual handler. An `exit 2` / JSON
@@ -1594,6 +1723,23 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
                 const raw = appendArtifactBlock(body, paths, sessionId)
                 isError = !!subEv.data.error
                 content = isError ? raw : wrapDelegationResultForParent(raw)
+                if (!isError) {
+                  const aid = subEv.data.assignee_id as string | undefined
+                  if (aid) {
+                    state().delegationSatisfied.set(
+                      `${sessionId}:${node.id}->${aid}`,
+                      true,
+                    )
+                    // Drop our own reasoning anchors so the next round
+                    // re-reasons from the fresh tool_result instead of
+                    // re-presenting our pre-delegation reasoning items
+                    // (which encoded our training-prior beliefs and would
+                    // override the report's facts).
+                    if (node.provider_id === 'codex') {
+                      resetReasoningForChain(chainKey)
+                    }
+                  }
+                }
               }
               yield subEv
             }
@@ -1612,6 +1758,18 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
                 const raw = appendArtifactBlock(body, paths, sessionId)
                 isError = !!subEv.data.error
                 content = isError ? raw : wrapDelegationResultForParent(raw)
+                if (!isError) {
+                  const aid = subEv.data.assignee_id as string | undefined
+                  if (aid) {
+                    state().delegationSatisfied.set(
+                      `${sessionId}:${node.id}->${aid}`,
+                      true,
+                    )
+                    if (node.provider_id === 'codex') {
+                      resetReasoningForChain(chainKey)
+                    }
+                  }
+                }
               }
               yield subEv
             }
@@ -1697,6 +1855,72 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
         content: historyContent,
         _ts: Date.now(),
       })
+      // After a successful delegation result, append a synthetic user
+      // reminder. The wrapped result already carries a synthesis-mode
+      // header but it's wedged at the TOP of a long tool_result body
+      // — by the time the model finishes scanning the report it has
+      // forgotten the directive and falls back to its training-memory
+      // priors when picking model names / dates / numbers. This user
+      // message lands as the LAST thing in the prompt before the
+      // model's next turn, where recency weighting kicks in. Generic:
+      // no product names, applies to any domain.
+      if (
+        !res.isError &&
+        (tc.function.name === 'delegate_to' || tc.function.name === 'delegate_parallel')
+      ) {
+        // Extract the leading TL;DR / summary section of the delegation
+        // result and surface it inside the reminder itself. The Lead model
+        // tends to skim a 4kb report, lock onto its training-memory priors
+        // for the specific facts, and ignore the report's actual values
+        // even when explicitly told not to. Putting the source values
+        // adjacent to "use these" instruction makes the recency-anchored
+        // facts the most prominent text in the prompt window.
+        // Cap snippet at 800 chars: long bullet/table extracts duplicate
+        // most of the report into the reminder, and the model already has
+        // the full report in the tool_result above. The cap keeps the
+        // reminder small enough to not balloon Lead's input on each
+        // delegation result.
+        // For delegate_parallel results the body is [#1] … [#N] sibling
+        // sections. Pull a TL;DR from EACH so the reminder anchors every
+        // axis the parent fanned out — otherwise the parent's training
+        // prior buries siblings 2..N as "unfamiliar / unverified".
+        const isParallel = tc.function.name === 'delegate_parallel'
+        const rawSnippet = isParallel
+          ? extractParallelSiblingLeads(res.content)
+          : extractReportLead(res.content)
+        const factSnippet =
+          rawSnippet.length > 1400
+            ? rawSnippet.slice(0, 1400).replace(/\s+\S*$/, '') + ' …'
+            : rawSnippet
+        const factsBlock = factSnippet
+          ? `\n\nKey values from the tool_result above (copy these verbatim — ` +
+            `do not substitute):\n${factSnippet}\n`
+          : ''
+        const parallelBlock = isParallel
+          ? `\n\nThis tool_result is a delegate_parallel report containing ` +
+            `MULTIPLE sibling sections (look for \`[#1]\`, \`[#2]\`, … markers). ` +
+            `Your reply MUST cover EVERY sibling that returned a populated ` +
+            `report. Do NOT drop axes, do NOT mark a sibling 'unverified' ` +
+            `just because the model name or date looks unfamiliar to you — ` +
+            `your training cutoff predates the sibling's web-search. Trust ` +
+            `the report; copy its tables, dates and source URLs verbatim.`
+          : ''
+        history.push({
+          role: 'user',
+          content:
+            `[engine reminder] Synthesize the user's reply from the ` +
+            `tool_result above. Copy report values verbatim — don't sub in ` +
+            `training-memory guesses. Where the report flags a SPECIFIC ` +
+            `value as unverified, mirror that gap for that value only; the ` +
+            `rest of the report is still your source. Don't reduce the ` +
+            `whole answer to placeholders. Keep the reply as short as the ` +
+            `user's request warrants — don't pad with methodology sections, ` +
+            `repeated caveats, or every detail from the report.` +
+            parallelBlock +
+            factsBlock,
+          _ts: Date.now(),
+        })
+      }
       // B1: once a skill script succeeds, reference docs read earlier are
       // dead weight on the prompt. Elide them in-place.
       if (!res.isError && tc.function.name === 'run_skill_script') {
@@ -1810,6 +2034,7 @@ interface StreamTurnForkOpts {
   providerId: string
   model: string
   depth: number
+  chainKey: string
 }
 
 /**
@@ -1851,7 +2076,12 @@ async function* streamTurnFork(opts: StreamTurnForkOpts): AsyncGenerator<Event> 
     opts.model,
     messages,
     opts.toolsOverride.length > 0 ? opts.toolsOverride : undefined,
-    { useExactTools: true, overrideSystem: opts.systemPromptOverride },
+    {
+      useExactTools: true,
+      overrideSystem: opts.systemPromptOverride,
+      sessionId: opts.sessionId,
+      chainKey: opts.chainKey,
+    },
   )) {
     if (delta.kind === 'text') {
       textBuf.push(delta.text)
@@ -1988,6 +2218,11 @@ async function* runNodeForked(opts: RunNodeForkedOpts): AsyncGenerator<Event> {
     { depth, node_id: node.id },
   )
 
+  // Fork is gated to claude-code provider only (see fork.ts:111-112), so
+  // codex chain isolation isn't load-bearing here — but pass a fresh
+  // chainKey anyway for consistency with `runNode` and so the streamOpts
+  // shape stays uniform across paths.
+  const chainKey = `${sessionId}:${newId('chain')}`
   let firstTurnOutput = ''
   let stopReason: string | undefined
   for await (const ev of streamTurnFork({
@@ -2000,6 +2235,7 @@ async function* runNodeForked(opts: RunNodeForkedOpts): AsyncGenerator<Event> {
     providerId: snapshot.providerId,
     model: snapshot.model,
     depth,
+    chainKey,
   })) {
     if (ev.kind === 'node_finished' && ev.data._turn_marker === true) {
       stopReason = ev.data.stop_reason as string | undefined
@@ -2233,6 +2469,26 @@ async function* runDelegation(opts: DelegationOpts): AsyncGenerator<Event> {
   }
 
   const pairKey = `${sessionId}:${fromNode.id}->${target.id}`
+  if (state().delegationSatisfied.get(pairKey)) {
+    yield makeEvent(
+      'delegation_closed',
+      sessionId,
+      {
+        assignee_id: target.id,
+        assignee_role: target.role,
+        error: true,
+        result:
+          `BLOCKED: you ALREADY received a successful delegation result from ` +
+          `${target.role} this turn. STOP looking for more tools to call — ` +
+          `your next assistant message must be the FINAL prose answer. Do ` +
+          `not retry web-search, web-fetch, or any other lookup; the report ` +
+          `is the data. Re-running tools after this block is wasted rounds ` +
+          `and delays the user. Synthesize what you have NOW.`,
+      },
+      { depth, node_id: fromNode.id, tool_call_id: toolCallId },
+    )
+    return
+  }
   const delegationCap =
     team.limits.max_delegations_per_pair_per_turn ??
     MAX_DELEGATIONS_PER_PAIR_FALLBACK
@@ -2601,6 +2857,29 @@ async function* runParallelDelegation(opts: DelegationOpts): AsyncGenerator<Even
       { depth, node_id: fromNode.id, tool_call_id: toolCallId },
     )
     return
+  }
+
+  {
+    const pk = `${sessionId}:${fromNode.id}->${target.id}`
+    if (state().delegationSatisfied.get(pk)) {
+      yield makeEvent(
+        'delegation_closed',
+        sessionId,
+        {
+          group_final: true,
+          error: true,
+          result:
+            `BLOCKED: you ALREADY received a successful delegation result from ` +
+            `${target.role} this turn. Re-fanning out to the same role to ` +
+            `"verify" or "double-check" is duplication. Synthesize from the ` +
+            `report you already have. If a SPECIFIC fact is missing, call ` +
+            `\`web-fetch\` on the exact URL the subagent surfaced — never ` +
+            `re-delegate the same scope.`,
+        },
+        { depth, node_id: fromNode.id, tool_call_id: toolCallId },
+      )
+      return
+    }
   }
 
   const maxN = target.max_parallel
@@ -3216,11 +3495,20 @@ function describeTeamForAgent(team: TeamSpec, agentId: string): string {
   if (lines.length === 0) return ''
   return (
     '# Your team\n' +
-    '`delegate_to` reaches DIRECT reports only (top-level bullets). For deeper ' +
-    'specialists, delegate to the branch parent and have them relay. Skill tags ' +
-    'in [brackets] show who actually owns each skill — route file-generation ' +
-    'tasks (pdf, docx, pptx, etc.) to the agent that has that skill, not to ' +
-    'whoever seems vaguely related.\n\n' +
+    '**Default: delegate, do not do the work yourself.** Searching, reading ' +
+    'sources, drafting long-form content, or running a skill a report owns — ' +
+    'hand off. You plan, scope, and synthesize; reports execute. Self-handle ' +
+    'only when (a) no direct report covers the task, (b) it\'s a one-step ' +
+    'lookup smaller than writing a brief, or (c) it\'s pure synthesis of ' +
+    'already-collected results. "I remember the answer" is never a reason — ' +
+    'training memory is stale.\n\n' +
+    '`delegate_to` reaches direct reports only. Skill tags `[skills: ...]` ' +
+    'show who owns each skill — route file-generation tasks (pdf/docx/pptx) ' +
+    'to the skill owner, not to whoever seems vaguely related.\n\n' +
+    '**Fan-out**: N independent sub-questions (different entities / time ' +
+    'ranges / sources) + report `max_parallel ≥ N` → use `delegate_parallel` ' +
+    'with N siblings (wall-clock parallel). Sequential delegation on ' +
+    'independent axes wastes time.\n\n' +
     lines.join('\n') +
     '\n'
   )
@@ -3268,28 +3556,30 @@ function todayBlock(now: Date = new Date()): string {
   const year = now.getUTCFullYear()
   return (
     `\n\n# Today\n` +
-    `Today is ${iso} (${dow}). When you write web-search queries or reason ` +
-    `about "latest" / "recent" / "current" content, anchor to ${year} — ` +
-    `do NOT default to your training-cutoff year. If a query needs a year ` +
-    `token, prefer ${year}; include earlier years only when you specifically ` +
-    `need historical context.\n\n` +
-    `Product / model version numbers from your training memory are ALSO ` +
-    `stale — newer versions almost certainly exist. When asked about the ` +
-    `"latest" version of a product (e.g. a model family, an app, a library), ` +
-    `do NOT hard-code the last version you remember into the search query. ` +
-    `First search with the product family name + "latest" / "newest" + ${year} ` +
-    `and NO version number; read the actual results to learn the current ` +
-    `version, then narrow with follow-up queries. Treat any version number ` +
-    `you "remember" as a guess that needs verification, not as a fact.\n\n` +
+    `Today is ${iso} (${dow}). For "latest / recent / current" queries, ` +
+    `anchor to ${year}; do not fall back to your training-cutoff year.\n\n` +
+    `# Anti-prior search rule (CRITICAL)\n` +
+    `Your training prior remembers an older model catalog. **DO NOT type a ` +
+    `specific version number from memory into your first search query** — ` +
+    `you'll just retrieve confirmation of a stale version and stop. Instead:\n` +
+    `1. First query: "<vendor or family> latest model ${year}" or "<vendor> ` +
+    `newest release ${year}" — NO version number.\n` +
+    `2. Read what actually returns. If the top results name a version higher ` +
+    `than what your training memory expected, **that newer version is the ` +
+    `truth** — do not dismiss it as "unfamiliar".\n` +
+    `3. Verify with one focused query on the surfaced version (e.g. ` +
+    `"<vendor> <found-version> release date"). If a result mentions an even ` +
+    `newer version, follow that thread before concluding.\n` +
+    `4. Only report a version you saw in this session's search results. ` +
+    `Treat product names / version numbers / dates from training memory as ` +
+    `stale guesses, never as ground truth.\n\n` +
     `# Search budget\n` +
-    `Web search (function \`web-search\` skill OR provider-side \`web_search\` ` +
-    `builtin) costs real money and time. Soft cap: AT MOST 10 web search ` +
-    `calls per turn for any single agent. Most well-scoped tasks need 3-6. ` +
-    `If you find yourself drafting a 7th query, STOP and ask: have I ` +
-    `already seen this fact in earlier results? If yes, synthesize from ` +
-    `what you have instead. Do not re-search the same topic from a slightly ` +
-    `different angle to "double-check" — that's how budgets blow up. The ` +
-    `cap is a discipline target, not a quota to fill.\n`
+    `**HARD CAP: ${MAX_WEB_SEARCH_PER_TURN_FALLBACK} web searches / turn / agent** ` +
+    `(applies to both the function \`web-search\` skill and the provider ` +
+    `\`web_search\` builtin). Each query already pulls 4-7 full pages into ` +
+    `context, so 1-2 broad queries usually cover a task. Don't re-search a ` +
+    `topic a sibling or earlier turn already covered — the report you ` +
+    `received is the source.\n`
   )
 }
 
@@ -3309,29 +3599,117 @@ function todayBlock(now: Date = new Date()): string {
  *  Skipped when the delegation errored: in that case the parent needs raw
  *  error text + freedom to recover (which may include a fresh search),
  *  not a synthesis instruction. */
+/** Pull the highest-signal lines from a delegation report so they can be
+ *  re-presented in the post-delegation engine reminder. The Lead model
+ *  routinely skims long reports and falls back to training memory for
+ *  specific values; lifting the report's own TL;DR to the bottom of the
+ *  prompt window makes the source-of-truth values the most recent text
+ *  the model sees before its synthesis. */
+function extractReportLead(body: string): string {
+  if (!body) return ''
+  // Strip our own synthesis-mode wrap marker if it's still on the body.
+  // Handles both the long form (legacy) and the short marker.
+  const stripped = body
+    .replace(/^\[delegation result[\s\S]*?---\n\n/, '')
+    .replace(/^\[delegation result[^\n]*\n+/, '')
+  const lines = stripped.split('\n')
+  // Match TL;DR / 요약 / Summary headings whether they appear bare
+  // (`### TL;DR`), numbered (`### 1) TL;DR`, `## 1. TL;DR`), or bolded
+  // (`**TL;DR**`). The Researcher persona uses several of these forms.
+  const isTldrHeading = (t: string): boolean =>
+    /^(?:#+\s*(?:\d+[).]\s*)?|^\*\*\s*)?(?:TL;DR|TLDR|요약|Summary)\b/i.test(t)
+  const out: string[] = []
+  let inTldr = false
+  let blanks = 0
+  for (let i = 0; i < lines.length && out.length < 28; i += 1) {
+    const ln = lines[i]!
+    const t = ln.trim()
+    if (!inTldr && isTldrHeading(t)) {
+      inTldr = true
+      continue
+    }
+    if (inTldr) {
+      // New top-level section ends the TL;DR.
+      if (/^#+\s/.test(t) && !isTldrHeading(t)) break
+      // Horizontal rule ends the TL;DR.
+      if (/^---+\s*$/.test(t)) break
+      if (t.length === 0) {
+        blanks += 1
+        // Two consecutive blanks = paragraph end inside TL;DR.
+        if (blanks >= 2 && out.length > 0) break
+        if (out.length === 0) continue
+        out.push('')
+        continue
+      }
+      blanks = 0
+      out.push(ln)
+    }
+  }
+  if (out.length === 0) {
+    // No explicit TL;DR — pull the first short bullet / numbered list block.
+    for (let i = 0; i < lines.length && out.length < 16; i += 1) {
+      const t = lines[i]!.trim()
+      if (/^([-*]|\d+\.)\s/.test(t)) out.push(lines[i]!)
+      else if (out.length > 0 && t.length === 0) break
+    }
+  }
+  // As a last resort, also append any clearly-confirmed `**bold value**`
+  // table rows so the reminder still anchors the model on copy-able facts
+  // even if the TL;DR section is sparse.
+  if (out.length < 6) {
+    const tableHits: string[] = []
+    for (const ln of lines) {
+      if (/^\|[^|]*\|[^|]*\*\*[^|]+\*\*/.test(ln) && tableHits.length < 12) {
+        tableHits.push(ln)
+      }
+    }
+    if (tableHits.length > 0) {
+      out.push('')
+      out.push(...tableHits)
+    }
+  }
+  return out.join('\n').trim()
+}
+
+/** Sibling-aware TL;DR extractor for delegate_parallel results.
+ *  Body shape: `[#1] …\n[#2] …\n[#N] …`. extractReportLead would only
+ *  capture the first sibling's TL;DR — by the time the parent reads
+ *  the reminder it has the recency-anchored facts of ONE axis and
+ *  treats the rest as forgettable. Here we slice each sibling block
+ *  and pull its leading TL;DR / first table row, capped per sibling. */
+function extractParallelSiblingLeads(body: string): string {
+  if (!body) return ''
+  const stripped = body.replace(/^\[delegation result[^\n]*\n+/, '')
+  // Split on the [#N] marker that wrapDelegationResultForParent / the
+  // parallel runner emits. Keep markers in the chunks.
+  const matches = [...stripped.matchAll(/^\[#(\d+)\][^\n]*\n([\s\S]*?)(?=^\[#\d+\]|$(?![\r\n]))/gm)]
+  if (matches.length === 0) {
+    // Fallback: the body wasn't in [#N] shape — defer to single extractor.
+    return extractReportLead(body)
+  }
+  const out: string[] = []
+  for (const m of matches) {
+    const idx = m[1]
+    const block = m[2] ?? ''
+    const lead = extractReportLead(block).trim()
+    if (!lead) continue
+    const cap = 380
+    const trimmed = lead.length > cap ? lead.slice(0, cap).replace(/\s+\S*$/, '') + ' …' : lead
+    out.push(`[#${idx}]`)
+    out.push(trimmed)
+    out.push('')
+  }
+  return out.join('\n').trim()
+}
+
 function wrapDelegationResultForParent(body: string): string {
   if (!body.trim()) return body
-  const note =
-    `[delegation result — synthesis-only mode]\n` +
-    `The findings below come from a subagent (or parallel fan-out of ` +
-    `subagents) that ALREADY ran web research for this task. Your job ` +
-    `from THIS point forward is synthesis ONLY — combine the subagent ` +
-    `outputs into your final answer.\n\n` +
-    `HARD RULES:\n` +
-    `1. Do NOT call any web search tool — neither the function-shaped ` +
-    `\`web-search\` skill NOR the provider-side \`web_search\` builtin. ` +
-    `The subagents already did this work; running the same searches at ` +
-    `your level is pure duplication.\n` +
-    `2. Do NOT re-delegate the same topic to a subagent under a slightly ` +
-    `different framing ("now do OpenAI separately", "now verify Gemini"). ` +
-    `If the previous delegation covered a scope, treat it as covered.\n` +
-    `3. Only call \`web-fetch\` on a SPECIFIC URL the subagent surfaced ` +
-    `if you need deeper detail from that exact page.\n\n` +
-    `EXCEPTION (rare): if the subagent explicitly flagged a gap it could ` +
-    `not cover (missing entity, missing time window, topic outside its ` +
-    `original scope) — and ONLY then — a single targeted follow-up search ` +
-    `is permitted. Default is "do not search again."\n\n---\n\n`
-  return note + body
+  // Tight marker only. The full synthesis policy lives in the post-result
+  // engine reminder (a fresh user message inserted after this tool_result
+  // with extracted TL;DR anchors), and re-search/re-delegation is hard-
+  // blocked at the engine level. Repeating the policy in this body costs
+  // ~1500 chars on every delegation result with no behavioural gain.
+  return `[delegation result — synthesize, do not re-search or re-delegate]\n\n${body}`
 }
 
 /** One-line "when to use" hint for the system-prompt skill enumeration.
@@ -3780,6 +4158,33 @@ function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
         // the LLM can read in the tool_result. Reset happens on every new
         // user message via `resetPerTurnCaps`.
         if (skill.name === 'web-search') {
+          // After this agent received a successful delegation result this
+          // turn, function-shaped web-search is forbidden — the synthesis
+          // mode header and the engine reminder both say the report IS the
+          // data. Without this guard the LLM still sneaks in 3 follow-up
+          // searches "to verify" and burns rounds (observed 2026-04-26 in
+          // session 3158ace8: Lead spent 8 extra rounds re-searching what
+          // its Researcher had already returned).
+          const satisfiedPrefix = `${ctx.sessionId}:${ctx.nodeId}->`
+          let agentSatisfied = false
+          for (const k of state().delegationSatisfied.keys()) {
+            if (k.startsWith(satisfiedPrefix) && state().delegationSatisfied.get(k)) {
+              agentSatisfied = true
+              break
+            }
+          }
+          if (agentSatisfied) {
+            hooks.onQueued?.()
+            hooks.onStarted?.()
+            return JSON.stringify({
+              ok: false,
+              error:
+                `web-search BLOCKED: a subagent already delivered a delegation ` +
+                `result this turn. Synthesize from that report; do not re-` +
+                `search. If you must dig deeper, web-fetch a SPECIFIC URL the ` +
+                `report surfaced.`,
+            })
+          }
           const cap =
             ctx.team.limits.max_web_search_per_turn ??
             MAX_WEB_SEARCH_PER_TURN_FALLBACK
