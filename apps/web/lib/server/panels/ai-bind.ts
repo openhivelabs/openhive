@@ -2,8 +2,9 @@ import type { PanelBinding } from '@/lib/api/dashboards'
 import { listServers } from '@/lib/server/mcp/config'
 import { callTool, getTools } from '@/lib/server/mcp/manager'
 import { chatCompletion } from '@/lib/server/providers/copilot'
+import { extractCheckOptions } from '@/lib/server/team-data'
 import type { describeSchema } from '@/lib/server/team-data'
-import { AI_BUILDER_SYSTEM_PROMPT } from './ai-prompt'
+import { buildSystemPrompt } from './ai-prompt'
 
 type Schema = ReturnType<typeof describeSchema>
 
@@ -160,7 +161,7 @@ USER GOAL: ${goal}`
   const text = await chatCompletion({
     model: 'gpt-5-mini',
     messages: [
-      { role: 'system', content: AI_BUILDER_SYSTEM_PROMPT },
+      { role: 'system', content: buildSystemPrompt(String(panel.type ?? '')) },
       { role: 'user', content: prompt },
     ],
     temperature: 0.2,
@@ -215,6 +216,28 @@ USER GOAL: ${goal}`
           'rephrasing your request with "새 테이블 <name> 만들어" or pick an ' +
           'existing table by name.',
       )
+    }
+  }
+  // Backstop: keep the kanban binding self-describing even when the AI
+  // emits a create/move action whose group_by select is missing options.
+  // Source of truth is the CHECK constraint in setup_sql; we mirror it
+  // into the action form so renderer and "+ Add" form share one taxonomy.
+  if (String(panel.type ?? '') === 'kanban' && setupSql) {
+    const groupBy = (rest.map as { group_by?: unknown } | undefined)?.group_by
+    const actions = Array.isArray(rest.actions) ? (rest.actions as Record<string, unknown>[]) : null
+    if (typeof groupBy === 'string' && actions) {
+      const checkOptions = extractCheckOptions(setupSql, groupBy)
+      if (checkOptions.length > 0) {
+        for (const a of actions) {
+          const fields = (a.form as { fields?: unknown } | undefined)?.fields
+          if (!Array.isArray(fields)) continue
+          for (const f of fields as Record<string, unknown>[]) {
+            if (f.name !== groupBy) continue
+            const opts = f.options
+            if (!Array.isArray(opts) || opts.length === 0) f.options = checkOptions
+          }
+        }
+      }
     }
   }
   return {

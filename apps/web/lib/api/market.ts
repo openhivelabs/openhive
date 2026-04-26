@@ -157,6 +157,7 @@ export async function applyPanelInstall(input: {
   skip_create_tables: string[]
   user_intent?: string | null
   prebuilt_binding?: Record<string, unknown> | null
+  prebuilt_setup_sql?: string | null
   col_span?: number
   row_span?: number
 }): Promise<{ ok: true; panel: Record<string, unknown>; decision: InstallDecision }> {
@@ -188,6 +189,10 @@ export interface AiBindPreview {
    *  (e.g. AI invented a column that doesn't exist). The modal still
    *  shows the binding so the user can decide whether to install. */
   error: string | null
+  /** AI-generated CREATE TABLE that accompanied the binding (only set when
+   *  the binder asked for a new table). Round-tripped to install so the
+   *  prebuilt-binding shortcut still creates the new table. */
+  setup_sql: string | null
 }
 
 export async function aiBindPreview(input: {

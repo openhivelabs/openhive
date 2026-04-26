@@ -116,6 +116,11 @@ interface PanelApplyBody extends PanelInstallBody {
    *  When present we skip the (expensive) AI call here and trust the client's
    *  preview-validated binding. */
   prebuilt_binding?: Record<string, unknown> | null
+  /** AI-generated CREATE TABLE that accompanied the prebuilt binding (only
+   *  set when the binder asked for a new table). Round-tripped back here
+   *  so install runs the same DDL the user previewed against — without it
+   *  the prebuilt-binding shortcut would skip table creation entirely. */
+  prebuilt_setup_sql?: string | null
   /** User-chosen footprint on the dashboard grid. Overrides the frame
    *  manifest's default size. */
   col_span?: number
@@ -257,6 +262,9 @@ market.post('/install/apply', async (c) => {
       let aiSetupSql: string | undefined
       if (body.prebuilt_binding && typeof body.prebuilt_binding === 'object') {
         binding = body.prebuilt_binding as Record<string, unknown>
+        if (typeof body.prebuilt_setup_sql === 'string' && body.prebuilt_setup_sql.trim()) {
+          aiSetupSql = body.prebuilt_setup_sql
+        }
       } else {
         const aiResult = await aiBindPanel({
           panel,
@@ -445,6 +453,7 @@ market.post('/install/ai-bind-preview', async (c) => {
       panel_props: panelProps,
       data,
       error: execError,
+      setup_sql: aiResult.setupSql ?? null,
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

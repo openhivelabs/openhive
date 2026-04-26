@@ -37,8 +37,34 @@ export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string 
   const t = useT()
   const { data, error, refresh } = usePanelData(spec.id, true)
   const onClick = spec.binding?.map?.on_click ?? null
-  const actions = spec.binding?.actions ?? []
-  const toolbarActions = actions.filter((a) => a.placement === 'toolbar')
+  // Server-synthesized actions (kanban CRUD on bindings that don't carry
+  // their own actions[]) ride the panel data response. Merge them with
+  // the binding's actions so toolbar/row/inline partitioning, action
+  // execution, and renderer wiring all see one unified list.
+  const synthesizedActions = (() => {
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      const arr = (data as { synthesized_actions?: unknown }).synthesized_actions
+      return Array.isArray(arr) ? (arr as PanelAction[]) : []
+    }
+    return []
+  })()
+  const persistedActions = spec.binding?.actions ?? []
+  // Synthesized actions never override binding-declared ones with the
+  // same id — the binding wins so a manual edit isn't silently swapped
+  // out for a synthesized fallback on the next data refresh.
+  const persistedIds = new Set(persistedActions.map((a) => a.id))
+  const actions: PanelAction[] = [
+    ...persistedActions,
+    ...synthesizedActions.filter((a) => !persistedIds.has(a.id)),
+  ]
+  const explicitToolbar = actions.filter((a) => a.placement === 'toolbar')
+  // A panel with a `create` action but no explicit toolbar placement has
+  // no way to surface the action — promote it so users always have at
+  // least an "Add" button. Keeps older bindings (pre-toolbar prompt)
+  // working without a re-bind.
+  const fallbackCreate =
+    explicitToolbar.length === 0 ? actions.find((a) => a.kind === 'create') : undefined
+  const toolbarActions = fallbackCreate ? [fallbackCreate] : explicitToolbar
   const rowActions = actions.filter((a) => a.placement === 'row')
   const inlineActions = actions.filter((a) => a.placement === 'inline')
   const [openAction, setOpenAction] = useState<PanelAction | null>(null)
@@ -282,6 +308,7 @@ export function PanelShape({
             data={data as KanbanShape}
             onCellClick={onClick ? dispatch : null}
             inlineActions={inlineActions ?? []}
+            allActions={allActions ?? []}
             groupBy={groupBy}
             panelId={panelId}
             teamId={teamId}
@@ -348,7 +375,20 @@ export function PanelShape({
   return (
     <>
       {body}
-      {detail != null && <DetailModal raw={detail} onClose={() => setDetail(null)} />}
+      {detail != null && (
+        <DetailModal
+          raw={detail}
+          actions={rowActs}
+          panelId={panelId}
+          teamId={teamId}
+          onDone={() => {
+            setDetail(null)
+            onRowActionDone?.()
+          }}
+          onError={onRowActionError}
+          onClose={() => setDetail(null)}
+        />
+      )}
     </>
   )
 }
@@ -2435,11 +2475,20 @@ function InlineCellInput({
 
 interface KanbanShape {
   groups: { key: string; label: string; items: { title: unknown; value: unknown; raw: unknown }[] }[]
+  /** Stage taxonomy enriched server-side from the team_data table's CHECK
+   *  constraint. Canonical source for column order — survives bindings
+   *  that don't carry the stage list themselves. */
+  stage_taxonomy?: string[]
+  /** Actions the binding doesn't carry but the panel type implies (e.g.
+   *  kanban move). The server attaches them so drag works without a
+   *  re-bind, and the action endpoint resolves the same synthesized IDs. */
+  synthesized_actions?: PanelAction[]
 }
 function KanbanView({
   data,
   onCellClick,
   inlineActions,
+  allActions,
   groupBy,
   panelId,
   teamId,
@@ -2449,21 +2498,39 @@ function KanbanView({
   data: KanbanShape
   onCellClick: ((raw: unknown) => void) | null
   inlineActions?: PanelAction[]
+  allActions?: PanelAction[]
   groupBy?: string
   panelId?: string
   teamId?: string
   onDone?: () => void
   onError?: (msg: string) => void
 }) {
+  const t = useT()
   const clickable = !!onCellClick
   const [dragCard, setDragCard] = useState<{ raw: Record<string, unknown>; from: string } | null>(null)
   const [hoverKey, setHoverKey] = useState<string | null>(null)
 
-  // Pick the inline action that targets the kanban's group_by field.
-  const moveAction =
-    groupBy && inlineActions
-      ? inlineActions.find((a) => (a.fields ?? []).includes(groupBy))
-      : undefined
+  // Move action resolution chain:
+  //   1. `placement: 'drag'` action in the binding (preferred — emitted
+  //      by the kanban prompt for new bindings).
+  //   2. Inline-placed action targeting group_by — older bindings.
+  //   3. Server-synthesized action attached to data.synthesized_actions
+  //      when binding carries no move action but source/group_by allow
+  //      synthesis (team_data + introspectable table).
+  const moveAction = (() => {
+    if (!groupBy) return undefined
+    const all = allActions ?? []
+    const drag = all.find(
+      (a) => a.placement === 'drag' && (a.fields ?? []).includes(groupBy),
+    )
+    if (drag) return drag
+    const inline = (inlineActions ?? []).find((a) => (a.fields ?? []).includes(groupBy))
+    if (inline) return inline
+    const synthesized = (data.synthesized_actions ?? []).find(
+      (a) => a.kind === 'update' && (a.fields ?? []).includes(groupBy),
+    )
+    return synthesized
+  })()
   const canDrag = !!(moveAction && panelId && teamId && groupBy)
 
   const handleDrop = async (toKey: string) => {
@@ -2493,9 +2560,51 @@ function KanbanView({
     }
   }
 
+  // Stage taxonomy resolution:
+  //   1. data.stage_taxonomy — server-enriched from the team_data CHECK
+  //      constraint. Canonical for any team_data-backed kanban; stays in
+  //      sync with the live DB and is independent of binding shape.
+  //   2. binding action form options — fallback for sources we can't
+  //      introspect (mcp / http) or schemas without a CHECK constraint.
+  // Used as the column order so empty stages stay visible even when
+  // other stages have rows; without it we fall back to whatever
+  // data.groups produced.
+  const stageOptions: string[] = (() => {
+    if (data.stage_taxonomy && data.stage_taxonomy.length > 0) return data.stage_taxonomy
+    if (!groupBy) return []
+    const sources = [...(allActions ?? []), ...(inlineActions ?? [])]
+    for (const a of sources) {
+      const f = a.form?.fields?.find((x) => x.name === groupBy)
+      if (f?.options && f.options.length > 0) return f.options
+    }
+    return []
+  })()
+
+  const dataGroups = data.groups ?? []
+  type KanbanGroup = KanbanShape['groups'][number]
+  const emptyGroup = (key: string): KanbanGroup => ({ key, label: key, items: [] })
+  const renderGroups: KanbanGroup[] = (() => {
+    if (stageOptions.length === 0) return dataGroups
+    const byKey = new Map(dataGroups.map((g) => [g.key, g]))
+    const ordered = stageOptions.map((k) => byKey.get(k) ?? emptyGroup(k))
+    // Surface any rows whose stage isn't in the declared taxonomy so data
+    // never silently disappears — append them after the canonical columns.
+    const known = new Set(stageOptions)
+    const orphans = dataGroups.filter((g) => !known.has(g.key))
+    return [...ordered, ...orphans]
+  })()
+
+  if (renderGroups.length === 0) {
+    return (
+      <div className="h-full flex items-center justify-center p-6 text-center text-[13px] text-neutral-400">
+        {t('kanban.noGroups')}
+      </div>
+    )
+  }
+
   return (
     <div className="h-full flex gap-2 p-3 overflow-x-auto">
-      {data.groups?.map((g) => {
+      {renderGroups.map((g) => {
         const isHover = hoverKey === g.key && dragCard && dragCard.from !== g.key
         return (
           <div
@@ -2503,12 +2612,16 @@ function KanbanView({
             onDragOver={(e) => {
               if (!canDrag) return
               e.preventDefault()
+              // Stop the bubble so the surrounding panel <section> doesn't
+              // treat a card drag as a panel-reorder drag-over.
+              e.stopPropagation()
               e.dataTransfer.dropEffect = 'move'
               if (hoverKey !== g.key) setHoverKey(g.key)
             }}
             onDragLeave={() => setHoverKey((v) => (v === g.key ? null : v))}
             onDrop={(e) => {
               e.preventDefault()
+              e.stopPropagation()
               void handleDrop(g.key)
             }}
             className={clsx(
@@ -2534,10 +2647,15 @@ function KanbanView({
                       draggable={canDrag}
                       onDragStart={(e) => {
                         if (!canDrag) return
+                        // Card drag must not propagate to the panel
+                        // <section>, which would otherwise pick the
+                        // card-drag start as a panel-reorder grab.
+                        e.stopPropagation()
                         e.dataTransfer.effectAllowed = 'move'
                         setDragCard({ raw, from: g.key })
                       }}
-                      onDragEnd={() => {
+                      onDragEnd={(e) => {
+                        e.stopPropagation()
                         setDragCard(null)
                         setHoverKey(null)
                       }}
@@ -3413,8 +3531,63 @@ function ListView({
 
 // ---------- detail modal ----------------------------------------------------
 
-function DetailModal({ raw, onClose }: { raw: unknown; onClose: () => void }) {
+function DetailModal({
+  raw,
+  actions,
+  panelId,
+  teamId,
+  onDone,
+  onError,
+  onClose,
+}: {
+  raw: unknown
+  actions?: PanelAction[]
+  panelId?: string
+  teamId?: string
+  onDone?: () => void
+  onError?: (msg: string) => void
+  onClose: () => void
+}) {
+  const t = useT()
   const entries = toEntries(raw)
+  const acts = actions ?? []
+  const updateAction = acts.find(
+    (a) => a.kind === 'update' && (a.form?.fields?.length ?? 0) > 0,
+  )
+  const deleteAction = acts.find((a) => a.kind === 'delete')
+  const canExecute = !!(panelId && teamId)
+  const [editing, setEditing] = useState(false)
+
+  // Pre-fill the edit form with the row's primitive fields. Skip nested
+  // objects/arrays — the form has no widget for them and they aren't in
+  // the synthesized form schema either.
+  const initialValues: Record<string, unknown> = (() => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (v === null || ['string', 'number', 'boolean'].includes(typeof v)) {
+        out[k] = v
+      }
+    }
+    return out
+  })()
+
+  if (editing && updateAction && canExecute) {
+    return (
+      <ActionFormModal
+        panelId={panelId!}
+        teamId={teamId!}
+        action={updateAction}
+        initialValues={initialValues}
+        onClose={() => setEditing(false)}
+        onSuccess={() => {
+          setEditing(false)
+          onDone?.()
+        }}
+      />
+    )
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
@@ -3453,6 +3626,41 @@ function DetailModal({ raw, onClose }: { raw: unknown; onClose: () => void }) {
             </dl>
           )}
         </div>
+        {canExecute && (updateAction || deleteAction) && (
+          <div className="px-4 py-2.5 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-end gap-2">
+            {deleteAction && (
+              <button
+                type="button"
+                onClick={() => {
+                  void runConfirmAction({
+                    panelId: panelId!,
+                    teamId: teamId!,
+                    action: deleteAction,
+                    values: initialValues,
+                    t,
+                    onSuccess: () => {
+                      onClose()
+                      onDone?.()
+                    },
+                    onError: (msg) => onError?.(msg),
+                  })
+                }}
+                className="px-3 py-1.5 rounded-sm text-[13px] text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 cursor-pointer"
+              >
+                {t('panel.detail.delete')}
+              </button>
+            )}
+            {updateAction && (
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                className="px-3 py-1.5 rounded-sm text-[13px] bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 hover:opacity-90 cursor-pointer"
+              >
+                {t('panel.detail.edit')}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
