@@ -30,6 +30,12 @@ export interface SessionHandle {
    *  assign canonical seq numbers to in-memory events without consulting
    *  the event-writer (which is async). */
   seqStart: number
+  /** Live monotonic seq counter shared between driveSession (in-band engine
+   *  events) and emitOutOfBandEvent (e.g. user_message_queued, fired from
+   *  the HTTP handler when a follow-up message lands in the inbox before
+   *  the engine has popped it). JS is single-threaded so reads/writes are
+   *  effectively atomic — both writers grab+increment synchronously. */
+  seq: number
   listeners: Set<AsyncPushQueue<Envelope>>
   finished: boolean
   /** Set when the caller wants to cancel the run. */
@@ -148,6 +154,7 @@ export async function start(
     sessionId: '',
     events: [],
     seqStart: 0,
+    seq: 0,
     listeners: new Set(),
     finished: false,
     abort: new AbortController(),
@@ -177,10 +184,12 @@ export async function resume(
   if (!meta) return false
   const history = buildLeadHistoryFromEvents(sessionId, meta.goal)
 
+  const seqStart = sessionsStore.eventsForSession(sessionId).length
   const handle: SessionHandle = {
     sessionId,
     events: [],
-    seqStart: sessionsStore.eventsForSession(sessionId).length,
+    seqStart,
+    seq: seqStart,
     listeners: new Set(),
     finished: false,
     abort: new AbortController(),
@@ -245,10 +254,14 @@ async function driveSession(
   // keeps monotonic ordering across sessions that span multiple processes.
   // Also pin handle.seqStart so liveEventsFor can synthesize seq numbers
   // for in-memory events without racing the async event-writer.
-  let seq = resume
+  // handle.seq is the LIVE counter — both this loop and emitOutOfBandEvent
+  // (out-of-band user_message_queued) share it, so seq numbers stay
+  // monotonic regardless of which side emits next.
+  const startSeq = resume
     ? sessionsStore.eventsForSession(resume.sessionId).length
     : 0
-  handle.seqStart = seq
+  handle.seqStart = startSeq
+  handle.seq = startSeq
   let capturedSessionId: string | null = null
   // On resume the on-disk meta already exists — skip the fresh startSession
   // + auto-title work. On cold start, run_started triggers both.
@@ -264,7 +277,7 @@ async function driveSession(
     if (heartbeatTimer) return
     heartbeatTimer = setInterval(() => {
       try {
-        sessionsStore.touchHeartbeat(sid, seq - 1)
+        sessionsStore.touchHeartbeat(sid, handle.seq - 1)
       } catch {
         /* best-effort — next tick will retry */
       }
@@ -305,7 +318,7 @@ async function driveSession(
 
       sessionsStore.appendSessionEvent({
         sessionId: event.session_id,
-        seq,
+        seq: handle.seq,
         ts: event.ts,
         kind: event.kind,
         depth: event.depth,
@@ -314,7 +327,7 @@ async function driveSession(
         toolName: event.tool_name,
         data: event.data,
       })
-      seq += 1
+      handle.seq += 1
 
       handle.events.push(event)
       for (const q of handle.listeners) q.push(event)
@@ -347,8 +360,11 @@ async function driveSession(
           output,
           finished_at: Date.now(),
         })
-      } else if (event.kind === 'user_message') {
-        // New turn starts — flip idle → running.
+      } else if (event.kind === 'user_message' || event.kind === 'user_message_queued') {
+        // New turn starts (or about to — queued landed in the inbox and the
+        // engine will pop it next). Flip idle → running so the session list
+        // spinner reflects activity even before the engine has yielded the
+        // canonical user_message event.
         sessionsStore.updateMeta(event.session_id, {
           status: 'running',
           finished_at: null,
@@ -418,6 +434,48 @@ class AsyncPushQueue<T> {
 }
 
 export { AsyncPushQueue, END }
+
+/**
+ * Emit an event for a live session from OUTSIDE the engine generator —
+ * persists to events.jsonl, appends to the handle's in-memory ring, and
+ * fans out to SSE listeners using the same `handle.seq` counter the engine
+ * itself uses, so ordering stays monotonic.
+ *
+ * Use case: HTTP route handlers that need to materialize side effects in
+ * the event log without bouncing through the engine generator (which is
+ * parked on `inbox.pop()` between turns and can't yield arbitrary events
+ * synchronously). The canonical example is `pushUserMessage` emitting
+ * `user_message_queued` the moment a follow-up arrives — so a page reload
+ * before the engine actually pops the message still shows the pending
+ * bubble (the previous bug: optimistic-only state vanished on refresh
+ * even though the inbox still held the message).
+ *
+ * Returns false if the session has no live handle (engine not running);
+ * the caller is expected to handle that path separately (e.g. spawn a
+ * resume run).
+ */
+export function emitOutOfBandEvent(
+  sessionId: string,
+  event: Event,
+): boolean {
+  const handle = state().active.get(sessionId)
+  if (!handle || handle.finished) return false
+  sessionsStore.appendSessionEvent({
+    sessionId: event.session_id,
+    seq: handle.seq,
+    ts: event.ts,
+    kind: event.kind,
+    depth: event.depth,
+    nodeId: event.node_id,
+    toolCallId: event.tool_call_id,
+    toolName: event.tool_name,
+    data: event.data,
+  })
+  handle.seq += 1
+  handle.events.push(event)
+  for (const q of handle.listeners) q.push(event)
+  return true
+}
 
 /** Return events for a session, preferring in-memory state when active.
  *

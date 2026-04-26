@@ -16,6 +16,7 @@ export type EventKind =
   | 'user_answered'
   | 'turn_finished'
   | 'user_message'
+  | 'user_message_queued'
 
 export interface AskUserOption {
   label: string

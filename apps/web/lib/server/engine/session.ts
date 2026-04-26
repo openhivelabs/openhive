@@ -52,7 +52,7 @@ import {
 import { type ThresholdTrigger, recordUsage } from '../usage'
 import * as askuser from './askuser'
 import * as errors from './errors'
-import { getHandle } from './session-registry'
+import { emitOutOfBandEvent, getHandle } from './session-registry'
 import {
   buildForkedMessages,
   decideForkOrFresh,
@@ -563,11 +563,22 @@ export interface SessionTeamOpts {
   }
 }
 
+/** Inbox payload — text plus an opaque queued_id stamped at push time. The
+ *  id is forwarded from the matching `user_message_queued` event (emitted
+ *  out-of-band when the HTTP route lands the message) onto the canonical
+ *  `user_message` event yielded by the engine on pop. The frontend uses
+ *  the id to dedupe the pending bubble (queued) against its confirmed twin
+ *  (user_message). */
+export interface InboxItem {
+  text: string
+  queuedId: string
+}
+
 /** Per-session queue of follow-up user messages. The chat loop pops from this
  *  after each Lead turn finishes; the HTTP route pushes into it. Kept on
  *  globalThis to survive Next HMR. */
 interface ChatInboxState {
-  queues: Map<string, PromiseQueue<string>>
+  queues: Map<string, PromiseQueue<InboxItem>>
 }
 const globalForInbox = globalThis as unknown as {
   __openhive_chat_inbox?: ChatInboxState
@@ -578,21 +589,42 @@ function inboxState(): ChatInboxState {
   }
   return globalForInbox.__openhive_chat_inbox
 }
-function ensureQueue(sessionId: string): PromiseQueue<string> {
+function ensureQueue(sessionId: string): PromiseQueue<InboxItem> {
   const s = inboxState()
   let q = s.queues.get(sessionId)
   if (!q) {
-    q = new PromiseQueue<string>()
+    q = new PromiseQueue<InboxItem>()
     s.queues.set(sessionId, q)
   }
   return q
 }
 /** External entry point — the HTTP route calls this when the user sends a
- *  follow-up. Returns false if the session is not live. */
+ *  follow-up. Returns false if the session is not live.
+ *
+ *  Side effect: emits a `user_message_queued` event synchronously via the
+ *  registry's out-of-band channel BEFORE pushing onto the queue, so a page
+ *  reload between push and engine-pop still surfaces the pending bubble
+ *  from events.jsonl. The matching `user_message` event yielded later by
+ *  the engine carries the same `queued_id` so the frontend can dedupe. */
 export function pushUserMessage(sessionId: string, text: string): boolean {
   const q = inboxState().queues.get(sessionId)
   if (!q) return false
-  q.push(text)
+  const queuedId = `q-${crypto.randomBytes(6).toString('hex')}`
+  // Persist FIRST, then push. If the persist fails we don't want a phantom
+  // engine-side message with no event-log trace; a registry-less session
+  // (handle missing) returns false here and the caller's resume path takes
+  // over (which writes its own user_message via the engine generator).
+  const persisted = emitOutOfBandEvent(
+    sessionId,
+    makeEvent(
+      'user_message_queued',
+      sessionId,
+      { text, queued_id: queuedId },
+      { depth: 0, node_id: null },
+    ),
+  )
+  if (!persisted) return false
+  q.push({ text, queuedId })
   return true
 }
 
@@ -774,8 +806,15 @@ async function* runTeamBody(
       // Only wipes this session's keys — other live sessions keep their
       // in-flight counters.
       resetPerTurnCaps(sessionId)
-      yield makeEvent('user_message', sessionId, { text: next })
-      currentTask = next
+      // Forward queued_id from the inbox payload onto the canonical
+      // user_message event so the frontend can dedupe the now-confirmed
+      // bubble against the earlier user_message_queued entry. The id is
+      // opaque to engine logic — only persisted for the FE's benefit.
+      yield makeEvent('user_message', sessionId, {
+        text: next.text,
+        queued_id: next.queuedId,
+      })
+      currentTask = next.text
     }
     yield makeEvent('run_finished', sessionId, { output: lastFinal })
     stopStatus = 'completed'
