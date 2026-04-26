@@ -436,6 +436,63 @@ export function makeRoundLimitEvents(opts: RoundLimitOpts): Event[] {
 }
 
 /**
+ * Early-exit fallback — used when Lead's round-boundary inbox peek finds a
+ * queued user message and the previous round emitted no visible assistant
+ * text (e.g. pure tool_calls round). Resume parser requires non-empty
+ * `node_finished.output` for depth=0; an empty string drops the turn from
+ * leadHistory entirely on restart. The fallback is short on purpose — the
+ * user's queued follow-up renders right after, so the bubble shouldn't take
+ * visual real estate from it.
+ */
+export function earlyExitFallback(locale: 'ko' | 'en'): string {
+  if (locale === 'ko') {
+    return '다음 메시지를 처리하기 위해 잠시 멈췄어요.'
+  }
+  return 'Paused this turn to process your next message.'
+}
+
+interface EarlyExitOpts {
+  sessionId: string
+  nodeId: string
+  role: string
+  depth: number
+  roundsCompleted: number
+  /** Partial assistant text from the round just completed. If non-empty
+   *  it's reused as the synthetic node_finished output (the user already
+   *  saw it streamed via tokens, so showing it once more in the bubble is
+   *  faithful). If empty (pure tool_calls round), use the locale fallback. */
+  previousOutput: string
+  locale: 'ko' | 'en'
+}
+
+/** Same shape as makeRoundLimitEvents — telemetry event + synthetic
+ *  node_finished. Used by runNode when a queued follow-up message is
+ *  detected at the start of what would have been the next Lead round. */
+export function makeEarlyExitEvents(opts: EarlyExitOpts): Event[] {
+  const { sessionId, nodeId, role, depth, roundsCompleted, previousOutput, locale } = opts
+  const output = previousOutput.trim() || earlyExitFallback(locale)
+  return [
+    makeEvent(
+      'turn.early_exit',
+      sessionId,
+      {
+        rounds_completed: roundsCompleted,
+        depth,
+        agent_role: role,
+        reason: 'user_queued_message',
+      },
+      { depth, node_id: nodeId },
+    ),
+    makeEvent(
+      'node_finished',
+      sessionId,
+      { output },
+      { depth, node_id: nodeId },
+    ),
+  ]
+}
+
+/**
  * Idempotent single-permit holder. Guards against double-acquire / double-
  * release bugs when a chat session releases its permit to park on
  * inbox.pop() and re-acquires when a follow-up message arrives.
@@ -537,6 +594,16 @@ export function pushUserMessage(sessionId: string, text: string): boolean {
   if (!q) return false
   q.push(text)
   return true
+}
+
+/** Lead-only round-boundary check: is there a queued follow-up message?
+ *  Non-mutating peek into the inbox buffer — used by runNode's outer loop
+ *  to decide whether to end the current turn early so the user's next
+ *  message is processed without waiting for tail rounds (complete_todo,
+ *  closing assistant text) that the new message would invalidate anyway. */
+function inboxHasPending(sessionId: string): boolean {
+  const q = inboxState().queues.get(sessionId)
+  return q ? q.hasPending() : false
 }
 
 /** Called by the registry when a session is being aborted — wakes any pending
@@ -817,6 +884,13 @@ class PromiseQueue<T> {
       this.waiters.push(resolve)
     })
   }
+
+  /** Synchronous, non-mutating check for buffered values. Used by Lead's
+   *  round-boundary mid-turn injection to decide whether to end the turn
+   *  early. Closed state is irrelevant — only buffered items count. */
+  hasPending(): boolean {
+    return this.buffer.length > 0
+  }
 }
 
 // -------- per-node driver --------
@@ -1009,7 +1083,30 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   const summariseHistory = async (_msgs: ChatMessage[]): Promise<string> => ''
 
   let rounds = 0
+  // Lead-only mid-turn early-exit state. We peek the inbox at the top of
+  // each iteration AFTER the first round has produced something, so a
+  // queued follow-up message ends this turn early and runTeam's outer
+  // loop pops the message immediately. Sub-agents (depth>0) intentionally
+  // ignore the queue — their work is bounded and shouldn't be aborted.
+  // previousRoundOutput holds the assistant text from the round just
+  // completed; reused as the synthetic node_finished output so the bubble
+  // matches what the user already saw streamed.
+  let previousRoundOutput = ''
   while (true) {
+    if (depth === 0 && rounds > 0 && inboxHasPending(sessionId)) {
+      for (const ev of makeEarlyExitEvents({
+        sessionId,
+        nodeId: node.id,
+        role: node.role,
+        depth,
+        roundsCompleted: rounds,
+        previousOutput: previousRoundOutput,
+        locale: errors.currentLocale(),
+      })) {
+        yield ev
+      }
+      return
+    }
     rounds += 1
     if (rounds > maxRounds) {
       // Round budget exhausted. Without a final node_finished here, runTeamBody
@@ -1072,6 +1169,11 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
       if (ev.kind === 'node_finished' && ev.data._turn_marker === true) {
         const stopReason = ev.data.stop_reason as string | undefined
         const output = typeof ev.data.output === 'string' ? ev.data.output : ''
+        // Capture for the next iteration's mid-turn early-exit check; if the
+        // user has queued a follow-up message between rounds, we use this as
+        // the synthetic node_finished output so the chat keeps the partial
+        // assistant text the user already saw streamed.
+        previousRoundOutput = output
         yield makeEvent(
           'round_finished',
           sessionId,
@@ -1637,21 +1739,29 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       // directive error. ALL tcs in the overflow group get this error
       // (computed above) so the LLM cannot keep a partial result. Return
       // before dispatch — no actual delegation work happens.
+      // Mirror the hook-block path below: emit a tool_result event before
+      // returning so the UI gets a resolved chip and events.jsonl stays
+      // well-formed (tool_use → tool_result paired). applyResult still
+      // pushes the same content to in-memory history via step.value.
       if (overflowIds.has(tc.id)) {
         const lbl = overflowLabel.get(tc.id)!
-        return {
-          content:
-            `ERROR: you emitted ${lbl.n} \`delegate_to(${lbl.role})\` calls in ` +
-            `one response, but ${lbl.role}.max_parallel = ${lbl.cap}. The ` +
-            `engine refuses ALL ${lbl.n} of them — none ran — because ` +
-            `silently dropping ${lbl.n - lbl.cap} of them would lose work. ` +
-            `Fix: emit ONE \`delegate_to(${lbl.role})\` whose task covers ` +
-            `every axis you wanted to split. ${lbl.role} is an orchestrator ` +
-            `with its own subordinates; it will fan out internally to its ` +
-            `Members. Do NOT split N axes into N delegate_to calls to the ` +
-            `SAME role — give one umbrella task and let it dispatch.`,
-          isError: true,
-        }
+        const errMsg =
+          `ERROR: you emitted ${lbl.n} \`delegate_to(${lbl.role})\` calls in ` +
+          `one response, but ${lbl.role}.max_parallel = ${lbl.cap}. The ` +
+          `engine refuses ALL ${lbl.n} of them — none ran — because ` +
+          `silently dropping ${lbl.n - lbl.cap} of them would lose work. ` +
+          `Fix: emit ONE \`delegate_to(${lbl.role})\` whose task covers ` +
+          `every axis you wanted to split. ${lbl.role} is an orchestrator ` +
+          `with its own subordinates; it will fan out internally to its ` +
+          `Members. Do NOT split N axes into N delegate_to calls to the ` +
+          `SAME role — give one umbrella task and let it dispatch.`
+        yield makeEvent(
+          'tool_result',
+          sessionId,
+          { content: errMsg, is_error: true },
+          { depth, node_id: node.id, tool_call_id: tc.id, tool_name: tc.function.name },
+        )
+        return { content: errMsg, isError: true }
       }
 
       // [A2 HOOK] PreToolUse — runs after the tool_called event is visible in
