@@ -22,6 +22,7 @@ import {
 import {
   createContext,
   memo,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -891,8 +892,15 @@ function buildChat(
       return ta - tb
     })
     for (const art of sorted) {
-      const t = typeof art.created_at === 'number' ? art.created_at : Number.POSITIVE_INFINITY
-      let idx = assistantTsByIndex.findIndex((ts) => ts >= t)
+      // Transcript event ts is in seconds; artifact.created_at is in ms
+      // (see lib/server/artifacts.ts — populated from `created_at_ms`).
+      // Normalize to seconds before comparing or every comparison underflows
+      // and all artifacts dump on the final assistant.
+      const tSec =
+        typeof art.created_at === 'number'
+          ? art.created_at / 1000
+          : Number.POSITIVE_INFINITY
+      let idx = assistantTsByIndex.findIndex((ts) => ts >= tSec)
       if (idx < 0) idx = assistantItems.length - 1
       assistantItems[idx]!.attachments.push(art)
     }
@@ -1402,6 +1410,11 @@ export function RunDetailPage() {
       setSending(true)
       setSendError(null)
     })
+    // After the optimistic bubble is committed, force scroll to bottom so the
+    // user always sees their just-sent message — the chat-length useEffect
+    // can race with streaming-token updates and skip the jump otherwise.
+    scrollChatToBottom()
+    requestAnimationFrame(scrollChatToBottom)
     try {
       const res = await fetch(
         `/api/sessions/${encodeURIComponent(id)}/messages`,
@@ -1434,6 +1447,12 @@ export function RunDetailPage() {
   // assistant bubble grows via streaming tokens (same bubble id, growing
   // text — chat.length alone would miss this).
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const chatScrollRef = useRef<HTMLDivElement>(null)
+  const scrollChatToBottom = useCallback(() => {
+    const el = chatScrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+    chatEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+  }, [])
   const lastAssistantText = useMemo(() => {
     for (let i = chat.length - 1; i >= 0; i--) {
       const item = chat[i]
@@ -1445,8 +1464,15 @@ export function RunDetailPage() {
     return 0
   }, [chat])
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
-  }, [chat.length, lastAssistantText])
+    scrollChatToBottom()
+  }, [
+    chat.length,
+    lastAssistantText,
+    aiActive,
+    pendingAsk,
+    sending,
+    scrollChatToBottom,
+  ])
 
   const backHref = params
     ? `/${params.companySlug}/${params.teamSlug}/tasks`
@@ -1528,30 +1554,56 @@ export function RunDetailPage() {
           className="flex-1 min-w-0 flex flex-col transition-[padding]"
           style={{ paddingLeft: chatColOffsetPx }}
         >
-          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain scrollbar-quiet">
+          <div
+            ref={chatScrollRef}
+            className="flex-1 min-h-0 overflow-y-auto overscroll-contain scrollbar-quiet"
+          >
             <div className="max-w-[760px] mx-auto px-6 pt-6 pb-4 space-y-4">
               <VerifiedUrlsContext.Provider value={verifiedUrls}>
-              {chat.map((item) => {
-                if (item.kind === 'ask') {
-                  return (
-                    <AskInlineCard
-                      key={item.id}
-                      questions={item.questions}
-                      agentRole={item.agentRole}
-                      onSubmit={submitAnswers}
-                      onSkip={skipAsk}
-                      busy={answerBusy}
-                    />
-                  )
+              {(() => {
+                // Pending user bubbles (typed while a previous turn is still
+                // running, server hasn't confirmed yet) render BELOW the
+                // loading spinner. Once the transcript catches up they leave
+                // `pendingUserMessages` and reappear above the spinner via
+                // the normal chat flow.
+                const main: typeof chat = []
+                const queued: typeof chat = []
+                for (const item of chat) {
+                  if (item.kind === 'user' && item.pending) queued.push(item)
+                  else main.push(item)
                 }
-                return <ChatBubble key={item.id} item={item} />
-              })}
+                return (
+                  <>
+                    {main.map((item) => {
+                      if (item.kind === 'ask') {
+                        return (
+                          <AskInlineCard
+                            key={item.id}
+                            questions={item.questions}
+                            agentRole={item.agentRole}
+                            onSubmit={submitAnswers}
+                            onSkip={skipAsk}
+                            busy={answerBusy}
+                          />
+                        )
+                      }
+                      return <ChatBubble key={item.id} item={item} />
+                    })}
+                    {running && (
+                      <div className="flex items-center px-1 text-neutral-400">
+                        <CircleNotch
+                          className="w-4 h-4 animate-spin"
+                          weight="bold"
+                        />
+                      </div>
+                    )}
+                    {queued.map((item) => (
+                      <ChatBubble key={item.id} item={item} />
+                    ))}
+                  </>
+                )
+              })()}
               </VerifiedUrlsContext.Provider>
-              {running && (
-                <div className="flex items-center px-1 text-neutral-400">
-                  <CircleNotch className="w-4 h-4 animate-spin" weight="bold" />
-                </div>
-              )}
               <div ref={chatEndRef} />
             </div>
           </div>
