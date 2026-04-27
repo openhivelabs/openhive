@@ -34,6 +34,8 @@ BLOCK_TYPES = {
     "timeline", "progress", "card_grid", "drop_cap",
     "comment", "table_of_figures", "table_of_charts", "table_of_tables",
     "gantt",
+    "faq", "pricing_table", "author", "step_list", "code_diff",
+    "bibliography", "qr_code", "stat_list",
 }
 
 ALIGN_VALUES = {"left", "center", "right", "justify"}
@@ -208,6 +210,35 @@ def _validate_block(i: int, block: Any, warnings: list[str]) -> None:
         items = block.get("tasks")
         if not isinstance(items, list) or not items:
             raise SpecError(f"{here}.tasks: non-empty array required")
+    elif t == "faq":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.items: non-empty array required")
+        for j, it in enumerate(items):
+            if not isinstance(it, dict) or "q" not in it or "a" not in it:
+                raise SpecError(f"{here}.items[{j}]: requires q and a")
+    elif t == "pricing_table":
+        plans = block.get("plans")
+        if not isinstance(plans, list) or not plans:
+            raise SpecError(f"{here}.plans: non-empty array required")
+    elif t == "author":
+        _req_str(block, "name", here)
+    elif t == "step_list":
+        items = block.get("steps")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.steps: non-empty array required")
+    elif t == "code_diff":
+        _req_str(block, "text", here)
+    elif t == "bibliography":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.items: non-empty array required")
+    elif t == "qr_code":
+        _req_str(block, "data", here)
+    elif t == "stat_list":
+        items = block.get("stats")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.stats: non-empty array required")
     elif t == "spacer":
         h = block.get("height", 12)
         if not isinstance(h, (int, float)) or h < 0:

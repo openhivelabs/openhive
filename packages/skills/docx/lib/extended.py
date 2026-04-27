@@ -576,6 +576,345 @@ def render_drop_cap(doc, block: dict, theme: Theme) -> None:
 # ---------------------------------------------------------------------------
 
 
+def render_faq(doc, block: dict, theme: Theme) -> None:
+    """Q/A list. Each item gets a bold question with accent prefix and an
+    inline-rich answer paragraph below."""
+    from .inline import add_inline_runs
+
+    for i, item in enumerate(block["items"]):
+        qp = doc.add_paragraph()
+        qp.paragraph_format.space_before = Pt(6)
+        qp.paragraph_format.space_after = Pt(2)
+        qr = qp.add_run("Q. ")
+        _stylize(qr, font=theme.heading_font, size=theme.size_body,
+                 color=theme.accent, bold=True)
+        qr2 = qp.add_run(str(item["q"]))
+        _stylize(qr2, font=theme.heading_font, size=theme.size_body,
+                 color=theme.heading, bold=True)
+
+        ap = doc.add_paragraph()
+        ap.paragraph_format.left_indent = Inches(0.25)
+        ap.paragraph_format.space_after = Pt(4)
+        ar = ap.add_run("A. ")
+        _stylize(ar, font=theme.body_font, size=theme.size_body,
+                 color=theme.muted, bold=True)
+        # rest as inline rich text
+        add_inline_runs(ap, str(item["a"]), theme,
+                        font=theme.body_font, size=theme.size_body,
+                        color=theme.fg)
+
+
+def render_pricing_table(doc, block: dict, theme: Theme) -> None:
+    """Side-by-side plan comparison. Each plan: {name, price, period?,
+    features (list), cta?, highlight?}. Highlighted plan gets the accent
+    color top band.
+    """
+    from .themes import palette_color
+
+    plans = block["plans"]
+    n = len(plans)
+    table = doc.add_table(rows=1, cols=n)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    _set_table_borders(table, size=4, color="DDDDDD")
+
+    for j, plan in enumerate(plans):
+        cell = table.rows[0].cells[j]
+        accent = (palette_color(theme, j) if not plan.get("highlight")
+                  else theme.accent)
+        bg = _mix_color(accent, (255, 255, 255),
+                        0.92 if not plan.get("highlight") else 0.75)
+        _shade_fill(cell, bg)
+        # cell padding + top band
+        tcPr = cell._tc.get_or_add_tcPr()
+        tcMar = etree.SubElement(tcPr, qn("w:tcMar"))
+        for side, val in (("top", 200), ("bottom", 200),
+                          ("left", 200), ("right", 200)):
+            el = etree.SubElement(tcMar, qn(f"w:{side}"))
+            el.set(qn("w:w"), str(val)); el.set(qn("w:type"), "dxa")
+        tcBorders = etree.SubElement(tcPr, qn("w:tcBorders"))
+        top = etree.SubElement(tcBorders, qn("w:top"))
+        top.set(qn("w:val"), "single")
+        top.set(qn("w:sz"), "32" if plan.get("highlight") else "16")
+        top.set(qn("w:color"), "{:02X}{:02X}{:02X}".format(*accent))
+
+        for pp in list(cell.paragraphs):
+            cell._tc.remove(pp._p)
+
+        np = cell.add_paragraph()
+        np.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        np.paragraph_format.space_after = Pt(2)
+        nr = np.add_run(str(plan["name"]).upper())
+        _stylize(nr, font=theme.heading_font, size=theme.size_small,
+                 color=theme.muted, bold=True)
+
+        if plan.get("price"):
+            pp = cell.add_paragraph()
+            pp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            pp.paragraph_format.space_after = Pt(2)
+            pr = pp.add_run(str(plan["price"]))
+            _stylize(pr, font=theme.heading_font, size=theme.size_kpi,
+                     color=accent, bold=True)
+            if plan.get("period"):
+                pr2 = pp.add_run(f" / {plan['period']}")
+                _stylize(pr2, font=theme.body_font, size=theme.size_small,
+                         color=theme.muted)
+
+        for feat in plan.get("features", []) or []:
+            fp = cell.add_paragraph()
+            fp.paragraph_format.space_after = Pt(2)
+            ic = fp.add_run("✓ ")
+            _stylize(ic, font=theme.heading_font, size=theme.size_body,
+                     color=accent, bold=True)
+            from .inline import add_inline_runs
+            add_inline_runs(fp, str(feat), theme,
+                            font=theme.body_font, size=theme.size_small,
+                            color=theme.fg)
+
+        if plan.get("cta"):
+            cp = cell.add_paragraph()
+            cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            cp.paragraph_format.space_before = Pt(8)
+            cp.paragraph_format.space_after = Pt(0)
+            cr = cp.add_run(f" {plan['cta']} ")
+            _stylize(cr, font=theme.heading_font, size=theme.size_small,
+                     color=(255, 255, 255), bold=True)
+            # shaded run = button
+            from .inline import _style_run as _sr
+            _sr(cr, theme, font=theme.heading_font,
+                size=theme.size_small, color=(255, 255, 255),
+                bold=True, shade=accent)
+
+
+def render_author(doc, block: dict, theme: Theme) -> None:
+    """Author bio block: avatar (optional) + name / title / bio."""
+    from .renderers import _resolve_image
+
+    avatar = block.get("avatar")
+    if avatar:
+        table = doc.add_table(rows=1, cols=2)
+        _set_table_borders(table, size=0)
+        _set_col_widths(table, [Inches(1.2), Inches(5.0)])
+        avatar_cell = table.rows[0].cells[0]
+        for pp in list(avatar_cell.paragraphs):
+            avatar_cell._tc.remove(pp._p)
+        ap = avatar_cell.add_paragraph()
+        run = ap.add_run()
+        run.add_picture(_resolve_image(avatar), width=Inches(1.0))
+        text_cell = table.rows[0].cells[1]
+        for pp in list(text_cell.paragraphs):
+            text_cell._tc.remove(pp._p)
+        target = text_cell
+    else:
+        target = doc
+
+    name_p = target.add_paragraph()
+    name_p.paragraph_format.space_after = Pt(2)
+    nr = name_p.add_run(str(block["name"]))
+    _stylize(nr, font=theme.heading_font, size=theme.size_h3,
+             color=theme.heading, bold=True)
+    if block.get("title"):
+        tp = target.add_paragraph()
+        tp.paragraph_format.space_after = Pt(4)
+        tr = tp.add_run(str(block["title"]))
+        _stylize(tr, font=theme.body_font, size=theme.size_small,
+                 color=theme.muted, italic=True)
+    if block.get("bio"):
+        from .inline import add_inline_runs
+        bp = target.add_paragraph()
+        add_inline_runs(bp, str(block["bio"]), theme,
+                        font=theme.body_font, size=theme.size_body,
+                        color=theme.fg)
+
+
+def render_step_list(doc, block: dict, theme: Theme) -> None:
+    """Numbered process steps with circled numbers + arrow connectors."""
+    from .themes import palette_color
+
+    steps = block["steps"]
+    for i, step in enumerate(steps):
+        outer = doc.add_table(rows=1, cols=2)
+        outer.alignment = WD_TABLE_ALIGNMENT.LEFT
+        _set_table_borders(outer, size=0)
+        _set_col_widths(outer, [Inches(0.6), Inches(5.7)])
+
+        # numbered badge
+        nc = outer.rows[0].cells[0]
+        for pp in list(nc.paragraphs):
+            nc._tc.remove(pp._p)
+        accent = palette_color(theme, i)
+        np = nc.add_paragraph()
+        np.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        nr = np.add_run(f" {i + 1} ")
+        from .inline import _style_run as _sr
+        _sr(nr, theme, font=theme.heading_font,
+            size=theme.size_h3, color=(255, 255, 255),
+            bold=True, shade=accent)
+
+        # content
+        tc = outer.rows[0].cells[1]
+        for pp in list(tc.paragraphs):
+            tc._tc.remove(pp._p)
+        if isinstance(step, str):
+            title, body = step, None
+        else:
+            title = step.get("title", "")
+            body = step.get("body")
+        tp = tc.add_paragraph()
+        tp.paragraph_format.space_after = Pt(2)
+        tr = tp.add_run(str(title))
+        _stylize(tr, font=theme.heading_font, size=theme.size_body,
+                 color=theme.heading, bold=True)
+        if body:
+            from .inline import add_inline_runs
+            bp = tc.add_paragraph()
+            bp.paragraph_format.space_after = Pt(2)
+            add_inline_runs(bp, str(body), theme,
+                            font=theme.body_font, size=theme.size_body,
+                            color=theme.fg)
+
+
+def render_code_diff(doc, block: dict, theme: Theme) -> None:
+    """Diff-aware code block. Lines starting with ``+`` get a green tint,
+    ``-`` red tint, ``~`` a yellow tint. Other lines plain.
+    """
+    table = doc.add_table(rows=1, cols=1)
+    cell = table.rows[0].cells[0]
+    _shade_fill(cell, theme.code_bg)
+    tc_pr = cell._tc.get_or_add_tcPr()
+    tcBorders = etree.SubElement(tc_pr, qn("w:tcBorders"))
+    for side in ("top", "left", "bottom", "right"):
+        b = etree.SubElement(tcBorders, qn(f"w:{side}"))
+        b.set(qn("w:val"), "single"); b.set(qn("w:sz"), "2")
+        b.set(qn("w:color"), "CCCCCC")
+
+    for pg in list(cell.paragraphs):
+        cell._tc.remove(pg._p)
+    lines = block["text"].split("\n")
+    for line in lines:
+        p = cell.add_paragraph()
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+        if line.startswith("+"):
+            tint = (220, 252, 231); fg = (5, 150, 105)
+        elif line.startswith("-"):
+            tint = (254, 226, 226); fg = (220, 38, 38)
+        elif line.startswith("~"):
+            tint = (254, 249, 195); fg = (180, 83, 9)
+        else:
+            tint = None; fg = theme.fg
+        run = p.add_run(line or " ")
+        from .inline import _style_run as _sr
+        _sr(run, theme, font=theme.mono_font, size=theme.size_code,
+            color=fg, bold=False, shade=tint)
+
+
+def render_bibliography(doc, block: dict, theme: Theme) -> None:
+    """Numbered bibliography. Each item is a string or dict with
+    {author, title, source, year, url}.
+    """
+    title = block.get("title")
+    if title:
+        tp = doc.add_paragraph()
+        tp.paragraph_format.space_after = Pt(4)
+        tr = tp.add_run(title)
+        _stylize(tr, font=theme.heading_font, size=theme.size_h2,
+                 color=theme.heading, bold=True)
+    for i, item in enumerate(block["items"], start=1):
+        ip = doc.add_paragraph()
+        ip.paragraph_format.left_indent = Inches(0.3)
+        ip.paragraph_format.first_line_indent = Inches(-0.3)
+        ip.paragraph_format.space_after = Pt(4)
+        nr = ip.add_run(f"[{i}] ")
+        _stylize(nr, font=theme.body_font, size=theme.size_body,
+                 color=theme.accent, bold=True)
+        if isinstance(item, str):
+            tr = ip.add_run(item)
+            _stylize(tr, font=theme.body_font, size=theme.size_body,
+                     color=theme.fg)
+        else:
+            if item.get("author"):
+                tr = ip.add_run(f"{item['author']}. ")
+                _stylize(tr, font=theme.body_font, size=theme.size_body,
+                         color=theme.fg)
+            if item.get("title"):
+                tr = ip.add_run(f"{item['title']}. ")
+                _stylize(tr, font=theme.body_font, size=theme.size_body,
+                         color=theme.fg, italic=True)
+            if item.get("source"):
+                tr = ip.add_run(f"{item['source']}")
+                _stylize(tr, font=theme.body_font, size=theme.size_body,
+                         color=theme.fg)
+            if item.get("year"):
+                tr = ip.add_run(f" ({item['year']})")
+                _stylize(tr, font=theme.body_font, size=theme.size_body,
+                         color=theme.muted)
+            if item.get("url"):
+                ip.add_run(". ")
+                from .inline import _add_hyperlink
+                _add_hyperlink(ip, item["url"], item["url"], theme,
+                               theme.size_small)
+
+
+def render_qr_code(doc, block: dict, theme: Theme) -> None:
+    """Generate a QR PNG and embed it. ``data`` = URL or text payload."""
+    import hashlib
+    import pathlib
+    import tempfile
+    try:
+        import qrcode
+    except ImportError:
+        # silently skip if lib missing
+        return
+
+    data = str(block["data"])
+    h = hashlib.sha1(data.encode()).hexdigest()[:16]
+    out = pathlib.Path(tempfile.gettempdir()) / f"docx_qr_{h}.png"
+    if not out.exists():
+        img = qrcode.make(data)
+        img.save(str(out))
+    p = doc.add_paragraph()
+    align = block.get("align", "center")
+    if align == "center":
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    elif align == "right":
+        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run = p.add_run()
+    width = float(block.get("width_in", 1.5))
+    run.add_picture(str(out), width=Inches(width))
+    if block.get("caption"):
+        cp = doc.add_paragraph()
+        cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cr = cp.add_run(block["caption"])
+        _stylize(cr, font=theme.body_font, size=theme.size_small,
+                 color=theme.muted, italic=True)
+
+
+def render_stat_list(doc, block: dict, theme: Theme) -> None:
+    """Inline horizontal stat row — "$3.4M ARR · 112% NRR · 186 logos".
+    Smaller / denser than kpi_row, intended for body context.
+    """
+    from .themes import palette_color
+
+    stats = block["stats"]
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER if block.get("center") else WD_ALIGN_PARAGRAPH.LEFT
+    p.paragraph_format.space_before = Pt(6)
+    p.paragraph_format.space_after = Pt(6)
+    for i, s in enumerate(stats):
+        if i > 0:
+            sep = p.add_run("   ·   ")
+            _stylize(sep, font=theme.body_font, size=theme.size_body,
+                     color=theme.muted)
+        accent = palette_color(theme, i)
+        vr = p.add_run(str(s.get("value", "")))
+        _stylize(vr, font=theme.heading_font, size=theme.size_h3,
+                 color=accent, bold=True)
+        if s.get("label"):
+            lr = p.add_run(f" {s['label']}")
+            _stylize(lr, font=theme.body_font, size=theme.size_body,
+                     color=theme.muted)
+
+
 def _shade_fill(cell, rgb: tuple[int, int, int]) -> None:
     tcPr = cell._tc.get_or_add_tcPr()
     shd = tcPr.find(qn("w:shd"))

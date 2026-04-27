@@ -282,6 +282,10 @@ def render_table(doc, block: dict, theme: Theme) -> None:
             for cell, w in zip(row.cells, widths):
                 cell.width = w
 
+    # Caption — picked up by table_of_tables field if set
+    if block.get("caption"):
+        _emit_caption(doc, block, theme, label="Table")
+
     # Merged cells
     for m in block.get("merge", []) or []:
         try:
@@ -855,14 +859,45 @@ def _render_chart_native(doc, block: dict, theme: Theme) -> None:
     _emit_caption(doc, block, theme)
 
 
-def _emit_caption(doc, block: dict, theme: Theme) -> None:
+def _emit_caption(doc, block: dict, theme: Theme, label: str = "Chart") -> None:
+    """Emit a caption paragraph styled as Word "Caption" so the appropriate
+    TOC field (table_of_charts/figures/tables) can find it. Embeds a
+    SEQ field for auto-numbering ("Chart 1", "Chart 2", ...).
+    """
     caption = block.get("caption")
     if not caption:
         return
     cap_p = doc.add_paragraph()
     cap_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    cap_run = cap_p.add_run(caption)
-    _style_run(cap_run, font=theme.body_font, size=theme.size_small,
+    # try to apply built-in Caption style; fall back silently
+    try:
+        cap_p.style = doc.styles["Caption"]
+    except KeyError:
+        pass
+    # leading label run + SEQ field auto-number
+    label_run = cap_p.add_run(f"{label} ")
+    _style_run(label_run, font=theme.body_font, size=theme.size_small,
+               color=theme.muted, italic=True)
+    # SEQ field
+    seq_run = cap_p.add_run()
+    fld_b = etree.SubElement(seq_run._r, qn("w:fldChar"))
+    fld_b.set(qn("w:fldCharType"), "begin")
+    instr_run = cap_p.add_run()
+    it = etree.SubElement(instr_run._r, qn("w:instrText"))
+    it.text = f' SEQ {label} \\* ARABIC '
+    it.set(qn("xml:space"), "preserve")
+    sep_run = cap_p.add_run()
+    fld_s = etree.SubElement(sep_run._r, qn("w:fldChar"))
+    fld_s.set(qn("w:fldCharType"), "separate")
+    num_run = cap_p.add_run("1")
+    _style_run(num_run, font=theme.body_font, size=theme.size_small,
+               color=theme.muted, italic=True)
+    end_run = cap_p.add_run()
+    fld_e = etree.SubElement(end_run._r, qn("w:fldChar"))
+    fld_e.set(qn("w:fldCharType"), "end")
+    # caption text after
+    text_run = cap_p.add_run(f". {caption}")
+    _style_run(text_run, font=theme.body_font, size=theme.size_small,
                color=theme.muted, italic=True)
 
 
@@ -1209,6 +1244,16 @@ def _register_extended() -> None:
         "table_of_charts": _ext.render_table_of_charts,
         "table_of_tables": _ext.render_table_of_tables,
         "gantt": _ext.render_gantt,
+    })
+    RENDERERS.update({
+        "faq": _ext.render_faq,
+        "pricing_table": _ext.render_pricing_table,
+        "author": _ext.render_author,
+        "step_list": _ext.render_step_list,
+        "code_diff": _ext.render_code_diff,
+        "bibliography": _ext.render_bibliography,
+        "qr_code": _ext.render_qr_code,
+        "stat_list": _ext.render_stat_list,
     })
     from . import comments as _cmt
     RENDERERS["comment"] = _cmt.render_comment
