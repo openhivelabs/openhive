@@ -16,9 +16,15 @@ slide:N > chart              # first chart
 slide:N > chart:K            # K-th chart
 slide:N > image              # first picture
 slide:N > image:K            # K-th picture
+slide:N > table              # first table
+slide:N > table:K            # K-th table
+slide:N > table[:K] > cell[r=R,c=C]   # one cell of a table (zero-indexed
+                                      # rows include the header row)
 ```
 
 Selectors are parsed left-to-right. The first step must always be `slide:…`.
+Steps support an optional `[k=v,…]` bracket suffix; today only `cell[r=…,c=…]`
+uses it.
 
 ## Operations
 
@@ -91,6 +97,17 @@ Replaces the binary bytes of the targeted picture — same partname, new content
 ```
 Updates chart data in place. Series **count** must match existing chart. Categories length must match each series' values length. Colours and chart type are preserved.
 
+### update_table_cell
+
+```json
+{"op": "update_table_cell",
+ "target": "slide:4 > table > cell[r=2,c=1]",
+ "value": "new cell text"}
+```
+Replaces the text of one table cell. Rows and columns are zero-indexed and
+the header row is row 0. Preserves the cell's first run formatting
+(font/size/colour). Use `table:K` when a slide has multiple tables.
+
 ### set_style
 
 ```json
@@ -99,6 +116,28 @@ Updates chart data in place. Series **count** must match existing chart. Categor
  "bold": true, "italic": false}
 ```
 All fields optional. Applies to every text run in the targeted shape/bullet.
+`font` writes the latin/east-asian/complex-script slots together so non-Latin
+text keeps the new typeface. If the selector matches text but no runs end up
+modified (e.g. shape contains only paragraphs without runs yet), the op
+emits a `matched 0 runs` warning rather than failing.
+
+## Validation & warnings
+
+`insert_slide` runs the spec validator on its `slide` payload before any
+rendering. Bad specs come back as a structured `OpError` with the field
+path (e.g. `slide[0].kind: must be one of [...]`) so the LLM can correct
+without trial-and-error.
+
+The script's `warnings` array surfaces non-fatal flags after a successful
+patch:
+
+- `replace_bullets`: >9 bullets — may overflow.
+- `insert_slide` of a `table`: >12 rows — renderer truncates.
+- `insert_slide` of a `bullets`: >9 items — may overflow.
+- `insert_slide` of a `chart`: >6 series — legend may overflow.
+- `set_style`: matched 0 runs (no text to style).
+
+Treat warnings as suggestions, not errors. The output file still saves.
 
 ## Atomicity note
 
