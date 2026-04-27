@@ -192,9 +192,11 @@ def add_bullet_paragraphs(
         i += 1
 
 
-def add_image(slide, rect: Rect, image_ref: str, fit: str = "contain"):
+def add_image(slide, rect: Rect, image_ref: str, fit: str = "contain",
+              align: str = "center"):
     """Place an image at `rect`. `image_ref` may be a local path or http(s) URL.
-    `fit` is contain|cover|full_bleed.
+    `fit` is contain|cover|full_bleed. `align` shifts the image inside `rect`
+    horizontally when fit=='contain' leaves slack: left|center|right.
     """
     path = _resolve_image(image_ref)
     from PIL import Image  # python-pptx already depends on Pillow
@@ -215,7 +217,12 @@ def add_image(slide, rect: Rect, image_ref: str, fit: str = "contain"):
     else:
         draw_h = rect.h
         draw_w = rect.h * aspect_img
-    draw_x = rect.x + (rect.w - draw_w) / 2
+    if align == "left":
+        draw_x = rect.x
+    elif align == "right":
+        draw_x = rect.x + (rect.w - draw_w)
+    else:
+        draw_x = rect.x + (rect.w - draw_w) / 2
     draw_y = rect.y + (rect.h - draw_h) / 2
     slide.shapes.add_picture(path, Inches(draw_x), Inches(draw_y), Inches(draw_w), Inches(draw_h))
 
@@ -357,6 +364,7 @@ def _render_column(slide, col: dict, rect: Rect, theme: Theme) -> None:
 def render_image(slide, s: dict, theme: Theme, grid: Grid) -> None:
     fill_background(slide, theme)
     fit = s.get("fit", "contain")
+    align = s.get("align", "center")
     title = s.get("title")
     caption = s.get("caption")
 
@@ -372,14 +380,14 @@ def render_image(slide, s: dict, theme: Theme, grid: Grid) -> None:
             cap_h = 0.4
             img_rect = Rect(content.x, content.y, content.w, content.h - cap_h - 0.15)
             cap_rect = Rect(content.x, content.y + content.h - cap_h, content.w, cap_h)
-            add_image(slide, img_rect, s["image"], fit=fit)
+            add_image(slide, img_rect, s["image"], fit=fit, align=align)
             add_textbox(
                 slide, cap_rect, caption,
                 font=theme.body_font, size=theme.size_caption, color=theme.muted,
-                italic=True, align="center", anchor="middle",
+                italic=True, align=align, anchor="middle",
             )
         else:
-            add_image(slide, content, s["image"], fit=fit)
+            add_image(slide, content, s["image"], fit=fit, align=align)
     set_notes(slide, s.get("notes"))
 
 
@@ -415,6 +423,14 @@ def render_table(slide, s: dict, theme: Theme, grid: Grid) -> None:
 
     tbl_shape = slide.shapes.add_table(n_rows, n_cols, x_emu, y_emu, w_emu, h_emu)
     tbl = tbl_shape.table
+
+    # apply user-specified relative column widths if present
+    col_widths = s.get("col_widths")
+    if isinstance(col_widths, list) and len(col_widths) == n_cols:
+        total = float(sum(col_widths))
+        if total > 0:
+            for j, w in enumerate(col_widths):
+                tbl.columns[j].width = Inches(content.w * (w / total))
 
     # header row
     for j, h in enumerate(headers):

@@ -79,9 +79,15 @@ Two columns sharing a title. Each side has its own `kind`: `text` | `bullets` | 
   "title": "Dashboard screenshot",      // optional
   "image": "https://example.com/shot.png",
   "fit": "contain",                     // contain | cover | full_bleed
+  "align": "center",                    // optional. left | center | right
+                                        // (only meaningful when fit=contain
+                                        // and the image's aspect leaves slack)
   "caption": "The Run-mode canvas"      // optional
 }
 ```
+
+`align` also drives the caption's horizontal alignment so it sits under the
+visible image, not floating across the empty side.
 
 ## table
 
@@ -93,7 +99,11 @@ Two columns sharing a title. Each side has its own `kind`: `text` | `bullets` | 
   "rows": [
     ["text-file", "builtin", "done"],
     ["pptx",      "python-pptx", "done"]
-  ]
+  ],
+  "col_widths": [3, 2, 1]               // optional. Relative weights —
+                                        // normalised to fill the content
+                                        // band. Length must equal headers.
+                                        // Omit for equal columns.
 }
 ```
 
