@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -98,6 +99,32 @@ _SOURCES: dict[str, tuple[str, str]] = {
     SCRIPT_DEVANAGARI: _vf("notosansdevanagari", "NotoSansDevanagari", "wdth%2Cwght"),
     SCRIPT_THAI: _vf("notosansthai", "NotoSansThai", "wdth%2Cwght"),
     SCRIPT_HEBREW: _vf("notosanshebrew", "NotoSansHebrew", "wdth%2Cwght"),
+}
+
+# Static-Bold TTFs from the canonical noto-fonts repo. ReportLab can't drive a
+# variable font's wght axis, so without a hinted Bold cut every `<b>` tag and
+# `bold=True` style would silently render as Regular for non-Latin documents.
+# We download and register the Bold static here so registerFontFamily('Noto-kr')
+# can map normal→Regular VF and bold→hinted Bold static — which is what makes
+# Korean/CJK headings actually look bold.
+# Bold static lookup needs *TrueType* outlines — reportlab's TTFont rejects
+# CFF/OTF with "postscript outlines are not supported". The reliable source
+# for hinted TTF Bold across every Noto variant is the Google Fonts CSS API
+# (fonts.googleapis.com/css2?...&wght=700) which dynamically resolves to a
+# TTF URL on fonts.gstatic.com. We fetch the CSS, extract the TTF URL, and
+# cache the binary locally.
+#
+# The CSS family name per script. Mirrors _SOURCES keys.
+_GFONTS_FAMILY: dict[str, str] = {
+    SCRIPT_LATIN: "Noto Sans",
+    SCRIPT_KR: "Noto Sans KR",
+    SCRIPT_JP: "Noto Sans JP",
+    SCRIPT_SC: "Noto Sans SC",
+    SCRIPT_TC: "Noto Sans TC",
+    SCRIPT_ARABIC: "Noto Sans Arabic",
+    SCRIPT_DEVANAGARI: "Noto Sans Devanagari",
+    SCRIPT_THAI: "Noto Sans Thai",
+    SCRIPT_HEBREW: "Noto Sans Hebrew",
 }
 
 
@@ -339,9 +366,110 @@ def _probe_system(script: str) -> pathlib.Path | None:
     return None
 
 
+# Bold negative cache so we don't pound the network every render after a 404.
+_FAILED_BOLD: set[str] = set()
+
+
+_GFONTS_TTF_URL_RE = re.compile(r"src:\s*url\((https://fonts\.gstatic\.com/[^)]+\.ttf)\)")
+
+
+def _discover_bold_ttf(script: str) -> str | None:
+    """Resolve a hinted Bold TTF URL via the Google Fonts CSS API.
+
+    Subtle: with a *browser* UA the CSS API returns dozens of chunked WOFF
+    URLs (per-unicode-range), useless to reportlab. With NO UA — or any
+    non-browser UA — the API returns a single .ttf URL covering the whole
+    family. So we deliberately omit the User-Agent header here.
+    """
+    family = _GFONTS_FAMILY.get(script)
+    if not family:
+        return None
+    css_url = (
+        "https://fonts.googleapis.com/css2?"
+        f"family={family.replace(' ', '+')}:wght@700&display=swap"
+    )
+    try:
+        req = urllib.request.Request(css_url)
+        # Explicitly drop any default header that python urllib might add —
+        # we want Google's "no-UA" code path that yields one TTF URL.
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            css = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        log.warning("gfonts css fetch failed for %s: %s", family, e)
+        return None
+    m = _GFONTS_TTF_URL_RE.search(css)
+    if not m:
+        log.warning("gfonts css for %s did not yield a TTF url", family)
+        return None
+    return m.group(1)
+
+
+def ensure_bold_font_file(script: str) -> pathlib.Path | None:
+    """Return a hinted Bold static TTF for ``script`` or None.
+
+    Source: Google Fonts CSS API. We fetch the CSS for the family at
+    weight 700, extract the .ttf URL it points to, and cache the binary.
+    Negative-cached separately so a transient outage doesn't poison
+    Regular registration.
+    """
+    if script in _FAILED_BOLD:
+        return None
+
+    cached = _cache_root() / f"{script}-bold.ttf"
+    if cached.exists() and cached.stat().st_size > 0:
+        return cached
+
+    with _LOCK:
+        if cached.exists() and cached.stat().st_size > 0:
+            return cached
+        try:
+            cached.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            log.warning("noto bold cache dir create failed (%s): %s", cached.parent, e)
+            _FAILED_BOLD.add(script)
+            return None
+
+        ttf_url = _discover_bold_ttf(script)
+        if not ttf_url:
+            _FAILED_BOLD.add(script)
+            return None
+
+        try:
+            req = urllib.request.Request(
+                ttf_url, headers={"User-Agent": "openhive-skills-font-fetch"},
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = resp.read()
+            if not data or len(data) < 1024:
+                _FAILED_BOLD.add(script)
+                return None
+            tmp = cached.with_suffix(".ttf.part")
+            tmp.write_bytes(data)
+            tmp.replace(cached)
+            return cached
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            log.warning("noto bold download failed %s: %s", ttf_url, e)
+            _FAILED_BOLD.add(script)
+            return None
+
+
 # Track what we've already handed to reportlab so repeat calls don't re-register
 # (reportlab treats duplicate names as errors in some versions).
 _REGISTERED: dict[str, str] = {}
+# Maps a successfully-registered Regular name → its real Bold name. Only
+# present when the hinted Bold static was downloaded and accepted by
+# reportlab. Callers use bold_variant() to ask "is there a real bold for
+# this font?"  — answer is the Regular name itself when Bold is missing.
+_REGISTERED_BOLD: dict[str, str] = {}
+
+
+def bold_variant(font_name: str) -> str:
+    """Resolve the registered Bold variant of a font name. Returns the
+    same name unchanged if no Bold was registered for it. Built-in
+    reportlab faces (Helvetica/Times-Roman/Courier) are handled by the
+    caller — this helper is for the dynamically-registered Noto family.
+    """
+    return _REGISTERED_BOLD.get(font_name, font_name)
 
 
 def register_reportlab(script: str) -> str | None:
@@ -349,14 +477,18 @@ def register_reportlab(script: str) -> str | None:
     registered font name, or None on failure.
 
     The returned name is what callers pass to ``ParagraphStyle(fontName=...)``.
-    Bold/italic variants are synthesised by reportlab from the single VF —
-    visually slightly lighter than a hinted Bold cut but perfectly legible
-    and keeps the cache small.
+    The Regular face is the variable font; we additionally try to download a
+    hinted Bold static and wire it up via ``registerFontFamily`` so ``<b>``
+    tags and ``bold=True`` styles render with real weight instead of falling
+    back to the same Regular file. If Bold acquisition fails (offline /
+    upstream change), we still register the family with Regular in every
+    slot so ``<b>`` doesn't error out — bold just won't look bold.
     """
     if script in _REGISTERED:
         return _REGISTERED[script]
     try:
         from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.pdfmetrics import registerFontFamily
         from reportlab.pdfbase.ttfonts import TTFont, TTFError
     except ImportError:
         return None
@@ -376,6 +508,34 @@ def register_reportlab(script: str) -> str | None:
     except Exception as e:  # defensive — reportlab surfaces various runtime errors
         log.warning("reportlab font register failed for %s: %s", path, e)
         return None
+
+    # Try to register a real Bold static. Best effort — don't fail the
+    # whole skill if the bold CDN is down.
+    bold_name = name  # default: bold maps to Regular (no real weight)
+    bold_path = ensure_bold_font_file(script)
+    if bold_path is not None:
+        try:
+            bkwargs = {}
+            if bold_path.suffix.lower() == ".ttc":
+                bkwargs["subfontIndex"] = 0
+            real_bold = f"{name}-Bold"
+            pdfmetrics.registerFont(TTFont(real_bold, str(bold_path), **bkwargs))
+            bold_name = real_bold
+            _REGISTERED_BOLD[name] = real_bold
+        except Exception as e:
+            log.warning("noto bold register failed for %s: %s", bold_path, e)
+
+    try:
+        registerFontFamily(
+            name,
+            normal=name,
+            bold=bold_name,
+            italic=name,
+            boldItalic=bold_name,
+        )
+    except Exception as e:
+        log.warning("registerFontFamily failed for %s: %s", name, e)
+
     _REGISTERED[script] = name
     return name
 

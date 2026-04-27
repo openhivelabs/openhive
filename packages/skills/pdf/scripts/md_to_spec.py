@@ -75,12 +75,13 @@ def main() -> int:
             i += 1
             continue
 
+        # Image syntax is intentionally dropped — the PDF skill no longer
+        # supports `image` blocks. Markdown images become a muted line with
+        # the alt text, so the document still reads coherently.
         m_img = re.match(r"^!\[([^\]]*)\]\(([^)]+)\)\s*$", stripped)
         if m_img:
-            blk = {"type": "image", "path": m_img.group(2)}
-            if m_img.group(1):
-                blk["caption"] = m_img.group(1)
-            blocks.append(blk)
+            alt = m_img.group(1) or m_img.group(2)
+            blocks.append({"type": "paragraph", "text": f"_[image omitted: {alt}]_"})
             i += 1
             continue
 

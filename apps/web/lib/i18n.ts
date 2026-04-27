@@ -304,6 +304,16 @@ const en: Dict = {
   'session.tool.groupLabel': '{count} steps',
   'session.tool.groupExpand': 'Expand',
   'session.tool.groupCollapse': 'Collapse',
+  // collapsed-group label when every step in the run came from one skill
+  'session.tool.skillUsed': 'Used {name} skill',
+  'session.tool.skillsUsed': 'Used skills: {names}',
+  // todo planning chips
+  'session.tool.todoSet': 'planned {count} todos',
+  'session.tool.todoAdd': 'added a todo',
+  'session.tool.todoComplete': 'completed a todo',
+  'session.tool.todoSetTitle': 'Planned todos',
+  'session.tool.todoAddTitle': 'Added todo',
+  'session.tool.todoCompleteTitle': 'Completed',
   // web-search / web-fetch source cards
   'session.sources.searchLabel': 'Searched the web',
   'session.sources.fetchLabel': 'Fetched page',
@@ -1004,6 +1014,14 @@ const ko: Dict = {
   'session.tool.groupLabel': '진행 내역 {count}개',
   'session.tool.groupExpand': '펼치기',
   'session.tool.groupCollapse': '접기',
+  'session.tool.skillUsed': '{name} 스킬 사용',
+  'session.tool.skillsUsed': '스킬 사용: {names}',
+  'session.tool.todoSet': '계획 수립 ({count}개)',
+  'session.tool.todoAdd': '할 일 추가',
+  'session.tool.todoComplete': '할 일 완료',
+  'session.tool.todoSetTitle': '세운 계획',
+  'session.tool.todoAddTitle': '추가한 할 일',
+  'session.tool.todoCompleteTitle': '완료',
   // web-search / web-fetch 소스 카드
   'session.sources.searchLabel': '웹 검색됨',
   'session.sources.fetchLabel': '웹 페이지 가져옴',

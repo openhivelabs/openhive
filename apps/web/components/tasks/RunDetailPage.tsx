@@ -179,6 +179,20 @@ type NestableChild =
       siblingGroupId?: string
       siblingIndex?: number
       delegate?: { mode: string; tasks: string[] }
+      /** Todo-tool payload — set when this chip is `set_todos` /
+       *  `add_todo` / `complete_todo`. The expanded view renders the
+       *  full plan so the user can see WHAT the agent decided to track
+       *  instead of just the bare tool name. `kind` distinguishes which
+       *  tool, `items` is the list of plan strings (one entry for
+       *  add_todo/complete_todo, the full plan for set_todos), and the
+       *  optional `completedIndex` highlights which item in the plan a
+       *  `complete_todo` finished — so the dropdown reads as a checklist
+       *  with one line just struck through. */
+      todo?: {
+        kind: 'set' | 'add' | 'complete'
+        items: string[]
+        completedIndex?: number
+      }
       /** Resolved node_id of the sub-agent THIS delegate spawned —
        *  populated only for delegate_to/delegate_parallel chips so the
        *  nesting pass knows which children belong here. Looked up from
@@ -224,6 +238,11 @@ type ChatItem =
        *  generic wrench for everything. */
       tool: string
       summary: string
+      /** For skill-related tool calls (`activate_skill`,
+       *  `list_skill_files`, `read_skill_file`, `run_skill_script`), the
+       *  skill name pulled straight from `args` — locale-independent so
+       *  the group-summarizer doesn't have to parse the i18n'd summary. */
+      skillName?: string
       /** Stack depth this tool_call ran at — 0 = Lead, 1 = direct
        *  subordinate, 2 = sub-sub. Used by the nesting pass to attach
        *  depth ≥ 1 items as children of the most recent delegate. */
@@ -286,11 +305,17 @@ type ChatItem =
             author: string
             tool: string
             summary: string
+            skillName?: string
             depth: number
             nodeId: string
             siblingGroupId?: string
             siblingIndex?: number
             delegate?: { mode: string; tasks: string[] }
+            todo?: {
+              kind: 'set' | 'add' | 'complete'
+              items: string[]
+              completedIndex?: number
+            }
             expectedChildNode?: string
             children?: NestableChild[]
             errorCode?: string
@@ -421,6 +446,17 @@ function summarizeTool(
   if (tool === 'ask_user') {
     return t('session.tool.askUser')
   }
+  if (tool === 'set_todos') {
+    const raw = Array.isArray(e.args?.items) ? (e.args!.items as unknown[]) : []
+    const n = raw.filter((x) => typeof x === 'string' && x.trim()).length
+    return t('session.tool.todoSet', { count: n })
+  }
+  if (tool === 'add_todo') {
+    return t('session.tool.todoAdd')
+  }
+  if (tool === 'complete_todo') {
+    return t('session.tool.todoComplete')
+  }
   if (tool === 'read_artifact') {
     return t('session.tool.readArtifact')
   }
@@ -437,6 +473,29 @@ function summarizeTool(
 
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max - 1)}…`
+}
+
+/** Pull the skill name out of a skill-related tool call's args, locale-
+ *  free. `activate_skill` carries it as `name`; the other three carry it
+ *  as `skill`. Returns undefined for non-skill tools or malformed args. */
+function extractSkillName(
+  tool: string,
+  args: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!args) return undefined
+  if (tool === 'activate_skill') {
+    const v = args.name
+    return typeof v === 'string' && v ? v : undefined
+  }
+  if (
+    tool === 'list_skill_files' ||
+    tool === 'read_skill_file' ||
+    tool === 'run_skill_script'
+  ) {
+    const v = args.skill
+    return typeof v === 'string' && v ? v : undefined
+  }
+  return undefined
 }
 
 /** Browser-side domain extractor — mirror of the server's domainFromUrl
@@ -477,6 +536,40 @@ function resolveAssigneeNode(
   return byRole?.id
 }
 
+/** Resolve a todo-tool call into a renderable payload. Returns undefined
+ *  for non-todo tools or when args don't carry usable data. The caller
+ *  passes the running plan + cursor so `complete_todo` can show which
+ *  item it just finished — the engine sends an opaque id that the FE
+ *  has no way to map back to text otherwise. */
+function extractTodoPayload(
+  tool: string,
+  args: Record<string, unknown> | undefined,
+  plan: string[],
+  cursor: number,
+): { kind: 'set' | 'add' | 'complete'; items: string[]; completedIndex?: number } | undefined {
+  if (!args) return undefined
+  if (tool === 'set_todos') {
+    const raw = Array.isArray(args.items) ? (args.items as unknown[]) : []
+    const items = raw
+      .map((x) => String(x ?? '').trim())
+      .filter((s) => s.length > 0)
+    if (!items.length) return undefined
+    return { kind: 'set', items }
+  }
+  if (tool === 'add_todo') {
+    const text = String(args.text ?? '').trim()
+    if (!text) return undefined
+    return { kind: 'add', items: [text] }
+  }
+  if (tool === 'complete_todo') {
+    if (!plan.length) return { kind: 'complete', items: [] }
+    const idx = Math.min(cursor, plan.length - 1)
+    return { kind: 'complete', items: [plan[idx] ?? ''], completedIndex: idx }
+  }
+  return undefined
+}
+
+
 function extractDelegatePayload(
   tool: string,
   args: Record<string, unknown> | undefined,
@@ -508,6 +601,7 @@ function ToolChip({
   tool,
   summary,
   delegate,
+  todo,
   children,
   errorCode,
   errorMessage,
@@ -515,6 +609,11 @@ function ToolChip({
   tool: string
   summary: string
   delegate?: { mode: string; tasks: string[] }
+  todo?: {
+    kind: 'set' | 'add' | 'complete'
+    items: string[]
+    completedIndex?: number
+  }
   children?: NestableChild[]
   errorCode?: string
   errorMessage?: string
@@ -523,7 +622,8 @@ function ToolChip({
   const Icon = iconForTool(tool)
   const [expanded, setExpanded] = useState(false)
   const hasChildren = !!children && children.length > 0
-  const expandable = !!delegate || hasChildren
+  const hasTodo = !!todo && todo.items.length > 0
+  const expandable = !!delegate || hasChildren || hasTodo
   const failed = !!errorCode
   const failedReason =
     errorCode === 'search_unavailable'
@@ -580,6 +680,43 @@ function ToolChip({
       </button>
       {expanded && (
         <div className="mt-2 ml-[7px] pl-3 border-l border-neutral-200 dark:border-neutral-800 space-y-2">
+          {hasTodo && (
+            <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-900/40 px-3 py-2.5">
+              <div className="text-[11px] uppercase tracking-wide text-neutral-400 dark:text-neutral-500 font-mono mb-1.5">
+                {todo!.kind === 'set'
+                  ? t('session.tool.todoSetTitle')
+                  : todo!.kind === 'add'
+                    ? t('session.tool.todoAddTitle')
+                    : t('session.tool.todoCompleteTitle')}
+              </div>
+              <ol className="space-y-1">
+                {todo!.items.map((item, i) => {
+                  const isCompletedRow =
+                    todo!.kind === 'complete' ||
+                    (todo!.kind === 'set' && todo!.completedIndex === i)
+                  return (
+                    <li
+                      key={`todo-${i}`}
+                      className="flex gap-2 text-[12.5px] leading-relaxed font-sans text-neutral-700 dark:text-neutral-200"
+                    >
+                      <span className="shrink-0 text-neutral-400 dark:text-neutral-500 font-mono">
+                        {todo!.kind === 'set' ? `${i + 1}.` : '•'}
+                      </span>
+                      <span
+                        className={
+                          isCompletedRow
+                            ? 'line-through text-neutral-400 dark:text-neutral-500'
+                            : ''
+                        }
+                      >
+                        {item}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ol>
+            </div>
+          )}
           {delegate?.tasks.map((task, i) => (
             <div
               key={`task-${i}`}
@@ -634,6 +771,7 @@ function NestedChild({ item }: { item: NestableChild }) {
         tool={item.tool}
         summary={item.summary}
         delegate={item.delegate}
+        todo={item.todo}
         children={item.children}
         errorCode={item.errorCode}
         errorMessage={item.errorMessage}
@@ -708,6 +846,16 @@ function buildChat(
   // Assistant messages without an explicit ts (e.g. the `final` legacy
   // fallback) get Number.POSITIVE_INFINITY so they absorb any tail artifacts.
   const assistantTsByIndex: number[] = []
+
+  // Running view of the session's todo plan, walked forward. `set_todos`
+  // returns ids in its result envelope but the engine doesn't surface
+  // those back into the transcript args, so we approximate by indexing
+  // the items[] array — `complete_todo` passes the engine-side id which
+  // we can't resolve from the FE side. To still give the user a useful
+  // dropdown for `complete_todo`, we remember the most recent plan and
+  // mark "this row is the Nth one from that plan" — see todoCursor.
+  let todoPlan: string[] = []
+  let todoCursor = 0  // next un-completed index from todoPlan
   summary.transcript.forEach((e, i) => {
     const id = `t-${i}`
     switch (e.kind) {
@@ -824,17 +972,30 @@ function buildChat(
           })
           break
         }
+        const todo = extractTodoPayload(tool, e.args, todoPlan, todoCursor)
+        // Advance the running plan view BEFORE emitting the chip so a
+        // chained set_todos → complete_todo pair stays consistent.
+        if (todo?.kind === 'set') {
+          todoPlan = [...todo.items]
+          todoCursor = 0
+        } else if (todo?.kind === 'add') {
+          todoPlan = [...todoPlan, ...todo.items]
+        } else if (todo?.kind === 'complete') {
+          todoCursor = Math.min(todoCursor + 1, todoPlan.length)
+        }
         out.push({
           kind: 'tool',
           id,
           author,
           tool,
           summary: summarizeTool(e, t),
+          skillName: extractSkillName(tool, e.args),
           depth,
           nodeId,
           siblingGroupId: e.sibling_group_id,
           siblingIndex: e.sibling_index,
           delegate: extractDelegatePayload(tool, e.args),
+          todo,
           expectedChildNode: childNode,
           errorCode: e.error_code,
           errorMessage: e.error_message,
@@ -1049,8 +1210,20 @@ function collapseToolRuns(items: ChatItem[]): ChatItem[] {
   const out: ChatItem[] = []
   type Groupable = Extract<ChatItem, { kind: 'tool' } | { kind: 'sources' }>
   let run: Groupable[] = []
+  // Skill-cluster tracking: when the run consists of consecutive
+  // skill-tool calls all referencing the same skill, we collapse it into
+  // one chip ("X 스킬 사용"), even if it's a single call. A skill name
+  // change OR a non-skill tool flushes the cluster — the user explicitly
+  // asked for "one step per skill use", not "one step per tool call".
+  let runSkillName: string | undefined
   const flush = () => {
-    if (run.length >= 2) {
+    if (run.length === 0) return
+    // Skill clusters always collapse (so a single activate_skill still
+    // renders as the compact "X 스킬 사용" line, not a noisy chip).
+    // Non-skill clusters keep the legacy "≥2 to collapse" rule so single
+    // delegate / web chips don't get hidden behind a dropdown for no reason.
+    const shouldGroup = !!runSkillName || run.length >= 2
+    if (shouldGroup) {
       out.push({
         kind: 'tool_group',
         id: `g-${run[0]!.id}`,
@@ -1062,11 +1235,13 @@ function collapseToolRuns(items: ChatItem[]): ChatItem[] {
                 author: r.author,
                 tool: r.tool,
                 summary: r.summary,
+                skillName: r.skillName,
                 depth: r.depth,
                 nodeId: r.nodeId,
                 siblingGroupId: r.siblingGroupId,
                 siblingIndex: r.siblingIndex,
                 delegate: r.delegate,
+                todo: r.todo,
                 expectedChildNode: r.expectedChildNode,
                 children: r.children,
                 errorCode: r.errorCode,
@@ -1086,13 +1261,21 @@ function collapseToolRuns(items: ChatItem[]): ChatItem[] {
               },
         ),
       })
-    } else if (run.length === 1) {
+    } else {
       out.push(run[0]!)
     }
     run = []
+    runSkillName = undefined
   }
+  const itemSkillName = (it: Groupable): string | undefined =>
+    it.kind === 'tool' ? it.skillName : undefined
   for (const it of items) {
     if (it.kind === 'tool' || it.kind === 'sources') {
+      const sn = itemSkillName(it)
+      // Skill name changed OR transitioning between skill ↔ non-skill —
+      // flush before joining the new run so each skill stays one chip.
+      if (run.length > 0 && sn !== runSkillName) flush()
+      if (run.length === 0) runSkillName = sn
       run.push(it)
     } else {
       flush()
@@ -2052,6 +2235,32 @@ function FetchStrip({ sources }: { sources: ChatSource[] }) {
   )
 }
 
+/** If every tool step in the group is one of the four skill-related
+ *  tools, return the unique skill name(s) used. We hide all the per-step
+ *  noise behind a single "X 스킬 사용" line in that case — the user
+ *  explicitly asked for a one-line summary, not the full trace.
+ *
+ *  Returns null if the group has any non-skill step (delegations, web
+ *  fetches, ask_user, etc.) so those still get the expandable list. */
+function summarizeSkillRun(
+  group: Extract<ChatItem, { kind: 'tool_group' }>,
+): string[] | null {
+  const skillTools = new Set([
+    'activate_skill',
+    'list_skill_files',
+    'read_skill_file',
+    'run_skill_script',
+  ])
+  const names: string[] = []
+  for (const it of group.items) {
+    if (it.kind !== 'tool') return null
+    if (!skillTools.has(it.tool)) return null
+    const name = it.skillName
+    if (name && !names.includes(name)) names.push(name)
+  }
+  return names.length ? names : null
+}
+
 function ToolGroupBar({
   group,
 }: {
@@ -2059,6 +2268,22 @@ function ToolGroupBar({
 }) {
   const t = useT()
   const [expanded, setExpanded] = useState(false)
+
+  // Skill-only group → single static line, no expand.
+  const skillNames = summarizeSkillRun(group)
+  if (skillNames) {
+    const label =
+      skillNames.length === 1
+        ? t('session.tool.skillUsed', { name: skillNames[0]! })
+        : t('session.tool.skillsUsed', { names: skillNames.join(', ') })
+    return (
+      <div className="inline-flex items-center gap-1.5 text-[13px] text-neutral-500 dark:text-neutral-400">
+        <Wrench className="w-3.5 h-3.5 shrink-0 opacity-60" />
+        <span className="font-medium">{label}</span>
+      </div>
+    )
+  }
+
   const label = t('session.tool.groupLabel', { count: group.items.length })
   return (
     <div>
@@ -2090,6 +2315,7 @@ function ToolGroupBar({
                   tool={slot.item.tool}
                   summary={slot.item.summary}
                   delegate={slot.item.delegate}
+                  todo={slot.item.todo}
                   children={slot.item.children}
                   errorCode={slot.item.errorCode}
                   errorMessage={slot.item.errorMessage}
@@ -2733,6 +2959,7 @@ const ChatBubble = memo(
         tool={item.tool}
         summary={item.summary}
         delegate={item.delegate}
+        todo={item.todo}
         children={item.children}
         errorCode={item.errorCode}
         errorMessage={item.errorMessage}
