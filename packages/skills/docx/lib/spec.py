@@ -36,6 +36,7 @@ BLOCK_TYPES = {
     "gantt",
     "faq", "pricing_table", "author", "step_list", "code_diff",
     "bibliography", "qr_code", "stat_list",
+    "columns", "margin_note", "checklist", "page_border", "index",
 }
 
 ALIGN_VALUES = {"left", "center", "right", "justify"}
@@ -239,6 +240,22 @@ def _validate_block(i: int, block: Any, warnings: list[str]) -> None:
         items = block.get("stats")
         if not isinstance(items, list) or not items:
             raise SpecError(f"{here}.stats: non-empty array required")
+    elif t == "columns":
+        cols = block.get("cols", 2)
+        if not isinstance(cols, int) or not (1 <= cols <= 6):
+            raise SpecError(f"{here}.cols: must be int 1..6")
+    elif t == "margin_note":
+        _req_str(block, "text", here)
+    elif t == "checklist":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.items: non-empty array required")
+    elif t == "page_border":
+        # decorative — fields all optional
+        pass
+    elif t == "index":
+        # decorative + INDEX field
+        pass
     elif t == "spacer":
         h = block.get("height", 12)
         if not isinstance(h, (int, float)) or h < 0:

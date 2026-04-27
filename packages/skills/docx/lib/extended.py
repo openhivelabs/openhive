@@ -915,6 +915,146 @@ def render_stat_list(doc, block: dict, theme: Theme) -> None:
                      color=theme.muted)
 
 
+def render_columns(doc, block: dict, theme: Theme) -> None:
+    """Render an N-column body section (newspaper-style). Following
+    blocks render inside the column flow until a section_break or end of doc.
+
+    Implementation: end the current section, start a new one with
+    ``cols`` columns, then render the children inside.
+    """
+    from docx.enum.section import WD_SECTION
+    cols = int(block.get("cols", 2))
+    section = doc.add_section(WD_SECTION.CONTINUOUS)
+    sectPr = section._sectPr
+    cols_el = sectPr.find(qn("w:cols"))
+    if cols_el is None:
+        cols_el = etree.SubElement(sectPr, qn("w:cols"))
+    cols_el.set(qn("w:num"), str(cols))
+    cols_el.set(qn("w:space"), str(int(block.get("gap_twips", 360))))
+    children = block.get("blocks") or []
+    if children:
+        from .renderers import RENDERERS as _R
+        for child in children:
+            renderer = _R.get(child.get("type"))
+            if renderer is None:
+                continue
+            renderer(doc, child, theme)
+        # close columns by starting a new continuous section with 1 col
+        end_section = doc.add_section(WD_SECTION.CONTINUOUS)
+        end_cols = etree.SubElement(end_section._sectPr, qn("w:cols"))
+        end_cols.set(qn("w:num"), "1")
+
+
+def render_margin_note(doc, block: dict, theme: Theme) -> None:
+    """Right-margin floating note. Anchored frame in the right margin so
+    body copy flows past it cleanly.
+    """
+    p = doc.add_paragraph()
+    pPr = p._p.get_or_add_pPr()
+    framePr = etree.SubElement(pPr, qn("w:framePr"))
+    framePr.set(qn("w:w"), "1900")            # ~1.3 inch
+    framePr.set(qn("w:hSpace"), "180")
+    framePr.set(qn("w:wrap"), "around")
+    framePr.set(qn("w:vAnchor"), "text")
+    framePr.set(qn("w:hAnchor"), "page")
+    framePr.set(qn("w:x"), "9000")            # roughly right margin
+    framePr.set(qn("w:y"), "0")
+    pBdr = etree.SubElement(pPr, qn("w:pBdr"))
+    left = etree.SubElement(pBdr, qn("w:left"))
+    left.set(qn("w:val"), "single")
+    left.set(qn("w:sz"), "16")
+    left.set(qn("w:color"), "{:02X}{:02X}{:02X}".format(*theme.accent))
+    if block.get("title"):
+        tr = p.add_run(str(block["title"]) + "\n")
+        _stylize(tr, font=theme.heading_font, size=theme.size_small,
+                 color=theme.accent, bold=True)
+    from .inline import add_inline_runs
+    p.paragraph_format.left_indent = Inches(0.1)
+    # we need a text run after the title — call add_inline_runs on the same para
+    add_inline_runs(p, str(block["text"]), theme,
+                    font=theme.body_font, size=theme.size_small,
+                    color=theme.fg)
+
+
+def render_checklist(doc, block: dict, theme: Theme) -> None:
+    """Interactive-looking checklist using ☐ / ☑ glyphs. Each item is
+    either a plain string (unchecked) or {text, checked}.
+    """
+    for item in block["items"]:
+        if isinstance(item, str):
+            text, checked = item, False
+        else:
+            text, checked = item.get("text", ""), bool(item.get("checked"))
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(2)
+        glyph = p.add_run("☑ " if checked else "☐ ")
+        _stylize(glyph, font=theme.heading_font, size=theme.size_body,
+                 color=theme.success if checked else theme.muted, bold=True)
+        from .inline import add_inline_runs
+        add_inline_runs(p, str(text), theme,
+                        font=theme.body_font, size=theme.size_body,
+                        color=theme.muted if checked else theme.fg)
+
+
+def render_page_border(doc, block: dict, theme: Theme) -> None:
+    """Apply a decorative page border to the current section.
+
+    Options: ``style`` (single|double|thick|dashed), ``color`` (RGB or theme.accent),
+    ``size`` (eighths of a point), ``space`` (pt from edge).
+    """
+    section = doc.sections[-1]
+    sectPr = section._sectPr
+    pgBorders = sectPr.find(qn("w:pgBorders"))
+    if pgBorders is None:
+        pgBorders = etree.SubElement(sectPr, qn("w:pgBorders"))
+    pgBorders.set(qn("w:offsetFrom"), "page")
+    color = block.get("color") or theme.accent
+    if isinstance(color, list):
+        color = tuple(color)
+    color_hex = "{:02X}{:02X}{:02X}".format(*color)
+    style = block.get("style", "single")
+    sz = str(int(block.get("size", 12)))
+    space = str(int(block.get("space", 24)))
+    for side in ("top", "left", "bottom", "right"):
+        b = pgBorders.find(qn(f"w:{side}"))
+        if b is None:
+            b = etree.SubElement(pgBorders, qn(f"w:{side}"))
+        b.set(qn("w:val"), style)
+        b.set(qn("w:sz"), sz)
+        b.set(qn("w:space"), space)
+        b.set(qn("w:color"), color_hex)
+
+
+def render_index(doc, block: dict, theme: Theme) -> None:
+    """Insert an INDEX field. Index entries (XE) need to be added to the
+    body separately; this just emits the placeholder where the index
+    will render after Word refreshes fields.
+    """
+    title = block.get("title", "Index")
+    tp = doc.add_paragraph()
+    tp.paragraph_format.space_after = Pt(4)
+    tr = tp.add_run(title)
+    _stylize(tr, font=theme.heading_font, size=theme.size_h2,
+             color=theme.heading, bold=True)
+    p = doc.add_paragraph()
+    run = p.add_run()
+    fld = etree.SubElement(run._r, qn("w:fldChar"))
+    fld.set(qn("w:fldCharType"), "begin"); fld.set(qn("w:dirty"), "true")
+    instr_run = p.add_run()
+    it = etree.SubElement(instr_run._r, qn("w:instrText"))
+    it.text = ' INDEX \\h "A" \\c "2" '
+    it.set(qn("xml:space"), "preserve")
+    sep_run = p.add_run()
+    sep = etree.SubElement(sep_run._r, qn("w:fldChar"))
+    sep.set(qn("w:fldCharType"), "separate")
+    placeholder_run = p.add_run("Updating index…")
+    _stylize(placeholder_run, font=theme.body_font, size=theme.size_small,
+             color=theme.muted, italic=True)
+    end_run = p.add_run()
+    end = etree.SubElement(end_run._r, qn("w:fldChar"))
+    end.set(qn("w:fldCharType"), "end")
+
+
 def _shade_fill(cell, rgb: tuple[int, int, int]) -> None:
     tcPr = cell._tc.get_or_add_tcPr()
     shd = tcPr.find(qn("w:shd"))

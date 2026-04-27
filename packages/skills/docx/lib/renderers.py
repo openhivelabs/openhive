@@ -1254,6 +1254,11 @@ def _register_extended() -> None:
         "bibliography": _ext.render_bibliography,
         "qr_code": _ext.render_qr_code,
         "stat_list": _ext.render_stat_list,
+        "columns": _ext.render_columns,
+        "margin_note": _ext.render_margin_note,
+        "checklist": _ext.render_checklist,
+        "page_border": _ext.render_page_border,
+        "index": _ext.render_index,
     })
     from . import comments as _cmt
     RENDERERS["comment"] = _cmt.render_comment
