@@ -1131,6 +1131,19 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   // completed; reused as the synthetic node_finished output so the bubble
   // matches what the user already saw streamed.
   let previousRoundOutput = ''
+  // A round whose tool calls are exclusively read-only skill exploration
+  // (`activate_skill` returns SKILL.md, `list_skill_files` / `read_skill_file`
+  // return docs) does no user-facing work — it's the model orienting itself
+  // before the actual action. Treating each of those as a budget round meant
+  // a single skill use could burn 5-10 of the 24 rounds on bookkeeping and
+  // hit the limit before producing anything. We refund those rounds; rounds
+  // that include any "doing" tool (`run_skill_script`, `delegate_to`, web,
+  // sql, mcp, …) still count normally.
+  const EXPLORATION_TOOLS = new Set([
+    'activate_skill',
+    'list_skill_files',
+    'read_skill_file',
+  ])
   while (true) {
     if (depth === 0 && rounds > 0 && inboxHasPending(sessionId)) {
       for (const ev of makeEarlyExitEvents({
@@ -1178,6 +1191,11 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
     }
 
     let turnDone = false
+    // Names of every tool the model invoked during this round (filled by
+    // the streamTurn loop below). After the round closes we use this to
+    // decide whether to refund the round counter — see EXPLORATION_TOOLS
+    // declaration above.
+    const toolsThisRound: string[] = []
     // A2: splice SessionStart-hook `additionalContext` onto the system prompt
     // only for the Lead's first turn. Downstream sub-agent nodes and later
     // turns in the same session see the vanilla prompt.
@@ -1205,6 +1223,9 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
       depth,
       chainKey,
     })) {
+      if (ev.kind === 'tool_called' && typeof ev.tool_name === 'string') {
+        toolsThisRound.push(ev.tool_name)
+      }
       if (ev.kind === 'node_finished' && ev.data._turn_marker === true) {
         const stopReason = ev.data.stop_reason as string | undefined
         const output = typeof ev.data.output === 'string' ? ev.data.output : ''
@@ -1225,6 +1246,26 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
           { depth, node_id: node.id },
         )
         if (stopReason === 'tool_calls') {
+          // Round-counter refund for pure skill-exploration rounds.
+          // If this round emitted only read-only orientation tools
+          // (activate_skill/list_skill_files/read_skill_file), don't
+          // burn budget on it — the user's mental model is "skill use
+          // = 1 step", and reading SKILL.md / refs is part of that
+          // single step, not 5 separate ones. Mixed rounds (any
+          // run_skill_script, delegation, web, sql, mcp, etc.) still
+          // count normally. HARD_MAX_TOOL_ROUNDS still gates abuse.
+          if (
+            toolsThisRound.length > 0 &&
+            toolsThisRound.every((n) => EXPLORATION_TOOLS.has(n))
+          ) {
+            rounds -= 1
+            yield makeEvent(
+              'round_refunded',
+              sessionId,
+              { round: rounds + 1, tools: [...toolsThisRound] },
+              { depth, node_id: node.id },
+            )
+          }
           turnDone = true
           break
         }
@@ -1270,28 +1311,55 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
 }
 
 /** Last-ditch assistant reply when the provider returns an empty round
- *  after tool execution. Concatenates whatever the most recent tool
- *  results contained into a short summary so the user at least sees the
- *  work product instead of a blank bubble. Locale-aware prefix. */
+ *  after tool execution. We intentionally do NOT dump the raw tool
+ *  envelope — for skill calls that's a JSON blob like
+ *  `{"ok":true,"exit_code":0,"stdout":"...","files":[]}` which is just
+ *  noise in the chat. Show a short, user-readable summary of what got
+ *  produced (file names from skill envelopes) and a retry hint. Locale-
+ *  aware. */
 function buildEmptyRoundFallback(
   history: ChatMessage[],
   locale: 'ko' | 'en',
 ): string {
-  const toolOutputs: string[] = []
+  // Walk backward through the trailing run of tool messages and pull
+  // out anything user-readable: file names from skill envelopes, short
+  // text snippets from non-skill tools.
+  const fileNames = new Set<string>()
+  let toolMsgCount = 0
   for (let i = history.length - 1; i >= 0; i--) {
     const m = history[i]!
     if (m.role !== 'tool') break
+    toolMsgCount++
     const c = typeof m.content === 'string' ? m.content : ''
-    if (c) toolOutputs.unshift(c)
+    if (!c) continue
+    try {
+      const env = JSON.parse(c) as { files?: Array<{ name?: string }> }
+      if (Array.isArray(env.files)) {
+        for (const f of env.files) {
+          if (f && typeof f.name === 'string' && f.name) fileNames.add(f.name)
+        }
+      }
+    } catch {
+      // Non-JSON tool result — ignore body, we don't dump it.
+    }
   }
   const prefix =
     locale === 'ko'
-      ? '정리 도중 응답이 비어 중단됐습니다. 아래는 지금까지 수집된 원본 결과입니다 — 다시 시도해 주세요.'
-      : 'The model returned an empty follow-up response. Here is the raw tool output gathered so far — please retry.'
-  if (toolOutputs.length === 0) return prefix
-  const joined = toolOutputs.join('\n\n---\n\n')
-  const capped = joined.length > 4000 ? `${joined.slice(0, 4000)}\n\n…(truncated)` : joined
-  return `${prefix}\n\n${capped}`
+      ? '모델이 응답을 비워 보냈습니다. 다시 시도해 주세요.'
+      : 'The model returned an empty response. Please retry.'
+  if (fileNames.size > 0) {
+    const list = [...fileNames].map((n) => `- ${n}`).join('\n')
+    const label = locale === 'ko' ? '생성된 파일' : 'Files produced'
+    return `${prefix}\n\n${label}:\n${list}`
+  }
+  if (toolMsgCount > 0) {
+    const note =
+      locale === 'ko'
+        ? `직전 ${toolMsgCount}개 도구 호출은 정상 종료했지만 모델이 그 뒤로 응답을 잇지 않았습니다.`
+        : `The last ${toolMsgCount} tool call(s) returned successfully, but the model did not follow up with a response.`
+    return `${prefix}\n\n${note}`
+  }
+  return prefix
 }
 
 // -------- provider turn --------

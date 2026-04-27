@@ -15,6 +15,10 @@ Two edit tracks (same philosophy as docx skill):
 
 Usage:
     python edit_doc.py --in in.pdf --patch patch.json --out out.pdf
+    # patch can also be passed via stdin (preferred — keeps JSON out of the
+    # artifact directory):
+    echo '{...}' | python edit_doc.py --in in.pdf --out out.pdf
+    python edit_doc.py --in in.pdf --patch - --out out.pdf
     # spec auto-loaded from <in>.spec.json if present
     # or explicit: --spec in.pdf.spec.json
 """
@@ -24,8 +28,10 @@ import argparse
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
+import tempfile
 
 SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_ROOT))
@@ -43,9 +49,14 @@ SPEC_OPS = {"set_text", "replace_block", "insert_block", "delete_block",
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="inp", required=True)
-    ap.add_argument("--patch", required=True)
+    ap.add_argument("--patch", default=None,
+                    help="Path to patch JSON. '-' or omitted reads stdin.")
     ap.add_argument("--out", required=True)
     ap.add_argument("--spec", default=None)
+    ap.add_argument("--scratch", action="store_true",
+                    help="Write to --out literally (skip OPENHIVE_OUTPUT_DIR). "
+                         "Use for verification renders that should not appear "
+                         "in the chat artifact panel.")
     args = ap.parse_args()
 
     try:
@@ -55,11 +66,11 @@ def main() -> int:
         return 1
 
     inp = pathlib.Path(args.inp).expanduser()
-    out = resolve_out(args.out)
+    out = resolve_out(args.out, scratch=args.scratch)
     out.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        patch = json.load(open(args.patch, "r", encoding="utf-8"))
+        patch = _load_patch(args.patch)
     except Exception as e:
         print(json.dumps({"ok": False, "error": f"patch load failed: {e}"}))
         return 1
@@ -84,6 +95,11 @@ def main() -> int:
     # spec rebuild reset pages.
     current_source = inp
 
+    # Scratch dir for every interim artifact (rebuilt PDFs, step files,
+    # spec snapshots). Lives under /tmp so OPENHIVE_OUTPUT_DIR — and the
+    # chat artifact panel that mirrors it — never sees these files.
+    work = pathlib.Path(tempfile.mkdtemp(prefix="pdf_edit_"))
+
     if spec_ops:
         spec_path = pathlib.Path(args.spec) if args.spec else pathlib.Path(str(inp) + ".spec.json")
         if not spec_path.exists():
@@ -105,9 +121,10 @@ def main() -> int:
             print(json.dumps({"ok": False, "error": str(e)}))
             return 1
 
-        # write spec, rebuild PDF
-        interim_pdf = out.with_suffix(".__interim.pdf")
-        interim_spec = interim_pdf.with_suffix(interim_pdf.suffix + ".spec.json")
+        # write spec, rebuild PDF — both into the scratch dir so they never
+        # surface as chat attachments
+        interim_pdf = work / "interim.pdf"
+        interim_spec = work / "interim.pdf.spec.json"
         interim_spec.write_text(json.dumps(spec, ensure_ascii=False, indent=2),
                                 encoding="utf-8")
         build_path = pathlib.Path(__file__).resolve().parent / "build_doc.py"
@@ -129,10 +146,11 @@ def main() -> int:
             return 1
         current_source = interim_pdf
 
-    # now apply page ops sequentially
+    # now apply page ops sequentially. Step files go to the scratch dir;
+    # only the final pass writes to `out`.
     for i, op in enumerate(page_ops):
         kind = op["op"]
-        next_path = out.with_suffix(f".__step{i}.pdf") if i < len(page_ops) - 1 else out
+        next_path = (work / f"step{i}.pdf") if i < len(page_ops) - 1 else out
         try:
             if kind == "merge":
                 inputs = [str(current_source)] + list(op.get("append", []))
@@ -180,24 +198,16 @@ def main() -> int:
 
     # if no page ops and we did spec-rebuild, move interim → out
     if not page_ops and spec_ops:
-        pathlib.Path(current_source).replace(out)
-        # also save the new spec next to the out file
+        shutil.move(str(current_source), str(out))
+        # also save the new spec next to the out file (this one is intentional —
+        # downstream spec ops need it to round-trip)
         out_spec = out.with_suffix(out.suffix + ".spec.json")
-        spec_ops_interim = interim_pdf.with_suffix(interim_pdf.suffix + ".spec.json")
-        if spec_ops_interim.exists():
-            spec_ops_interim.replace(out_spec)
+        scratch_spec = work / "interim.pdf.spec.json"
+        if scratch_spec.exists():
+            shutil.move(str(scratch_spec), str(out_spec))
 
-    # clean intermediate step files
-    for p in list(out.parent.glob(f"{out.stem}.__step*.pdf")):
-        try: p.unlink()
-        except OSError: pass
-    interim = out.with_suffix(".__interim.pdf")
-    interim_spec = interim.with_suffix(interim.suffix + ".spec.json")
-    for p in (interim, interim_spec):
-        try:
-            if p.exists(): p.unlink()
-        except OSError:
-            pass
+    # tear down the scratch dir; everything in it was internal to this run
+    shutil.rmtree(work, ignore_errors=True)
 
     # final report
     try:
@@ -211,6 +221,15 @@ def main() -> int:
         "spec_ops": len(spec_ops), "page_ops": len(page_ops),
     }, ensure_ascii=False))
     return 0
+
+
+def _load_patch(path: str | None) -> dict:
+    """Load patch JSON. None or '-' → stdin (preferred — keeps the JSON out of
+    OPENHIVE_OUTPUT_DIR and therefore out of the chat artifact panel)."""
+    if not path or path == "-":
+        return json.load(sys.stdin)
+    with open(pathlib.Path(path).expanduser(), "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def _apply_spec_ops(spec: dict, ops: list[dict]) -> dict:
