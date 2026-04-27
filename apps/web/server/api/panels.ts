@@ -6,8 +6,16 @@ import {
   executeAction,
   ActionError,
 } from '@/lib/server/panels/actions'
-import { synthesizeKanbanActions } from '@/lib/server/panels/synthesize'
-import { getMemo, setMemo } from '@/lib/server/panels/memos'
+import {
+  synthesizeKanbanActions,
+  synthesizeTableActions,
+} from '@/lib/server/panels/synthesize'
+import {
+  createMemo,
+  deleteMemo,
+  listMemos,
+  updateMemo,
+} from '@/lib/server/panels/memos'
 import { get } from '@/lib/server/panels/cache'
 import { apply as applyMapper } from '@/lib/server/panels/mapper'
 import { enrichKanbanTaxonomy, refreshOneNow } from '@/lib/server/panels/refresher'
@@ -100,13 +108,23 @@ panels.post('/rebind', async (c) => {
     }
   })()
   try {
+    const panelType = String((body.spec as { type?: unknown }).type ?? '')
+    // Memo panels have no data binding — return the spec's binding
+    // unchanged instead of asking the LLM to "bind" a content-only panel.
+    if (panelType === 'memo') {
+      return c.json({
+        ok: true,
+        binding: (body.spec as { binding?: unknown }).binding ?? null,
+        panel_type: panelType,
+        data: null,
+      })
+    }
     const aiResult = await aiBindPanel({
       panel: body.spec,
       schema,
       userIntent,
     })
     const binding = aiResult.binding
-    const panelType = String((body.spec as { type?: unknown }).type ?? '')
     const ctx = {
       companySlug: resolved.companySlug,
       teamSlug: resolved.teamSlug,
@@ -163,8 +181,8 @@ panels.post('/rebind', async (c) => {
   }
 })
 
-// GET /api/panels/:panelId/memo?teamId=...
-panels.get('/:panelId/memo', (c) => {
+// GET /api/panels/:panelId/memos?teamId=...
+panels.get('/:panelId/memos', (c) => {
   const panelId = c.req.param('panelId')
   const teamId = c.req.query('teamId')
   if (typeof teamId !== 'string' || !teamId) {
@@ -172,12 +190,12 @@ panels.get('/:panelId/memo', (c) => {
   }
   const slugs = resolveTeamSlugs(teamId)
   if (!slugs) return c.json({ detail: 'team not found' }, 404)
-  return c.json(getMemo(slugs.companySlug, teamId, panelId))
+  return c.json({ notes: listMemos(slugs.companySlug, teamId, panelId) })
 })
 
-// PUT /api/panels/:panelId/memo
-// Body: { teamId: string, content: string }
-panels.put('/:panelId/memo', async (c) => {
+// POST /api/panels/:panelId/memos
+// Body: { teamId, content? }
+panels.post('/:panelId/memos', async (c) => {
   const panelId = c.req.param('panelId')
   const body = (await c.req.json().catch(() => ({}))) as {
     teamId?: unknown
@@ -189,7 +207,47 @@ panels.put('/:panelId/memo', async (c) => {
   const content = typeof body.content === 'string' ? body.content : ''
   const slugs = resolveTeamSlugs(body.teamId)
   if (!slugs) return c.json({ detail: 'team not found' }, 404)
-  return c.json(setMemo(slugs.companySlug, body.teamId, panelId, content))
+  return c.json(createMemo(slugs.companySlug, body.teamId, panelId, content))
+})
+
+// PATCH /api/panels/:panelId/memos/:noteId
+// Body: { teamId, content?, sort_order? }
+panels.patch('/:panelId/memos/:noteId', async (c) => {
+  const panelId = c.req.param('panelId')
+  const noteId = c.req.param('noteId')
+  const body = (await c.req.json().catch(() => ({}))) as {
+    teamId?: unknown
+    content?: unknown
+    sort_order?: unknown
+  }
+  if (typeof body.teamId !== 'string' || !body.teamId) {
+    return c.json({ detail: 'teamId required' }, 400)
+  }
+  const slugs = resolveTeamSlugs(body.teamId)
+  if (!slugs) return c.json({ detail: 'team not found' }, 404)
+  const patch: { content?: string; sort_order?: number } = {}
+  if (typeof body.content === 'string') patch.content = body.content
+  if (typeof body.sort_order === 'number' && Number.isFinite(body.sort_order)) {
+    patch.sort_order = body.sort_order
+  }
+  const row = updateMemo(slugs.companySlug, body.teamId, panelId, noteId, patch)
+  if (!row) return c.json({ detail: 'memo not found' }, 404)
+  return c.json(row)
+})
+
+// DELETE /api/panels/:panelId/memos/:noteId
+panels.delete('/:panelId/memos/:noteId', async (c) => {
+  const panelId = c.req.param('panelId')
+  const noteId = c.req.param('noteId')
+  const teamId = c.req.query('teamId')
+  if (typeof teamId !== 'string' || !teamId) {
+    return c.json({ detail: 'teamId required' }, 400)
+  }
+  const slugs = resolveTeamSlugs(teamId)
+  if (!slugs) return c.json({ detail: 'team not found' }, 404)
+  const ok = deleteMemo(slugs.companySlug, teamId, panelId, noteId)
+  if (!ok) return c.json({ detail: 'memo not found' }, 404)
+  return c.json({ ok: true })
 })
 
 // GET /api/panels/:panelId/data
@@ -243,11 +301,18 @@ panels.post('/:panelId/actions/:actionId', async (c) => {
   // to panel data so client and server agree on which IDs are valid.
   let action: PanelActionSpec | null = persistedAction ?? null
   if (!action && typeof panel.type === 'string') {
-    const synthesized = synthesizeKanbanActions(
-      panel.type,
-      (panel.binding ?? {}) as Record<string, unknown>,
-      slugs.companySlug,
-    )
+    const synthesized = [
+      ...synthesizeKanbanActions(
+        panel.type,
+        (panel.binding ?? {}) as Record<string, unknown>,
+        slugs.companySlug,
+      ),
+      ...synthesizeTableActions(
+        panel.type,
+        (panel.binding ?? {}) as Record<string, unknown>,
+        slugs.companySlug,
+      ),
+    ]
     const match = synthesized.find((a) => a.id === actionId)
     if (match) action = match as unknown as PanelActionSpec
   }

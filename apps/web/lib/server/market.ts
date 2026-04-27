@@ -81,6 +81,7 @@ export type PanelPreview =
   | { kind: 'heatmap'; rowLabels: string[]; colLabels: string[]; values: number[][]; subtitle?: string }
   | { kind: 'stat_row'; stats: { label: string; value: string }[]; subtitle?: string }
   | { kind: 'calendar'; month: string; days: { day: number; events?: number; today?: boolean; muted?: boolean }[]; subtitle?: string }
+  | { kind: 'memo'; text: string; subtitle?: string }
 
 export interface MarketIndex {
   companies: MarketEntry[]
@@ -238,6 +239,10 @@ function coercePreview(raw: unknown): PanelPreview | undefined {
       }
       if (!month || days.length === 0) return undefined
       return { kind: 'calendar', month, days, subtitle }
+    }
+    case 'memo': {
+      const text = typeof r.text === 'string' ? r.text : ''
+      return { kind: 'memo', text, subtitle }
     }
     case 'stat_row': {
       if (!Array.isArray(r.stats)) return undefined

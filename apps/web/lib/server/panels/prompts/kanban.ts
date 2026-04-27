@@ -47,4 +47,9 @@ Rules for kanban panels:
 - When you also emit \`setup_sql\` (new-table case), the CREATE TABLE MUST
   include a matching \`CHECK (<group_by> IN ('stage1','stage2',...))\`
   constraint with the SAME values, so the DB enforces what the form
-  promises. The DEFAULT for the group_by column should be the first stage.`
+  promises. The DEFAULT for the group_by column should be the first stage.
+- ALWAYS include a \`sort_order REAL DEFAULT 0\` column when emitting
+  \`setup_sql\` for a kanban table — the renderer uses it to persist
+  within-column drag reorders (cards rearranged by hand stay put on
+  refresh). The SELECT MUST list \`sort_order\` and ORDER BY status,
+  sort_order so cards render in the user's chosen sequence.`

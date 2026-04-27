@@ -161,23 +161,6 @@
       }
     },
     {
-      "id": "data-entry",
-      "name": "Data Entry Form",
-      "description": "Form for inserting rows into a team_data table. Tell the AI which table on install — it auto-generates fields from the schema. NOT NULL columns get a red *. External (MCP) writes need manual SQL via the Code editor.",
-      "author": "OpenHive",
-      "category": "table",
-      "tags": ["form", "input", "entry", "create", "insert"],
-      "preview": {
-        "kind": "table",
-        "subtitle": "Add row",
-        "columns": ["field", "value"],
-        "rows": [
-          ["Title *", "..."],
-          ["Status *", "todo"]
-        ]
-      }
-    },
-    {
       "id": "kanban-board",
       "name": "Kanban Board",
       "description": "Cards organized into columns by a status / stage column. Use for task boards, sales pipelines, or any flow-style data.",
@@ -240,7 +223,7 @@
       "preview": {
         "kind": "memo",
         "subtitle": "Note",
-        "text": "# Standup\n- Ship memo panel\n- Review PR #42\n- Sync w/ design"
+        "text": "# Standup\n- Ship memo panel\n- Review PR #42\n- Sync w/ design\n\n# 회의 메모\n- 디자인 리뷰 다음주\n- API 문서 업데이트"
       }
     },
     {

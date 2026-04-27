@@ -252,7 +252,13 @@ market.post('/install/apply', async (c) => {
         return { tables: [], recent_migrations: [] }
       }
     })()
-    const useAi = userIntent !== null || (schema.tables?.length ?? 0) > 0
+    // Memo panels carry no data binding (content lives in `panel_memos`),
+    // so the AI binder has nothing to do — skip it unconditionally even
+    // when the team already has tables.
+    const panelType = String(panel.type ?? '')
+    const useAi =
+      panelType !== 'memo' &&
+      (userIntent !== null || (schema.tables?.length ?? 0) > 0)
 
     if (useAi) {
       // Trust the prebuilt binding from a prior preview call when present —
@@ -408,6 +414,19 @@ market.post('/install/ai-bind-preview', async (c) => {
         return { tables: [], recent_migrations: [] }
       }
     })()
+    const panelType = String(panel.type ?? '')
+    // Memo panels carry no binding — short-circuit so the preview endpoint
+    // doesn't fire an LLM call (which the binder rejects with "did not
+    // return JSON" since memo panels have nothing to bind).
+    if (panelType === 'memo') {
+      return c.json({
+        ok: true,
+        binding: panel.binding ?? null,
+        panel_type: panelType,
+        data: null,
+        setup_sql: null,
+      })
+    }
     const aiResult = await aiBindPanel({
       panel,
       description,
@@ -415,7 +434,6 @@ market.post('/install/ai-bind-preview', async (c) => {
       userIntent,
     })
     const binding = aiResult.binding
-    const panelType = String(panel.type ?? '')
     const resolved = resolveTeamSlugs(teamId)
     if (!resolved) {
       return c.json({ detail: 'team not found' }, 404)

@@ -131,7 +131,7 @@ async function execMcp(config: Record<string, unknown>): Promise<unknown> {
   // separate install/setup_sql path — never here.
   assertReadOnlyMcpCall(tool, args as Record<string, unknown>)
   const text = await withTimeout(
-    mcpCallTool(server, tool, args as Record<string, unknown>),
+    mcpCallTool(server, tool, args as Record<string, unknown>, { cap: false }),
     DEFAULT_TIMEOUT_MS,
     'mcp call',
   )

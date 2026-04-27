@@ -37,7 +37,7 @@ OUTPUT: strict JSON for the \`binding\` field. Schema:
                         | { "kind": "open_url", "url_field": "<dotted path in row>" }
       },
       "refresh_seconds": <int, 0 = manual only, 30..3600 recommended>,
-      "actions": [ ... only for type=form, see FORM PANELS below ]
+      "actions": [ ... for type=form/kanban/calendar/table; see per-type chapter ]
     }
 
 Config shapes per source kind:

@@ -15,7 +15,7 @@ import { extractCheckOptions, getTableCreateSql } from '../team-data'
 import * as panelCache from './cache'
 import { apply as applyMapper } from './mapper'
 import { execute as executeSource, type SourceContext } from './sources'
-import { synthesizeKanbanActions } from './synthesize'
+import { synthesizeKanbanActions, synthesizeTableActions } from './synthesize'
 
 /** Per-panel in-flight promise. When a refresh is already running we hand
  *  the same promise to subsequent callers instead of kicking off a parallel
@@ -234,6 +234,9 @@ function enrichSynthesizedActions(
   binding: Record<string, unknown>,
   companySlug: string,
 ): void {
-  const synthesized = synthesizeKanbanActions(panelType, binding, companySlug)
+  const synthesized = [
+    ...synthesizeKanbanActions(panelType, binding, companySlug),
+    ...synthesizeTableActions(panelType, binding, companySlug),
+  ]
   if (synthesized.length > 0) shaped.synthesized_actions = synthesized
 }
