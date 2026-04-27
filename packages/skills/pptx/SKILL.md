@@ -29,6 +29,12 @@ What is the request?
 ├─ Inspect deck shape (slide/chart/table/image counts, title summary, etc.)
 │   → scripts/inspect_deck.py --in <pptx>
 │
+├─ Sanity-check structural integrity (post-raw-XML edit, before delivery)
+│   → scripts/validate_deck.py --in <pptx>
+│     Walks every OOXML part: well-formedness, content-types coverage,
+│     relationship targets resolvable. Catches "PowerPoint found a problem"
+│     and Keynote "recovered file" before the user sees the dialog.
+│
 └─ Exceptions not covered by the DSL (animations/masters/SmartArt, etc.)
     → reference/xml_edit_guide.md + reference/snippets/ + reference/schemas/
       then edit raw XML directly with helpers/opc.py
@@ -50,6 +56,7 @@ Every script prints **one JSON line on success**, or `{"ok": false, "error": ...
 - `inspect_deck.py` → rich slide structure + chart/table/image metadata
 - `extract_deck.py` → `{"ok": true, "path": ..., "slides": N, "warnings": [...]}` + spec file
 - `md_to_spec.py`  → `{"ok": true, "path": ..., "slides": N}`
+- `validate_deck.py` → `{"ok": true, "parts": N, "slides": M, "warnings": [...]}` or `{"ok": false, "error": ..., "details": [...]}`
 
 ## Edit rules (edit_deck)
 
@@ -78,11 +85,12 @@ pptx/
 │   └── chart_data.py             # chart data update/extract
 ├── scripts/                      # CLI entrypoints
 │   ├── build_deck.py, inspect_deck.py, extract_deck.py,
-│   ├── edit_deck.py, md_to_spec.py
+│   ├── edit_deck.py, md_to_spec.py, validate_deck.py
 └── reference/                    # AI reference
     ├── spec_schema.md            # top-level spec (JSON)
     ├── patch_dsl.md              # edit DSL
     ├── xml_edit_guide.md         # direct raw XML editing
+    ├── fonts.md                  # multi-script font selection
     ├── examples.md, themes.md, troubleshooting.md
     ├── snippets/                 # validated XML fragments (copyable)
     └── schemas/                  # ECMA-376 XSD (pptx subset)
