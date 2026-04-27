@@ -27,6 +27,7 @@ import {
   revealArtifact,
   type ArtifactDetailed,
 } from '@/lib/api/artifacts'
+import { PageEmptyState } from '@/components/ui/PageEmptyState'
 import { useT } from '@/lib/i18n'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
 
@@ -347,12 +348,9 @@ export function FileBrowser() {
         <div className="flex-1 min-w-0 overflow-auto">
           {filtered.length === 0 ? (
             loading ? null : (
-              <div className="h-full flex items-center justify-center text-[13px] text-neutral-400">
-                <div className="text-center">
-                  <FolderOpen className="w-10 h-10 mx-auto text-neutral-300 dark:text-neutral-700 mb-2" />
-                  {search.trim() ? t('records.files.noResults') : t('records.files.empty')}
-                </div>
-              </div>
+              <PageEmptyState icon={<FolderOpen className="w-10 h-10" weight="thin" />}>
+                {search.trim() ? t('records.files.noResults') : t('records.files.empty')}
+              </PageEmptyState>
             )
           ) : view === 'grid' ? (
             <GridView buckets={buckets} selected={selected} onSelect={setSelected} />

@@ -2,6 +2,7 @@ import { AddPanelModal } from '@/components/dashboard/AddPanelModal'
 import { Block } from '@/components/dashboard/Block'
 import { BoundPanel } from '@/components/dashboard/BoundPanel'
 import { FrameMarketModal } from '@/components/modals/FrameMarketModal'
+import { PageEmptyState } from '@/components/ui/PageEmptyState'
 import {
   type DashboardLayout,
   type PanelSpec,
@@ -506,19 +507,9 @@ function StageBars({
 function EmptyState() {
   const t = useT()
   return (
-    <div className="h-full flex items-center justify-center">
-      <div className="max-w-[460px] text-center">
-        <div className="mx-auto w-12 h-12 rounded-md bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 flex items-center justify-center mb-3">
-          <Package className="w-5 h-5 text-neutral-500" />
-        </div>
-        <div className="text-[15px] font-semibold text-neutral-900 dark:text-neutral-100">
-          {t('dashboard.empty.title')}
-        </div>
-        <p className="text-[14px] text-neutral-500 mt-1 leading-relaxed">
-          {t('dashboard.empty.desc')}
-        </p>
-      </div>
-    </div>
+    <PageEmptyState icon={<Package className="w-10 h-10" weight="thin" />}>
+      {t('dashboard.empty.title')}
+    </PageEmptyState>
   )
 }
 
