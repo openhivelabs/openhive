@@ -1259,6 +1259,11 @@ def _register_extended() -> None:
         "checklist": _ext.render_checklist,
         "page_border": _ext.render_page_border,
         "index": _ext.render_index,
+        "image_card": _ext.render_image_card,
+        "summary_box": _ext.render_summary_box,
+        "metric_compare": _ext.render_metric_compare,
+        "color_swatch": _ext.render_color_swatch,
+        "split_layout": _ext.render_split_layout,
     })
     from . import comments as _cmt
     RENDERERS["comment"] = _cmt.render_comment

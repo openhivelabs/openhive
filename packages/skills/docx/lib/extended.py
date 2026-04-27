@@ -1055,6 +1055,269 @@ def render_index(doc, block: dict, theme: Theme) -> None:
     end.set(qn("w:fldCharType"), "end")
 
 
+def render_image_card(doc, block: dict, theme: Theme) -> None:
+    """Image with caption + body in a card layout — image on top, text below.
+
+    Block fields: path, title, body?, badge? (small tag in corner),
+                   width_in?, accent? (RGB)
+    """
+    from .renderers import _resolve_image
+    from .themes import palette_color
+
+    accent = tuple(block["accent"]) if block.get("accent") else palette_color(theme, 0)
+    bg = _mix_color(accent, (255, 255, 255), 0.94)
+
+    table = doc.add_table(rows=2, cols=1)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    _set_table_borders(table, size=4, color="DDDDDD")
+    img_cell = table.rows[0].cells[0]
+    text_cell = table.rows[1].cells[0]
+    _shade_fill(text_cell, bg)
+    # cell margins
+    for c, padding in ((img_cell, 0), (text_cell, 200)):
+        tcPr = c._tc.get_or_add_tcPr()
+        tcMar = etree.SubElement(tcPr, qn("w:tcMar"))
+        for side in ("top", "bottom", "left", "right"):
+            el = etree.SubElement(tcMar, qn(f"w:{side}"))
+            el.set(qn("w:w"), str(padding)); el.set(qn("w:type"), "dxa")
+
+    for pp in list(img_cell.paragraphs):
+        img_cell._tc.remove(pp._p)
+    for pp in list(text_cell.paragraphs):
+        text_cell._tc.remove(pp._p)
+
+    p_img = img_cell.add_paragraph()
+    p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p_img.add_run()
+    run.add_picture(_resolve_image(block["path"]),
+                    width=Inches(float(block.get("width_in", 4.5))))
+
+    if block.get("badge"):
+        bp = text_cell.add_paragraph()
+        bp.paragraph_format.space_after = Pt(2)
+        from .inline import _style_run as _sr
+        br = bp.add_run(f" {block['badge']} ")
+        _sr(br, theme, font=theme.heading_font, size=theme.size_small,
+            color=(255, 255, 255), bold=True, shade=accent)
+    if block.get("title"):
+        tp = text_cell.add_paragraph()
+        tp.paragraph_format.space_after = Pt(2)
+        tr = tp.add_run(str(block["title"]))
+        _stylize(tr, font=theme.heading_font, size=theme.size_h3,
+                 color=theme.heading, bold=True)
+    if block.get("body"):
+        from .inline import add_inline_runs
+        bp = text_cell.add_paragraph()
+        bp.paragraph_format.space_after = Pt(0)
+        add_inline_runs(bp, str(block["body"]), theme,
+                        font=theme.body_font, size=theme.size_body,
+                        color=theme.fg)
+
+
+def render_summary_box(doc, block: dict, theme: Theme) -> None:
+    """Highlights / TL;DR box. Bullet list inside an accent-bordered panel."""
+    table = doc.add_table(rows=1, cols=1)
+    cell = table.rows[0].cells[0]
+    _shade_fill(cell, _mix_color(theme.accent, (255, 255, 255), 0.93))
+    tcPr = cell._tc.get_or_add_tcPr()
+    tcMar = etree.SubElement(tcPr, qn("w:tcMar"))
+    for side in ("top", "bottom", "left", "right"):
+        el = etree.SubElement(tcMar, qn(f"w:{side}"))
+        el.set(qn("w:w"), "240"); el.set(qn("w:type"), "dxa")
+    tcBorders = etree.SubElement(tcPr, qn("w:tcBorders"))
+    for side in ("top", "bottom"):
+        b = etree.SubElement(tcBorders, qn(f"w:{side}"))
+        b.set(qn("w:val"), "single"); b.set(qn("w:sz"), "16")
+        b.set(qn("w:color"), "{:02X}{:02X}{:02X}".format(*theme.accent))
+    for side in ("left", "right"):
+        b = etree.SubElement(tcBorders, qn(f"w:{side}"))
+        b.set(qn("w:val"), "nil")
+
+    for pp in list(cell.paragraphs):
+        cell._tc.remove(pp._p)
+    title = block.get("title", "Summary")
+    tp = cell.add_paragraph()
+    tp.paragraph_format.space_after = Pt(4)
+    tr = tp.add_run(str(title).upper())
+    _stylize(tr, font=theme.heading_font, size=theme.size_small,
+             color=theme.accent, bold=True)
+    from .inline import add_inline_runs
+    for item in block["items"]:
+        ip = cell.add_paragraph()
+        ip.paragraph_format.left_indent = Inches(0.15)
+        ip.paragraph_format.space_after = Pt(2)
+        ic = ip.add_run("→ ")
+        _stylize(ic, font=theme.heading_font, size=theme.size_body,
+                 color=theme.accent, bold=True)
+        add_inline_runs(ip, str(item), theme,
+                        font=theme.body_font, size=theme.size_body,
+                        color=theme.fg)
+
+
+def render_metric_compare(doc, block: dict, theme: Theme) -> None:
+    """Side-by-side metric comparison. Each row is a label + before/after
+    pair with a delta. Uses an emphasis arrow + delta color (success/danger).
+    """
+    rows = block["rows"]
+    table = doc.add_table(rows=len(rows), cols=4)
+    _set_table_borders(table, size=0)
+    _set_col_widths(table, [Inches(2.0), Inches(1.4), Inches(1.4), Inches(1.0)])
+    for i, r in enumerate(rows):
+        tr = table.rows[i]
+        for c, txt, *style in (
+            (tr.cells[0], r.get("label", ""), theme.body_font, theme.fg, False),
+            (tr.cells[1], r.get("before", ""), theme.heading_font, theme.muted, False),
+            (tr.cells[2], r.get("after", ""), theme.heading_font, theme.heading, True),
+        ):
+            for pp in list(c.paragraphs):
+                c._tc.remove(pp._p)
+            font, color, bold = style
+            p = c.add_paragraph()
+            p.alignment = (WD_ALIGN_PARAGRAPH.LEFT
+                           if c is tr.cells[0] else WD_ALIGN_PARAGRAPH.RIGHT)
+            run = p.add_run(str(txt))
+            _stylize(run, font=font, size=theme.size_body,
+                     color=color, bold=bold)
+        # delta cell
+        dc = tr.cells[3]
+        for pp in list(dc.paragraphs):
+            dc._tc.remove(pp._p)
+        delta = str(r.get("delta", ""))
+        d_color = theme.muted
+        if delta.startswith("+"): d_color = theme.success
+        elif delta.startswith("-"): d_color = theme.danger
+        dp = dc.add_paragraph()
+        dp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        dr = dp.add_run(delta)
+        _stylize(dr, font=theme.heading_font, size=theme.size_body,
+                 color=d_color, bold=True)
+        # bottom border
+        for cell in tr.cells:
+            tcPr = cell._tc.get_or_add_tcPr()
+            tcBorders = etree.SubElement(tcPr, qn("w:tcBorders"))
+            b = etree.SubElement(tcBorders, qn("w:bottom"))
+            b.set(qn("w:val"), "single"); b.set(qn("w:sz"), "4")
+            b.set(qn("w:color"), "DDDDDD")
+
+
+def render_color_swatch(doc, block: dict, theme: Theme) -> None:
+    """Brand color swatch row — colored rectangles with hex labels.
+
+    Each color: RGB list or {name?, color: RGB}.
+    """
+    colors = block["colors"]
+    n = len(colors)
+    table = doc.add_table(rows=2, cols=n)
+    table.alignment = WD_TABLE_ALIGNMENT.LEFT
+    _set_table_borders(table, size=0)
+    for i, c in enumerate(colors):
+        if isinstance(c, list):
+            rgb = tuple(c); name = ""
+        else:
+            rgb = tuple(c["color"]); name = c.get("name", "")
+        # swatch
+        sc = table.rows[0].cells[i]
+        _shade_fill(sc, rgb)
+        for pp in list(sc.paragraphs):
+            sc._tc.remove(pp._p)
+        sp = sc.add_paragraph()
+        sp.paragraph_format.space_after = Pt(0)
+        sp.paragraph_format.space_before = Pt(0)
+        sr = sp.add_run("\n\n\n")  # spacer for height
+        _stylize(sr, font=theme.body_font, size=theme.size_h2,
+                 color=rgb, bold=False)
+        # label
+        lc = table.rows[1].cells[i]
+        for pp in list(lc.paragraphs):
+            lc._tc.remove(pp._p)
+        lp = lc.add_paragraph()
+        lp.paragraph_format.space_before = Pt(2)
+        lp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        if name:
+            nr = lp.add_run(name + "\n")
+            _stylize(nr, font=theme.heading_font, size=theme.size_small,
+                     color=theme.heading, bold=True)
+        hr = lp.add_run("#{:02X}{:02X}{:02X}".format(*rgb))
+        _stylize(hr, font=theme.mono_font, size=theme.size_small,
+                 color=theme.muted)
+
+
+def render_split_layout(doc, block: dict, theme: Theme) -> None:
+    """Asymmetric two-column with custom widths. Like two_column but with
+    width_left/width_right ratios and per-side surface fills.
+    """
+    from .renderers import RENDERERS as _R
+    left_w = float(block.get("left_width", 3.0))
+    right_w = float(block.get("right_width", 3.4))
+    table = doc.add_table(rows=1, cols=2)
+    table.alignment = WD_TABLE_ALIGNMENT.LEFT
+    _set_table_borders(table, size=0)
+    _set_col_widths(table, [Inches(left_w), Inches(right_w)])
+    for side, idx, fill_key in (("left", 0, "left_fill"), ("right", 1, "right_fill")):
+        cell = table.rows[0].cells[idx]
+        if block.get(fill_key):
+            _shade_fill(cell, tuple(block[fill_key]))
+        tcPr = cell._tc.get_or_add_tcPr()
+        tcMar = etree.SubElement(tcPr, qn("w:tcMar"))
+        for sd in ("top", "bottom", "left", "right"):
+            el = etree.SubElement(tcMar, qn(f"w:{sd}"))
+            el.set(qn("w:w"), "200"); el.set(qn("w:type"), "dxa")
+        for pp in list(cell.paragraphs):
+            cell._tc.remove(pp._p)
+        children = block.get(side)
+        if not isinstance(children, list):
+            children = [children]
+        for child in children:
+            if isinstance(child, str):
+                p = cell.add_paragraph()
+                from .inline import add_inline_runs
+                add_inline_runs(p, child, theme, font=theme.body_font,
+                                size=theme.size_body, color=theme.fg)
+            elif isinstance(child, dict):
+                renderer = _R.get(child.get("type"))
+                if renderer:
+                    # render in current cell using cell as the doc-like
+                    # accumulator. For simplicity dispatch to the doc-level
+                    # renderer; child blocks land at end of cell.
+                    # Note: not all renderers support arbitrary cell context.
+                    try:
+                        renderer(_DocFacade(cell), child, theme)
+                    except Exception:
+                        # fallback: stringify
+                        p = cell.add_paragraph()
+                        from .inline import add_inline_runs
+                        add_inline_runs(p, str(child.get("text", "")),
+                                        theme, font=theme.body_font,
+                                        size=theme.size_body, color=theme.fg)
+
+
+class _DocFacade:
+    """Shim that quacks like ``doc`` for renderers using add_paragraph /
+    add_table — used so split_layout can run other renderers inside a cell.
+    """
+
+    def __init__(self, cell):
+        self._cell = cell
+
+    def add_paragraph(self, *args, **kwargs):
+        return self._cell.add_paragraph(*args, **kwargs)
+
+    def add_table(self, rows, cols, **kwargs):
+        return self._cell.add_table(rows=rows, cols=cols)
+
+    @property
+    def styles(self):
+        # bridge styles lookup back to the parent document
+        try:
+            return self._cell._tc.getroottree().getroot().getparent().styles
+        except Exception:
+            return {}
+
+    @property
+    def part(self):
+        return self._cell.part
+
+
 def _shade_fill(cell, rgb: tuple[int, int, int]) -> None:
     tcPr = cell._tc.get_or_add_tcPr()
     shd = tcPr.find(qn("w:shd"))

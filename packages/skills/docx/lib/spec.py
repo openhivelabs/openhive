@@ -37,6 +37,8 @@ BLOCK_TYPES = {
     "faq", "pricing_table", "author", "step_list", "code_diff",
     "bibliography", "qr_code", "stat_list",
     "columns", "margin_note", "checklist", "page_border", "index",
+    "image_card", "summary_box", "metric_compare", "color_swatch",
+    "split_layout",
 }
 
 ALIGN_VALUES = {"left", "center", "right", "justify"}
@@ -254,8 +256,25 @@ def _validate_block(i: int, block: Any, warnings: list[str]) -> None:
         # decorative — fields all optional
         pass
     elif t == "index":
-        # decorative + INDEX field
         pass
+    elif t == "image_card":
+        _req_str(block, "path", here)
+    elif t == "summary_box":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.items: non-empty array required")
+    elif t == "metric_compare":
+        rows = block.get("rows")
+        if not isinstance(rows, list) or not rows:
+            raise SpecError(f"{here}.rows: non-empty array required")
+    elif t == "color_swatch":
+        colors = block.get("colors")
+        if not isinstance(colors, list) or not colors:
+            raise SpecError(f"{here}.colors: non-empty array required")
+    elif t == "split_layout":
+        for side in ("left", "right"):
+            if side not in block:
+                raise SpecError(f"{here}.{side}: required")
     elif t == "spacer":
         h = block.get("height", 12)
         if not isinstance(h, (int, float)) or h < 0:
