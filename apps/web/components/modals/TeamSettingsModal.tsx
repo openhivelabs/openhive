@@ -54,7 +54,7 @@ export function TeamSettingsModal({ open, companyId, teamId, onClose }: Props) {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Team settings"
+      aria-label={t('teamSettings.title')}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
       onClick={onClose}
       onKeyDown={(e) => e.key === 'Escape' && onClose()}
@@ -69,7 +69,7 @@ export function TeamSettingsModal({ open, companyId, teamId, onClose }: Props) {
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t('settings.close')}
             className="p-1 rounded-sm hover:bg-neutral-100"
           >
             <X className="w-4 h-4 text-neutral-500" />

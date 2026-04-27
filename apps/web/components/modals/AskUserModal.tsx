@@ -1,6 +1,7 @@
 import { CaretLeft, CaretRight, PencilSimple, X } from '@phosphor-icons/react'
 import { useMemo, useState } from 'react'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
+import { useT } from '@/lib/i18n'
 import type { AskUserQuestion } from '@/lib/api/sessions'
 
 interface AskUserModalProps {
@@ -14,6 +15,7 @@ interface AskUserModalProps {
 type Answer = { kind: 'option'; label: string } | { kind: 'other'; text: string }
 
 export function AskUserModal({ open, questions, agentRole, onSubmit, onSkip }: AskUserModalProps) {
+  const t = useT()
   const [page, setPage] = useState(0)
   const [answers, setAnswers] = useState<Record<number, Answer>>({})
   const [otherDraft, setOtherDraft] = useState<Record<number, string>>({})
@@ -91,7 +93,7 @@ export function AskUserModal({ open, questions, agentRole, onSubmit, onSkip }: A
                   <CaretLeft className="w-3.5 h-3.5" />
                 </button>
                 <span className="font-mono">
-                  {total}개 중 {page + 1}개
+                  {t('askUser.pageOf', { current: page + 1, total })}
                 </span>
                 <button
                   type="button"
@@ -106,7 +108,7 @@ export function AskUserModal({ open, questions, agentRole, onSubmit, onSkip }: A
             <button
               type="button"
               onClick={onSkip}
-              aria-label="Close"
+              aria-label={t('settings.close')}
               className="w-7 h-7 flex items-center justify-center rounded hover:bg-neutral-800 text-neutral-400"
             >
               <X className="w-4 h-4" />
@@ -159,7 +161,7 @@ export function AskUserModal({ open, questions, agentRole, onSubmit, onSkip }: A
                 }
               }}
               onFocus={pickOther}
-              placeholder="기타 (직접 입력)"
+              placeholder={t('askUser.otherPlaceholder')}
               className="flex-1 bg-transparent text-[15px] text-neutral-200 placeholder-neutral-600 outline-none"
             />
             <button
@@ -167,20 +169,20 @@ export function AskUserModal({ open, questions, agentRole, onSubmit, onSkip }: A
               onClick={onSkip}
               className="px-3 py-1 text-[15px] rounded-sm border border-neutral-700 text-neutral-300 hover:bg-neutral-800"
             >
-              건너뛰기
+              {t('askUser.skip')}
             </button>
           </div>
         </div>
 
         <div className="px-6 py-3 border-t border-neutral-800 flex items-center justify-between text-[14px] text-neutral-500">
-          <div>↑↓ 탐색 · Enter 선택 · Esc 건너뛰기</div>
+          <div>{t('askUser.navigationHint')}</div>
           <button
             type="button"
             disabled={!canGoNext}
             onClick={goNext}
             className="px-4 py-1.5 rounded-sm bg-neutral-100 text-neutral-900 text-[15px] font-medium disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {page === total - 1 ? '제출' : '다음'}
+            {page === total - 1 ? t('askUser.submit') : t('askUser.next')}
           </button>
         </div>
       </div>

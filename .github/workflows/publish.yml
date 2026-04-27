@@ -1,0 +1,38 @@
+name: Publish openhiveai to npm
+
+# Triggers:
+#  - push of a v*.*.* tag (e.g. `git tag v0.1.1 && git push --tags`)
+#  - manual dispatch from the Actions tab (for re-runs)
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      # prepublishOnly in apps/web/package.json runs build + build:skills, so we
+      # don't need a separate build step here. npm publish honours that hook.
+      - run: npm publish
+        working-directory: apps/web
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

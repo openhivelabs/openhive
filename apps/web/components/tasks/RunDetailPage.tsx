@@ -1704,14 +1704,14 @@ export function RunDetailPage() {
       <div className="h-full w-full flex items-center justify-center bg-neutral-50 dark:bg-neutral-950 px-4">
         <div className="w-full max-w-sm rounded-lg border border-neutral-200 bg-white p-5 text-center shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
           <div className="text-[14px] font-medium text-neutral-900 dark:text-neutral-100">
-            이 세션은 더 이상 존재하지 않습니다.
+            {t('runDetail.notFound')}
           </div>
           <button
             type="button"
             onClick={() => navigate(teamHomeHref, { replace: true })}
             className="mt-4 inline-flex h-9 items-center justify-center rounded bg-neutral-900 px-4 text-[14px] font-medium text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300"
           >
-            새 채팅
+            {t('runDetail.newChat')}
           </button>
         </div>
       </div>
@@ -1815,7 +1815,7 @@ export function RunDetailPage() {
             <div className="max-w-[760px] mx-auto">
               {sendError && (
                 <div className="mb-2 text-[12px] text-red-600">
-                  메시지 전송 실패: {sendError}
+                  {t('runDetail.sendFailed', { error: sendError })}
                 </div>
               )}
               <Composer sending={sending} onSend={sendMessage} />
@@ -2008,28 +2008,33 @@ function AttachmentStack({ attachments }: { attachments: SessionArtifact[] }) {
   )
 }
 
-const ATTACHMENT_TYPE_LABEL: Record<string, string> = {
-  pdf: '문서 · PDF',
-  docx: '문서 · Word',
-  pptx: '슬라이드 · PowerPoint',
-  xlsx: '스프레드시트 · Excel',
-  md: '문서 · Markdown',
-  txt: '텍스트 · Text',
-  json: '데이터 · JSON',
-  csv: '데이터 · CSV',
-  html: '웹 · HTML',
-  png: '이미지 · PNG',
-  jpg: '이미지 · JPEG',
-  jpeg: '이미지 · JPEG',
-  gif: '이미지 · GIF',
-  webp: '이미지 · WebP',
-  svg: '이미지 · SVG',
+const ATTACHMENT_TYPE_KEYS: Record<string, string> = {
+  pdf: 'attachment.type.pdf',
+  docx: 'attachment.type.docx',
+  pptx: 'attachment.type.pptx',
+  xlsx: 'attachment.type.xlsx',
+  md: 'attachment.type.md',
+  txt: 'attachment.type.txt',
+  json: 'attachment.type.json',
+  csv: 'attachment.type.csv',
+  html: 'attachment.type.html',
+  png: 'attachment.type.png',
+  jpg: 'attachment.type.jpg',
+  jpeg: 'attachment.type.jpeg',
+  gif: 'attachment.type.gif',
+  webp: 'attachment.type.webp',
+  svg: 'attachment.type.svg',
 }
 
 function AttachmentCard({ artifact }: { artifact: SessionArtifact }) {
+  const t = useT()
   const ext = (artifact.filename.split('.').pop() ?? '').toLowerCase()
-  const typeLabel =
-    ATTACHMENT_TYPE_LABEL[ext] ?? (ext ? `파일 · ${ext.toUpperCase()}` : '파일')
+  const typeKey = ATTACHMENT_TYPE_KEYS[ext]
+  const typeLabel = typeKey
+    ? t(typeKey)
+    : ext
+      ? t('attachment.type.fileWith', { ext: ext.toUpperCase() })
+      : t('attachment.type.file')
   const size = fmtBytes(artifact.size)
   const downloadUrl = `/api/artifacts/${artifact.id}/download`
   return (
@@ -2614,7 +2619,7 @@ const Composer = memo(function Composer({
               <button
                 type="button"
                 onClick={() => removeAttachment(a.id)}
-                aria-label="첨부 제거"
+                aria-label={t('common.removeAttachment')}
                 className="shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
               >
                 <X className="w-2.5 h-2.5" />
@@ -2655,8 +2660,8 @@ const Composer = memo(function Composer({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            aria-label="파일 첨부"
-            title="파일 첨부"
+            aria-label={t('common.attachFile')}
+            title={t('common.attachFile')}
             className="w-8 h-8 rounded-full flex items-center justify-center text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
           >
             <Plus className="w-[18px] h-[18px]" />

@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import { logger } from 'hono/logger'
 import { migrateAllAgents } from '@/lib/server/agents/scaffold'
 import { callbackHtml, handleCallback } from '@/lib/server/auth/orchestrator'
+import { ensurePython } from '@/lib/server/python-bootstrap'
 import { migrateTeamDbsToCompany } from '../scripts/migrate-team-db-to-company'
 import { registerNode } from '../instrumentation-node'
 import { api } from './api'
@@ -17,6 +18,15 @@ const startTime = Date.now()
 // Next's `instrumentation.ts` hook — now invoked directly.
 void registerNode().catch((exc) => {
   console.error('[hono] registerNode failed', exc)
+})
+
+// First-boot Python doctor — provisions ~/.openhive/python-venv with every
+// third-party module the skill subprocesses need (openpyxl, python-docx,
+// python-pptx, reportlab, pypdf, lxml, jsonschema, httpx, jinja2, pyyaml).
+// Idempotent and fail-soft: a missing python interpreter or pip failure
+// only blocks Python-backed skills, not the server itself.
+void ensurePython().catch((exc) => {
+  console.error('[hono] python bootstrap failed', exc)
 })
 
 // One-shot migration: agents created before the AGENT.md-first refactor may

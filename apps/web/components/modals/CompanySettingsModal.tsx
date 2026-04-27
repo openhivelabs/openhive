@@ -37,12 +37,7 @@ export function CompanySettingsModal({ open, companyId, onClose }: Props) {
   }
 
   const remove = async () => {
-    if (
-      !confirm(
-        `Delete company "${company.name}"? This removes its directory and all teams under it.`,
-      )
-    )
-      return
+    if (!confirm(t('companySettings.confirmDelete', { name: company.name }))) return
     await deleteCompany(company.slug).catch(() => null)
     const next = companies.filter((c) => c.id !== companyId)
     const first = next[0]
@@ -74,7 +69,7 @@ export function CompanySettingsModal({ open, companyId, onClose }: Props) {
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t('settings.close')}
             className="p-1 rounded-sm hover:bg-neutral-100"
           >
             <X className="w-4 h-4 text-neutral-500" />
@@ -100,7 +95,7 @@ export function CompanySettingsModal({ open, companyId, onClose }: Props) {
         <div className="px-5 py-3 border-t border-neutral-200 flex items-center justify-between">
           <Button variant="ghost" onClick={remove}>
             <Trash className="w-3.5 h-3.5" />
-            Delete
+            {t('common.delete')}
           </Button>
           <div className="flex gap-2">
             <Button variant="ghost" onClick={onClose}>

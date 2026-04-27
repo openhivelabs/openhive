@@ -21,6 +21,7 @@ import {
 } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { type ComponentProps, useState } from 'react'
+import { useT } from '@/lib/i18n'
 
 /** 팀 사이드바 아이콘 선택지. 키는 YAML 에 저장되는 식별자. 여기 없는 값이
  *  들어오면 fallback 으로 Users. 추가할 땐 이 맵에 엔트리만 더 넣으면 된다. */
@@ -73,6 +74,7 @@ export function IconPickerButton({
   onChange: (key: string) => void
   className?: string
 }) {
+  const t = useT()
   const [open, setOpen] = useState(false)
   const Current = resolveTeamIcon(value)
   return (
@@ -80,7 +82,7 @@ export function IconPickerButton({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-label="팀 아이콘 선택"
+        aria-label={t('sidebar.selectTeamIcon')}
         aria-haspopup="dialog"
         aria-expanded={open}
         className={clsx(

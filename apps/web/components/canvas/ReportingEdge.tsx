@@ -7,6 +7,7 @@ import {
 } from '@xyflow/react'
 import { X } from '@phosphor-icons/react'
 import { useState } from 'react'
+import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { useCanvasStore } from '@/lib/stores/useCanvasStore'
 
@@ -29,6 +30,7 @@ export function ReportingEdge(props: EdgeProps<ReportingFlowEdge>) {
   const mode = useAppStore((s) => s.mode)
   const removeEdge = useCanvasStore((s) => s.removeEdge)
   const [hover, setHover] = useState(false)
+  const t = useT()
 
   return (
     <>
@@ -65,8 +67,8 @@ export function ReportingEdge(props: EdgeProps<ReportingFlowEdge>) {
             }}
             onMouseEnter={() => setHover(true)}
             onMouseLeave={() => setHover(false)}
-            aria-label="Remove edge"
-            title="보고 라인 삭제"
+            aria-label={t('reportingEdge.removeEdge')}
+            title={t('reportingEdge.removeEdge')}
             className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-auto w-6 h-6 rounded-full bg-white border border-neutral-300 shadow-sm text-neutral-600 hover:text-red-600 hover:border-red-400 flex items-center justify-center cursor-pointer"
             style={{ left: labelX, top: labelY }}
           >

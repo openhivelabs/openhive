@@ -16,6 +16,7 @@ import {
   teamFromInstallResult,
 } from '@/lib/api/frames'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
+import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { PRESETS } from '@/lib/presets'
 import { DEFAULT_TEAM_ICON_KEY, IconPickerButton } from '../shell/TeamIcon'
@@ -31,6 +32,7 @@ interface NewTeamModalProps {
 type Mode = 'picker' | 'empty' | 'frame'
 
 export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
+  const t = useT()
   const addTeam = useAppStore((s) => s.addTeam)
   const companies = useAppStore((s) => s.companies)
   const [mode, setMode] = useState<Mode>('picker')
@@ -117,7 +119,7 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="New team"
+      aria-label={t('newTeam.title')}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
       onClick={marketOpen ? undefined : reset}
       onKeyDown={(e) => e.key === 'Escape' && !marketOpen && reset()}
@@ -128,11 +130,11 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
         onKeyDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-neutral-200">
-          <h2 className="text-base font-semibold">New team</h2>
+          <h2 className="text-base font-semibold">{t('newTeam.title')}</h2>
           <button
             type="button"
             onClick={reset}
-            aria-label="Close"
+            aria-label={t('settings.close')}
             className="p-1 rounded-sm hover:bg-neutral-100"
           >
             <X className="w-4 h-4 text-neutral-500" />
@@ -143,8 +145,8 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
           <div className="px-5 py-5 space-y-2">
             <PickerRow
               icon={<Plus className="w-5 h-5" />}
-              title="Empty"
-              desc="Provision a single Lead agent and compose the team manually."
+              title={t('newTeam.preset.empty.title')}
+              desc={t('newTeam.preset.empty.desc')}
               onClick={() => {
                 setEmptyName('New Team')
                 setEmptyIcon(DEFAULT_TEAM_ICON_KEY)
@@ -153,14 +155,14 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
             />
             <PickerRow
               icon={<Storefront className="w-5 h-5" />}
-              title="Frame Market"
-              desc="Install a curated frame tailored to common workflows."
+              title={t('newTeam.preset.market.title')}
+              desc={t('newTeam.preset.market.desc')}
               onClick={() => setMarketOpen(true)}
             />
             <PickerRow
               icon={<UploadSimple className="w-5 h-5" />}
-              title="Import a frame"
-              desc="Load a .yaml frame exported from another hive."
+              title={t('newTeam.preset.import.title')}
+              desc={t('newTeam.preset.import.desc')}
               onClick={() => setMode('frame')}
             />
           </div>
@@ -173,11 +175,11 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
               onClick={() => setMode('picker')}
               className="inline-flex items-center gap-1 text-[13px] text-neutral-500 hover:text-neutral-900"
             >
-              <ArrowLeft className="w-3.5 h-3.5" /> Back
+              <ArrowLeft className="w-3.5 h-3.5" /> {t('common.back')}
             </button>
             <div>
               <div className="text-[15px] font-medium text-neutral-700 mb-2">
-                Team name & icon
+                {t('newTeam.empty.nameAndIcon')}
               </div>
               <div className="flex items-stretch gap-2">
                 <IconPickerButton value={emptyIcon} onChange={setEmptyIcon} />
@@ -191,17 +193,17 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
                       applyEmpty()
                     }
                   }}
-                  placeholder="New Team"
+                  placeholder={t('newTeam.empty.namePlaceholder')}
                   className="flex-1 px-3 py-2 text-[15px] rounded-sm border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-300"
                 />
               </div>
               <p className="text-[13px] text-neutral-500 mt-2">
-                Create a new team. Configure members and structure from the team canvas afterwards.
+                {t('newTeam.empty.hint')}
               </p>
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="ghost" size="sm" className="h-8" onClick={() => setMode('picker')}>
-                Cancel
+                {t('settings.cancel')}
               </Button>
               <Button
                 variant="primary"
@@ -210,7 +212,7 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
                 onClick={applyEmpty}
                 disabled={!emptyName.trim()}
               >
-                Create team
+                {t('newTeam.empty.create')}
               </Button>
             </div>
           </div>
@@ -223,11 +225,12 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
               onClick={() => setMode('picker')}
               className="inline-flex items-center gap-1 text-[13px] text-neutral-500 hover:text-neutral-900"
             >
-              <ArrowLeft className="w-3.5 h-3.5" /> Back
+              <ArrowLeft className="w-3.5 h-3.5" /> {t('common.back')}
             </button>
             <p className="text-[13px] text-neutral-500 leading-relaxed">
-              Upload a <code className="font-mono text-neutral-700">.openhive-frame.yaml</code> file shared by
-              another hive. A frame bundles the team's agents, dashboard layout, and data schema.
+              {t('newTeam.frame.intro1')}
+              <code className="font-mono text-neutral-700">.openhive-frame.yaml</code>
+              {t('newTeam.frame.intro2')}
             </p>
             <input
               ref={frameFileInput}
@@ -243,7 +246,7 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
                 className="w-full border-2 border-dashed border-neutral-300 hover:border-neutral-500 rounded-md py-8 flex flex-col items-center gap-2 text-neutral-500 hover:text-neutral-800 transition-colors"
               >
                 <Upload className="w-5 h-5" />
-                <span className="text-[15px] font-medium">Choose a frame file</span>
+                <span className="text-[15px] font-medium">{t('newTeam.frame.choose')}</span>
                 <span className="text-[13px]">.openhive-frame.yaml</span>
               </button>
             )}
@@ -264,21 +267,26 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
                     onClick={() => frameFileInput.current?.click()}
                     className="text-[13px] text-neutral-500 hover:text-neutral-900 underline"
                   >
-                    Choose different file
+                    {t('newTeam.frame.chooseDifferent')}
                   </button>
                 </div>
                 <ul className="text-[14px] text-neutral-700 space-y-0.5">
-                  <li>· {framePreview.agentCount} agents</li>
+                  <li>· {t('newTeam.frame.agentCount', { n: framePreview.agentCount })}</li>
                   <li>
-                    · {framePreview.hasDashboard ? 'includes' : 'no'} dashboard layout
+                    ·{' '}
+                    {framePreview.hasDashboard
+                      ? t('newTeam.frame.dashboardIncluded')
+                      : t('newTeam.frame.dashboardNone')}
                   </li>
                   <li>
-                    · {framePreview.schemaStatementCount} data-schema statement
-                    {framePreview.schemaStatementCount === 1 ? '' : 's'}
+                    ·{' '}
+                    {framePreview.schemaStatementCount === 1
+                      ? t('newTeam.frame.schemaCountOne')
+                      : t('newTeam.frame.schemaCountOther', { n: framePreview.schemaStatementCount })}
                   </li>
                   {framePreview.requires.skills.length > 0 && (
                     <li>
-                      · requires skills:{' '}
+                      · {t('newTeam.frame.requiresSkills')}{' '}
                       <span className="font-mono text-[13px]">
                         {framePreview.requires.skills.join(', ')}
                       </span>
@@ -286,7 +294,7 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
                   )}
                   {framePreview.requires.providers.length > 0 && (
                     <li>
-                      · expects providers:{' '}
+                      · {t('newTeam.frame.requiresProviders')}{' '}
                       <span className="font-mono text-[13px]">
                         {framePreview.requires.providers.join(', ')}
                       </span>
@@ -299,7 +307,7 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
               <div className="rounded-md border border-amber-200 bg-amber-50 p-3 space-y-1">
                 <div className="flex items-center gap-1.5 text-[14px] font-medium text-amber-800">
                   <Warning className="w-3.5 h-3.5" />
-                  Created with warnings
+                  {t('newTeam.frame.warnings')}
                 </div>
                 <ul className="text-[13px] text-amber-900 space-y-0.5 list-disc list-inside">
                   {frameWarnings.map((w) => (
@@ -315,7 +323,7 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
             )}
             <div className="flex justify-end gap-2">
               <Button variant="ghost" size="sm" className="h-8" onClick={reset}>
-                {frameWarnings.length > 0 ? 'Done' : 'Cancel'}
+                {frameWarnings.length > 0 ? t('common.done') : t('settings.cancel')}
               </Button>
               {framePreview && frameWarnings.length === 0 && (
                 <Button
@@ -326,7 +334,7 @@ export function NewTeamModal({ open, companyId, onClose }: NewTeamModalProps) {
                   disabled={loading}
                 >
                   {loading && <CircleNotch className="w-3.5 h-3.5 animate-spin" />}
-                  {loading ? 'Installing…' : 'Create team'}
+                  {loading ? t('newTeam.frame.installing') : t('newTeam.empty.create')}
                 </Button>
               )}
             </div>

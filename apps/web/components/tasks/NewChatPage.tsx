@@ -38,7 +38,7 @@ export function NewChatPage() {
     try {
       const session = await startSession({ team, taskId: null, goal: body })
       if (!session) {
-        setError('세션을 시작하지 못했습니다')
+        setError(t('newChat.startFailed'))
         setSending(false)
         setPendingText(null)
         return
@@ -202,7 +202,7 @@ const Composer = memo(function Composer({
               <button
                 type="button"
                 onClick={() => removeAttachment(a.id)}
-                aria-label="첨부 제거"
+                aria-label={t('common.removeAttachment')}
                 className="shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
               >
                 <X className="w-2.5 h-2.5" />
@@ -243,8 +243,8 @@ const Composer = memo(function Composer({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            aria-label="파일 첨부"
-            title="파일 첨부"
+            aria-label={t('common.attachFile')}
+            title={t('common.attachFile')}
             className="w-8 h-8 rounded-full flex items-center justify-center text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
           >
             <Plus className="w-[18px] h-[18px]" />

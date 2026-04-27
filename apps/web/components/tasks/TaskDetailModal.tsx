@@ -46,33 +46,38 @@ function renderTranscriptEntry(
     args?: Record<string, unknown>
   },
   team: ReturnType<typeof useCurrentTeam>,
+  t: ReturnType<typeof useT>,
 ): string {
   switch (e.kind) {
     case 'goal':
-      return `목표: ${String(e.text ?? '').slice(0, 160)}`
+      return t('taskTrace.goal', { text: String(e.text ?? '').slice(0, 160) })
     case 'ask_user':
-      return `${e.agent_role ?? 'lead'} → 유저에게 질문`
+      return t('taskTrace.askUser', { role: e.agent_role ?? 'lead' })
     case 'user_answer': {
       const r = typeof e.result === 'string' ? e.result : JSON.stringify(e.result ?? '')
-      return `유저 응답: ${r.slice(0, 120)}`
+      return t('taskTrace.userAnswer', { text: r.slice(0, 120) })
     }
     case 'tool_call': {
       const who = agentLabel(team, e.node_id)
       const tool = e.tool ?? 'tool'
       if (tool === 'delegate_to') {
         const assignee = e.args?.assignee as string | undefined
-        return `${who} → ${assignee ?? '?'} 위임`
+        return t('taskTrace.delegate', { who, assignee: assignee ?? '?' })
       }
       if (tool === 'run_skill_script') {
         const skill = e.args?.skill as string | undefined
         const script = e.args?.script as string | undefined
-        return `${who} → 스킬 실행 ${skill ?? ''}${script ? '/' + String(script) : ''}`
+        return t('taskTrace.runSkill', {
+          who,
+          skill: skill ?? '',
+          script: script ? `/${String(script)}` : '',
+        })
       }
       if (tool === 'activate_skill') {
-        return `${who} → 스킬 활성화 (${e.args?.name ?? '?'})`
+        return t('taskTrace.activateSkill', { who, name: String(e.args?.name ?? '?') })
       }
       if (tool === 'read_skill_file') {
-        return `${who} → 파일 읽기 (${e.args?.path ?? '?'})`
+        return t('taskTrace.readSkillFile', { who, path: String(e.args?.path ?? '?') })
       }
       return `${who} → ${tool}`
     }
@@ -453,7 +458,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
               {summary.usage && summary.usage.n > 0 && (
                 <div>
                   <div className="text-[12px] font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
-                    {t('tasks.usageHeader') || '사용 토큰'}
+                    {t('tasks.usageHeader')}
                   </div>
                   <div className="rounded bg-neutral-50 border border-neutral-200 px-3 py-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[12.5px] font-mono text-neutral-700">
                     <div className="flex justify-between">
@@ -484,7 +489,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
               {summary.artifacts.length > 0 && (
                 <div>
                   <div className="text-[12px] font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
-                    {t('tasks.artifactsHeader') || '생성된 파일'}
+                    {t('tasks.artifactsHeader')}
                   </div>
                   <div className="space-y-1">
                     {summary.artifacts.map((a) => (
@@ -509,7 +514,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
               {summary.output && (
                 <div>
                   <div className="text-[12px] font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
-                    {t('tasks.finalOutputHeader') || '최종 결과'}
+                    {t('tasks.finalOutputHeader')}
                   </div>
                   <div className="rounded bg-neutral-50 border border-neutral-200 text-[13px] text-neutral-800 px-3 py-2 whitespace-pre-wrap leading-relaxed max-h-[320px] overflow-y-auto">
                     {summary.output}
@@ -519,13 +524,13 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
               {summary.transcript.length > 0 && (
                 <div>
                   <div className="text-[12px] font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
-                    {t('tasks.runTraceHeader') || '수행 과정'}
+                    {t('tasks.runTraceHeader')}
                   </div>
                   <ol className="rounded bg-neutral-50 border border-neutral-200 text-[12px] text-neutral-700 px-3 py-2 space-y-1 max-h-[320px] overflow-y-auto font-mono">
                     {summary.transcript.map((e, i) => (
                       <li key={i} className="flex gap-2">
                         <span className="text-neutral-400 shrink-0">{i + 1}.</span>
-                        <span className="flex-1">{renderTranscriptEntry(e, team)}</span>
+                        <span className="flex-1">{renderTranscriptEntry(e, team, t)}</span>
                       </li>
                     ))}
                   </ol>

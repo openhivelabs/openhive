@@ -144,8 +144,12 @@ export const PYTHON_COLD_START_FLAGS: readonly string[] = [
 
 function interpreter(runtime: 'python' | 'node'): string {
   if (runtime === 'python') {
-    // Prefer python3 from PATH; python2 is long dead.
-    return which('python3') ?? which('python') ?? 'python3'
+    // first-boot doctor (python-bootstrap) installs deps into ~/.openhive/python-venv
+    // and exports OPENHIVE_PYTHON. Honour it so skill subprocesses see openpyxl
+    // et al. Falls through to PATH lookup when bootstrap was skipped.
+    const managed = process.env.OPENHIVE_PYTHON
+    if (managed && fs.existsSync(managed)) return managed
+    return which('python3') ?? which('python') ?? which('py') ?? 'python3'
   }
   if (runtime === 'node') {
     const node = which('node')

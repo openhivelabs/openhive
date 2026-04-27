@@ -1,6 +1,26 @@
 {
-  "name": "@openhive/web",
-  "private": true,
+  "name": "openhiveai",
+  "version": "0.1.0",
+  "description": "Local-first, self-hosted, single-user AI agent orchestration platform.",
+  "license": "MIT",
+  "homepage": "https://github.com/openhivelabs/openhive",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openhivelabs/openhive.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "openhiveai": "bin/openhiveai.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "dist-server",
+    "packages-dist",
+    "python-requirements.txt"
+  ],
   "scripts": {
     "dev": "concurrently -k -n hono,web -c yellow,cyan \"pnpm dev:hono\" \"pnpm dev:web\"",
     "dev:hono": "tsx watch --include 'lib/**/*.ts' --include 'server/**/*.ts' server/index.ts",
@@ -8,6 +28,8 @@
     "build:web": "vite build",
     "build:server": "tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json",
     "build": "pnpm build:web && pnpm build:server",
+    "build:skills": "rm -rf packages-dist && mkdir -p packages-dist && cp -R ../../packages/skills ../../packages/agents ../../packages/frames ../../packages/frame-market ../../packages/mcp-presets packages-dist/ && find packages-dist -type d -name __pycache__ -prune -exec rm -rf {} + && find packages-dist -name '*.pyc' -delete && find packages-dist -name '.DS_Store' -delete",
+    "prepublishOnly": "pnpm build && pnpm build:skills",
     "start": "NODE_ENV=production node dist-server/server/index.js",
     "preview:web": "vite preview",
     "test": "vitest run",

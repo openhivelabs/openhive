@@ -125,5 +125,12 @@ export function repoRoot(): string {
 }
 
 export function packagesRoot(): string {
-  return path.join(repoRoot(), 'packages')
+  const fromRepo = path.join(repoRoot(), 'packages')
+  if (fs.existsSync(fromRepo)) return fromRepo
+  // Installed as an npm package — `prepublishOnly` copied packages/skills into
+  // packages-dist/ next to dist-server/. paths.ts builds to
+  // dist-server/lib/server/paths.js, so the package root is three levels up.
+  const installed = path.resolve(__dirname, '..', '..', '..', 'packages-dist')
+  if (fs.existsSync(installed)) return installed
+  return fromRepo
 }

@@ -40,6 +40,7 @@ export type EventKind =
   // Round-level observability (multi-round tool-calling turns)
   | 'round_started'
   | 'round_finished'
+  | 'round_refunded'
   | 'provider.empty_round'
   // A2 — lifecycle hooks
   | 'hook.invoked'

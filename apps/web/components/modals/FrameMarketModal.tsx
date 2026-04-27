@@ -331,11 +331,11 @@ export function FrameMarketModal({
       return
     }
     if (!targetCompany) {
-      setInstallError('먼저 회사를 만들어야 설치할 수 있어요.')
+      setInstallError(t('frameMarket.errorNoCompany'))
       return
     }
     if ((entry.type === 'agent' || entry.type === 'panel') && !targetTeam) {
-      setInstallError('해당 회사에 팀이 없어요. 먼저 팀을 하나 만들어주세요.')
+      setInstallError(t('frameMarket.errorNoTeam'))
       return
     }
 
@@ -440,7 +440,7 @@ export function FrameMarketModal({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Frame Market"
+      aria-label={t('frameMarket.title')}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()
@@ -456,12 +456,12 @@ export function FrameMarketModal({
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-neutral-200 dark:border-neutral-800">
           <div className="flex items-center gap-2">
             <Storefront className="w-4 h-4 text-neutral-500" />
-            <h2 className="text-base font-semibold">Frame Market</h2>
+            <h2 className="text-base font-semibold">{t('frameMarket.title')}</h2>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t('settings.close')}
             className="p-1 rounded-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
           >
             <X className="w-4 h-4 text-neutral-500" />
@@ -522,7 +522,7 @@ export function FrameMarketModal({
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search name, tag, description…"
+                placeholder={t('frameMarket.searchPlaceholder')}
                 className="w-full pl-8 pr-3 py-1.5 text-[14px] rounded-sm border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-300"
               />
             </div>
@@ -537,7 +537,7 @@ export function FrameMarketModal({
                 onClick={() => setPanelCategory('all')}
                 className="text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 cursor-pointer"
               >
-                ← All categories
+                {t('frameMarket.allCategories')}
               </button>
               <span className="text-neutral-300">/</span>
               <span className="font-medium text-neutral-800 dark:text-neutral-100">
@@ -549,7 +549,7 @@ export function FrameMarketModal({
           {/* Install target pickers — only for team/agent/panel */}
           {tab !== 'company' && !lockTarget && (
             <div className="flex items-center gap-3 text-[13px] text-neutral-600 dark:text-neutral-300">
-              <span className="text-neutral-500">Install into</span>
+              <span className="text-neutral-500">{t('frameMarket.installInto')}</span>
               <select
                 value={targetCompanyId ?? ''}
                 onChange={(e) => {
@@ -578,7 +578,7 @@ export function FrameMarketModal({
                       </option>
                     ))}
                     {targetCompany && targetCompany.teams.length === 0 && (
-                      <option value="">No teams — create one first</option>
+                      <option value="">{t('frameMarket.noTeams')}</option>
                     )}
                   </select>
                 </>
@@ -1363,7 +1363,7 @@ function PanelPreview({
           <button
             type="button"
             onClick={() => setSizeIndex((i) => (i + 1) % sizes.length)}
-            aria-label="Try next size"
+            aria-label={t('frameMarket.tryNextSize')}
             className="shrink-0 self-center w-9 h-9 rounded-full bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:text-neutral-900 dark:hover:text-neutral-100 flex items-center justify-center cursor-pointer shadow-sm"
           >
             <CaretRight weight="bold" className="w-4 h-4" />

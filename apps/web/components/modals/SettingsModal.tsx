@@ -144,7 +144,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Settings"
+      aria-label={t('settings.title')}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
       onClick={onClose}
       onKeyDown={(e) => e.key === 'Escape' && onClose()}
@@ -159,7 +159,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t('settings.close')}
             className="p-1 rounded-sm hover:bg-neutral-100"
           >
             <X className="w-4 h-4 text-neutral-500" />
@@ -241,6 +241,7 @@ function ProviderCard({
   onDisconnect: () => void
   onCancel: () => void
 }) {
+  const t = useT()
   return (
     <div className="rounded-md border border-neutral-200 bg-white p-4">
       <div className="flex items-start justify-between gap-4">
@@ -250,7 +251,7 @@ function ProviderCard({
             {provider.connected && (
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 text-emerald-700 text-[14px] px-2 py-0.5 font-medium">
                 <CheckCircle weight="fill" className="w-3 h-3" />
-                Connected
+                {t('oauth.connected')}
               </span>
             )}
           </div>
@@ -263,13 +264,13 @@ function ProviderCard({
           {provider.connected ? (
             <Button variant="outline" size="sm" onClick={onDisconnect}>
               <Trash className="w-3.5 h-3.5" />
-              Disconnect
+              {t('oauth.disconnect')}
             </Button>
           ) : (
             !isActiveFlow && (
               <Button variant="primary" size="sm" onClick={onConnect}>
                 <Plugs className="w-3.5 h-3.5" />
-                Connect
+                {t('oauth.connect')}
               </Button>
             )
           )}
@@ -283,11 +284,11 @@ function ProviderCard({
               <div className="flex items-center gap-2 text-[15px] text-neutral-600">
                 <CircleNotch className="w-4 h-4 animate-spin text-amber-500" />
                 {flowStatus?.status === 'connected'
-                  ? 'Connected!'
-                  : 'Waiting for browser authorization…'}
+                  ? t('oauth.connectedToast')
+                  : t('oauth.waitingBrowser')}
               </div>
               <Button variant="ghost" size="sm" onClick={onCancel}>
-                Cancel
+                {t('settings.cancel')}
               </Button>
             </div>
           )}
@@ -297,8 +298,8 @@ function ProviderCard({
               <div className="flex items-center gap-2 text-[15px] text-neutral-600">
                 <CircleNotch className="w-4 h-4 animate-spin text-amber-500" />
                 {flowStatus?.status === 'connected'
-                  ? 'Connected!'
-                  : 'Waiting for you to authorize on GitHub…'}
+                  ? t('oauth.connectedToast')
+                  : t('oauth.waitingGithub')}
               </div>
               <div className="rounded bg-neutral-900 text-white px-4 py-3 font-mono text-2xl tracking-[0.4em] text-center">
                 {activeFlow.userCode}
@@ -311,10 +312,10 @@ function ProviderCard({
                   className="inline-flex items-center gap-1.5 text-[15px] text-neutral-900 hover:underline"
                 >
                   <ArrowSquareOut className="w-3.5 h-3.5" />
-                  Open {activeFlow.verificationUri}
+                  {t('oauth.openLink', { uri: activeFlow.verificationUri })}
                 </a>
                 <Button variant="ghost" size="sm" onClick={onCancel}>
-                  Cancel
+                  {t('settings.cancel')}
                 </Button>
               </div>
             </div>

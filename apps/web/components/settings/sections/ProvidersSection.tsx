@@ -458,10 +458,10 @@ function ProviderCard({
                   className="inline-flex items-center gap-1.5 text-[15px] text-neutral-900 dark:text-neutral-100 hover:underline"
                 >
                   <ArrowSquareOut className="w-3.5 h-3.5" />
-                  Open {activeFlow.verificationUri}
+                  {t('oauth.openLink', { uri: activeFlow.verificationUri })}
                 </a>
                 <Button variant="ghost" size="sm" onClick={onCancel}>
-                  Cancel
+                  {t('settings.providers.cancel')}
                 </Button>
               </div>
             </div>

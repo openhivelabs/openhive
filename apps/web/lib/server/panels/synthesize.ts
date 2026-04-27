@@ -328,6 +328,7 @@ function makeMcpKanbanActions(ctx: McpKanbanContext): PanelAction[] {
       id: SYNTH_KANBAN_CREATE_ID,
       kind: 'create',
       label: 'Add',
+      placement: 'toolbar',
       target: {
         kind: 'mcp',
         config: {
@@ -344,6 +345,7 @@ function makeMcpKanbanActions(ctx: McpKanbanContext): PanelAction[] {
       id: SYNTH_KANBAN_UPDATE_ID,
       kind: 'update',
       label: 'Save',
+      placement: 'row',
       target: {
         kind: 'mcp',
         config: {
@@ -362,6 +364,7 @@ function makeMcpKanbanActions(ctx: McpKanbanContext): PanelAction[] {
       id: SYNTH_KANBAN_DELETE_ID,
       kind: 'delete',
       label: 'Delete',
+      placement: 'row',
       confirm: true,
       target: {
         kind: 'mcp',
@@ -581,6 +584,7 @@ function makeMcpTableActions(ctx: McpTableContext): PanelAction[] {
     id: SYNTH_TABLE_CREATE_ID,
     kind: 'create',
     label: 'Add',
+    placement: 'toolbar',
     target: {
       kind: 'mcp',
       config: {
@@ -598,6 +602,7 @@ function makeMcpTableActions(ctx: McpTableContext): PanelAction[] {
     id: SYNTH_TABLE_UPDATE_ID,
     kind: 'update',
     label: 'Save',
+    placement: 'row',
     target: {
       kind: 'mcp',
       config: {
@@ -617,6 +622,7 @@ function makeMcpTableActions(ctx: McpTableContext): PanelAction[] {
     id: SYNTH_TABLE_DELETE_ID,
     kind: 'delete',
     label: 'Delete',
+    placement: 'row',
     confirm: true,
     target: {
       kind: 'mcp',
@@ -657,6 +663,7 @@ function makeTableCreateAction(ctx: TableContext): PanelAction | null {
     id: SYNTH_TABLE_CREATE_ID,
     kind: 'create',
     label: 'Add',
+    placement: 'toolbar',
     target: {
       kind: 'team_data',
       config: {
@@ -678,6 +685,7 @@ function makeTableUpdateAction(ctx: TableContext): PanelAction | null {
     id: SYNTH_TABLE_UPDATE_ID,
     kind: 'update',
     label: 'Save',
+    placement: 'row',
     target: {
       kind: 'team_data',
       config: {
@@ -693,6 +701,7 @@ function makeTableDeleteAction(ctx: TableContext): PanelAction {
     id: SYNTH_TABLE_DELETE_ID,
     kind: 'delete',
     label: 'Delete',
+    placement: 'row',
     confirm: true,
     target: {
       kind: 'team_data',

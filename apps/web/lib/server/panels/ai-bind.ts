@@ -345,7 +345,7 @@ function synthesizeMissingTableActions(binding: Record<string, unknown>): void {
       .map((n) => `${n} = :${n}`)
       .join(', ')
     if (setters.length > 0) {
-      const updateAction: Record<string, unknown> =
+      const updateAction: Record<string, unknown> | null =
         createTarget.kind === 'team_data'
           ? {
               id: 'update',
@@ -394,7 +394,7 @@ function synthesizeMissingTableActions(binding: Record<string, unknown>): void {
   }
 
   if (!hasDelete) {
-    const deleteAction: Record<string, unknown> =
+    const deleteAction: Record<string, unknown> | null =
       createTarget.kind === 'team_data'
         ? {
             id: 'delete',

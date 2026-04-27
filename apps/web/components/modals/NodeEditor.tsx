@@ -358,7 +358,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Edit agent"
+      aria-label={t('nodeEditor.editAgent')}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
       onClick={onClose}
       onKeyDown={(e) => e.key === 'Escape' && onClose()}
@@ -380,12 +380,12 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
               value={draft.role}
               onChange={(e) => setDraft({ ...draft, role: e.target.value })}
               className="flex-1 min-w-0 px-2.5 py-1.5 text-[15px] font-semibold bg-transparent border-0 border-b border-transparent hover:border-neutral-200 focus:border-neutral-400 focus:outline-none rounded-none"
-              placeholder="Role"
+              placeholder={t('nodeEditor.rolePlaceholder')}
             />
             <button
               type="button"
               onClick={onClose}
-              aria-label="Close"
+              aria-label={t('settings.close')}
               className="p-1 rounded-sm hover:bg-neutral-100 shrink-0"
             >
               <X className="w-4 h-4 text-neutral-500" />
@@ -393,7 +393,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
           </div>
           <div className="flex items-end gap-4 text-[11px] text-neutral-500">
             <label className="flex flex-col gap-1">
-              <span className="font-medium uppercase tracking-wide">Provider</span>
+              <span className="font-medium uppercase tracking-wide">{t('nodeEditor.providerLabel')}</span>
               <select
                 value={draft.providerId}
                 onChange={(e) => onChangeProvider(e.target.value)}
@@ -404,7 +404,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
                     still sees what's set. */}
                 {!connectedProviders.some((p) => p.id === draft.providerId) && draft.providerId && (
                   <option value={draft.providerId}>
-                    {draft.label || draft.providerId} (disconnected)
+                    {t('nodeEditor.disconnected', { label: draft.label || draft.providerId })}
                   </option>
                 )}
                 {connectedProviders.map((p) => (
@@ -415,13 +415,13 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
               </select>
             </label>
             <label className="flex flex-col gap-1">
-              <span className="font-medium uppercase tracking-wide">Model</span>
+              <span className="font-medium uppercase tracking-wide">{t('nodeEditor.modelLabel')}</span>
               {loadingModels ? null : modelsError ? (
                 <input
                   value={draft.model}
                   onChange={(e) => setDraft({ ...draft, model: e.target.value })}
                   className="input !w-56 !py-1 text-[13px] font-mono text-neutral-900"
-                  placeholder="model id"
+                  placeholder={t('nodeEditor.modelPlaceholder')}
                 />
               ) : (
                 <select
@@ -430,12 +430,12 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
                   className="input !w-56 !py-1 text-[13px] text-neutral-900"
                 >
                   {!models.some((m) => m.id === draft.model) && draft.model && (
-                    <option value="">{draft.model} (not in list)</option>
+                    <option value="">{t('nodeEditor.notInList', { model: draft.model })}</option>
                   )}
                   {models.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.label}
-                      {m.default ? ' · default' : ''}
+                      {m.default ? t('nodeEditor.modelDefault') : ''}
                     </option>
                   ))}
                 </select>
@@ -443,7 +443,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
             </label>
             {!isLead && (
               <label className="flex flex-col gap-1">
-                <span className="font-medium uppercase tracking-wide">Parallel</span>
+                <span className="font-medium uppercase tracking-wide">{t('nodeEditor.parallelLabel')}</span>
                 <input
                   type="number"
                   min={1}
@@ -460,8 +460,8 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
               <button
                 type="button"
                 onClick={() => setConfirmDelete(true)}
-                title="Delete agent"
-                aria-label="Delete agent"
+                title={t('nodeEditor.deleteAgent')}
+                aria-label={t('nodeEditor.deleteAgent')}
                 className="ml-auto self-end p-1.5 rounded-sm text-neutral-400 hover:text-red-600 hover:bg-red-50 transition-colors focus:outline-none"
               >
                 <Trash className="w-4 h-4" />
@@ -477,7 +477,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
             <div className="px-4 py-2.5 border-b border-neutral-200 flex items-center gap-1 bg-white/50">
               <FolderOpen className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
               <span className="text-[12px] font-semibold text-neutral-800">
-                {draft.role || 'Agent'}
+                {draft.role || t('nodeEditor.agentFallback')}
               </span>
               <span className="text-[11px] text-neutral-400">· {fileCount}</span>
               {readOnly && (
@@ -511,7 +511,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
             <div className="flex-1 min-h-0 overflow-y-auto py-1">
               {loadingFiles ? null : fileCount === 0 && !personaPath ? (
                 <div className="px-3 py-6 text-[12px] text-neutral-400 text-center leading-relaxed">
-                  No persona attached.
+                  {t('nodeEditor.noPersona')}
                 </div>
               ) : (
                 <PersonaTreeRows
@@ -601,11 +601,11 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={onClose}>
-              Cancel
+              {t('settings.cancel')}
             </Button>
             <Button variant="primary" onClick={save} disabled={saving}>
               {saving && <CircleNotch className="w-3.5 h-3.5 animate-spin" />}
-              {dirty || filesChanged ? 'Save' : 'Close'}
+              {dirty || filesChanged ? t('settings.save') : t('settings.close')}
             </Button>
           </div>
         </div>
