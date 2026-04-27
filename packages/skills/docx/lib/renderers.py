@@ -394,13 +394,19 @@ def render_code(doc, block: dict, theme: Theme) -> None:
     _set_cell_left_border(cell, theme.accent, size=20)
 
     language = (block.get("language") or "").lower()
+    show_line_numbers = bool(block.get("line_numbers"))
     lines = block["text"].split("\n")
+    width = len(str(len(lines)))
     for pg in list(cell.paragraphs):
         cell._tc.remove(pg._p)
-    for line in lines:
+    for ln_no, line in enumerate(lines, start=1):
         p = cell.add_paragraph()
         p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after = Pt(0)
+        if show_line_numbers:
+            ln_run = p.add_run(str(ln_no).rjust(width) + "  ")
+            _style_run(ln_run, font=theme.mono_font, size=theme.size_code,
+                       color=theme.muted)
         spans = _highlight(line or " ", language)
         for kind, text in spans:
             run = p.add_run(text)
@@ -1090,6 +1096,10 @@ def _register_extended() -> None:
         "equation": _ext.render_equation,
         "bookmark": _ext.render_bookmark,
         "xref": _ext.render_xref,
+        "timeline": _ext.render_timeline,
+        "progress": _ext.render_progress,
+        "card_grid": _ext.render_card_grid,
+        "drop_cap": _ext.render_drop_cap,
     })
 
 

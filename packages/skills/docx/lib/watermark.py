@@ -69,11 +69,24 @@ def _normalize(wm: Any, theme) -> dict:
 
 
 def _insert_watermark(header_xml: str, spec: dict) -> str:
+    """Insert watermark using the canonical MS Word VML pattern.
+
+    The watermark lives in a tiny zero-line-height paragraph (line=20, exact)
+    so it doesn't push other header content. The v:shape uses
+    ``mso-position-*-relative="margin"`` + center so it floats over the
+    page body, not just the header.
+    """
     color = "{:02X}{:02X}{:02X}".format(*spec["color"])
     text = (spec["text"].replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
+    rotation = (360 + int(spec["rotation"])) % 360 or 315
+    opacity_pct = f"{spec['opacity']}"
+    # Standard Word watermark dimensions: 415pt × 207pt diagonal
     pp_xml = f"""<w:p>
-  <w:pPr><w:pStyle w:val="Header"/></w:pPr>
+  <w:pPr>
+    <w:pStyle w:val="Header"/>
+    <w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/>
+  </w:pPr>
   <w:r>
     <w:rPr><w:noProof/></w:rPr>
     <w:pict xmlns:v="urn:schemas-microsoft-com:vml"
@@ -101,23 +114,15 @@ def _insert_watermark(header_xml: str, spec: dict) -> str:
                 o:connectangles="270,180,90,0"/>
         <v:textpath on="t" fitshape="t"/>
       </v:shapetype>
-      <v:shape id="watermark_loomtide" o:spid="_x0000_s2050"
+      <v:shape id="PowerPlusWaterMarkObject" o:spid="_x0000_s2049"
                type="#_x0000_t136"
-               style="position:absolute;margin-left:0;margin-top:0;
-                      width:480pt;height:120pt;rotation:{spec['rotation']};
-                      z-index:-251654144;mso-position-horizontal:center;
-                      mso-position-horizontal-relative:margin;
-                      mso-position-vertical:center;
-                      mso-position-vertical-relative:margin"
+               style="position:absolute;margin-left:0;margin-top:0;width:415pt;height:207pt;rotation:{rotation};z-index:-251654144;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin"
                fillcolor="#{color}" stroked="f">
-        <v:fill opacity="{spec['opacity']}"/>
-        <v:textpath style="font-family:&quot;Helvetica&quot;;
-                          font-size:{spec['size']}pt;
-                          font-weight:bold"
+        <v:fill opacity="{opacity_pct}"/>
+        <v:textpath style="font-family:&quot;Helvetica&quot;;font-size:1pt"
                     string="{text}"/>
       </v:shape>
     </w:pict>
   </w:r>
 </w:p>"""
-    # insert watermark paragraph just before </w:hdr>
     return header_xml.replace("</w:hdr>", pp_xml + "</w:hdr>", 1)

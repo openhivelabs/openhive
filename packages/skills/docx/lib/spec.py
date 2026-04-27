@@ -31,13 +31,15 @@ BLOCK_TYPES = {
     # extended
     "pull_quote", "definition_list", "image_gallery", "equation",
     "bookmark", "xref",
+    "timeline", "progress", "card_grid", "drop_cap",
 }
 
 ALIGN_VALUES = {"left", "center", "right", "justify"}
 TABLE_STYLES = {"grid", "light", "plain", "zebra", "minimal"}
 CALLOUT_VARIANTS = {"info", "success", "warning", "danger", "note", "tip"}
 CHART_VARIANTS = {"bar", "hbar", "line", "area", "donut", "pie",
-                  "scatter", "stacked_bar", "sparkline", "combo"}
+                  "scatter", "stacked_bar", "sparkline", "combo",
+                  "radar", "bubble"}
 
 
 class SpecError(ValueError):
@@ -129,7 +131,8 @@ def _validate_block(i: int, block: Any, warnings: list[str]) -> None:
         variant = block.get("variant", "bar")
         if variant not in CHART_VARIANTS:
             raise SpecError(f"{here}.variant: must be one of {sorted(CHART_VARIANTS)}")
-        if variant in ("bar", "line", "area", "scatter", "stacked_bar", "hbar", "combo"):
+        if variant in ("bar", "line", "area", "scatter", "stacked_bar", "hbar",
+                       "combo", "radar", "bubble"):
             series = block.get("series")
             if not isinstance(series, list) or not series:
                 raise SpecError(f"{here}.series: non-empty array required for {variant}")
@@ -172,6 +175,26 @@ def _validate_block(i: int, block: Any, warnings: list[str]) -> None:
         _req_str(block, "name", here)
     elif t == "xref":
         _req_str(block, "target", here)
+    elif t == "timeline":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.items: non-empty array required")
+        for j, it in enumerate(items):
+            if not isinstance(it, dict) or "title" not in it:
+                raise SpecError(f"{here}.items[{j}]: requires title")
+    elif t == "progress":
+        bars = block.get("bars")
+        if not isinstance(bars, list) or not bars:
+            raise SpecError(f"{here}.bars: non-empty array required")
+        for j, b in enumerate(bars):
+            if not isinstance(b, dict) or "label" not in b or "value" not in b:
+                raise SpecError(f"{here}.bars[{j}]: requires label and value")
+    elif t == "card_grid":
+        cards = block.get("cards")
+        if not isinstance(cards, list) or not cards:
+            raise SpecError(f"{here}.cards: non-empty array required")
+    elif t == "drop_cap":
+        _req_str(block, "text", here)
     elif t == "spacer":
         h = block.get("height", 12)
         if not isinstance(h, (int, float)) or h < 0:

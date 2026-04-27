@@ -104,6 +104,8 @@ def _normalize_data(block: dict, variant: str) -> tuple[list[str], list[dict]]:
             item["x"] = s["x"]
         if "kind" in s:
             item["kind"] = s["kind"]
+        if "sizes" in s:
+            item["sizes"] = [float(v) for v in s.get("sizes", [])]
         series_list.append(item)
     if not cats and series_list:
         cats = [f"#{i+1}" for i in range(len(series_list[0]["values"]))]
@@ -141,6 +143,10 @@ def _build_chart_xml(block: dict, theme: Theme, variant: str,
         plot_xml = _plot_pie(cats, series_list, theme, donut=(variant == "donut"))
     elif variant == "scatter":
         plot_xml = _plot_scatter(cats, series_list, theme, x_label, y_label)
+    elif variant == "radar":
+        plot_xml = _plot_radar(cats, series_list, theme)
+    elif variant == "bubble":
+        plot_xml = _plot_bubble(cats, series_list, theme, x_label, y_label)
     else:
         plot_xml = _plot_bar("bar", cats, series_list, theme, "", "", False)
 
@@ -345,6 +351,61 @@ def _plot_pie(cats: list[str], series: list[dict], theme: Theme, donut: bool) ->
         <c:varyColors val="1"/>
         {series_xml}
       </c:pieChart>"""
+
+
+def _plot_radar(cats: list[str], series: list[dict], theme: Theme) -> str:
+    """Spider/radar chart. Uses c:radarChart with radarStyle="filled" so
+    each series fills the polygon for visual punch.
+    """
+    series_xml = "".join(_series_xml_radar(s, i, theme) for i, s in enumerate(series))
+    cat_ax_id, val_ax_id = "111111111", "222222222"
+    return f"""<c:radarChart>
+        <c:radarStyle val="filled"/>
+        <c:varyColors val="0"/>
+        {series_xml}
+        <c:axId val="{cat_ax_id}"/>
+        <c:axId val="{val_ax_id}"/>
+      </c:radarChart>
+      <c:catAx>
+        <c:axId val="{cat_ax_id}"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/>
+        <c:axPos val="b"/>
+        <c:majorGridlines/>
+        <c:crossAx val="{val_ax_id}"/>
+        <c:auto val="1"/>
+        <c:lblAlgn val="ctr"/>
+        <c:lblOffset val="100"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="{val_ax_id}"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="1"/>
+        <c:axPos val="l"/>
+        <c:crossAx val="{cat_ax_id}"/>
+        <c:crossBetween val="between"/>
+      </c:valAx>"""
+
+
+def _plot_bubble(cats: list[str], series: list[dict], theme: Theme,
+                 x_label: str = "", y_label: str = "") -> str:
+    """Bubble chart. Each series provides values + matching ``sizes`` for
+    bubble radius (scaled by Word).
+    """
+    series_xml = "".join(_series_xml_bubble(s, i, theme)
+                         for i, s in enumerate(series))
+    cat_ax_id, val_ax_id = "111111111", "222222222"
+    return f"""<c:bubbleChart>
+        <c:varyColors val="0"/>
+        {series_xml}
+        <c:bubble3D val="0"/>
+        <c:bubbleScale val="100"/>
+        <c:showNegBubbles val="0"/>
+        <c:axId val="{cat_ax_id}"/>
+        <c:axId val="{val_ax_id}"/>
+      </c:bubbleChart>
+      {_val_axis(cat_ax_id, val_ax_id, position="b", label=x_label)}
+      {_val_axis(val_ax_id, cat_ax_id, position="l", label=y_label)}"""
 
 
 def _plot_scatter(cats: list[str], series: list[dict], theme: Theme,
@@ -602,6 +663,125 @@ def _series_xml_pie(s: dict, cats: list[str], theme: Theme) -> str:
               </c:numCache>
             </c:numRef>
           </c:val>
+        </c:ser>"""
+
+
+def _series_xml_radar(s: dict, idx: int, theme: Theme) -> str:
+    color = "{:02X}{:02X}{:02X}".format(*palette_color(theme, idx))
+    name = _xml_escape(s["name"])
+    val_col = chr(ord("B") + idx)
+    n = len(s["values"])
+    cat_ref = f"Sheet1!$A$2:$A${1 + n}"
+    val_ref = f"Sheet1!${val_col}$2:${val_col}${1 + n}"
+    name_ref = f"Sheet1!${val_col}$1"
+    cat_cache = "".join(f'<c:pt idx="{i}"><c:v>{_xml_escape(c)}</c:v></c:pt>'
+                        for i, c in enumerate(_get_cats_for_series(s)))
+    val_cache = "".join(f'<c:pt idx="{i}"><c:v>{_fmt(v)}</c:v></c:pt>'
+                        for i, v in enumerate(s["values"]))
+    return f"""<c:ser>
+          <c:idx val="{idx}"/>
+          <c:order val="{idx}"/>
+          <c:tx>
+            <c:strRef>
+              <c:f>{name_ref}</c:f>
+              <c:strCache>
+                <c:ptCount val="1"/>
+                <c:pt idx="0"><c:v>{name}</c:v></c:pt>
+              </c:strCache>
+            </c:strRef>
+          </c:tx>
+          <c:spPr>
+            <a:solidFill><a:srgbClr val="{color}"><a:alpha val="40000"/></a:srgbClr></a:solidFill>
+            <a:ln><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></a:ln>
+          </c:spPr>
+          <c:cat>
+            <c:strRef>
+              <c:f>{cat_ref}</c:f>
+              <c:strCache>
+                <c:ptCount val="{n}"/>
+                {cat_cache}
+              </c:strCache>
+            </c:strRef>
+          </c:cat>
+          <c:val>
+            <c:numRef>
+              <c:f>{val_ref}</c:f>
+              <c:numCache>
+                <c:formatCode>General</c:formatCode>
+                <c:ptCount val="{n}"/>
+                {val_cache}
+              </c:numCache>
+            </c:numRef>
+          </c:val>
+        </c:ser>"""
+
+
+def _series_xml_bubble(s: dict, idx: int, theme: Theme) -> str:
+    color = "{:02X}{:02X}{:02X}".format(*palette_color(theme, idx))
+    name = _xml_escape(s["name"])
+    n = len(s["values"])
+    val_col = chr(ord("B") + idx)
+    name_ref = f"Sheet1!${val_col}$1"
+    x_ref = f"Sheet1!$A$2:$A${1 + n}"
+    y_ref = f"Sheet1!${val_col}$2:${val_col}${1 + n}"
+    sz_col = chr(ord("Z") - idx)
+    sz_ref = f"Sheet1!${sz_col}$2:${sz_col}${1 + n}"
+    xs = s.get("x") or list(range(1, n + 1))
+    sizes = s.get("sizes") or [10.0] * n
+    x_cache = "".join(f'<c:pt idx="{i}"><c:v>{_fmt(v)}</c:v></c:pt>'
+                      for i, v in enumerate(xs))
+    y_cache = "".join(f'<c:pt idx="{i}"><c:v>{_fmt(v)}</c:v></c:pt>'
+                      for i, v in enumerate(s["values"]))
+    sz_cache = "".join(f'<c:pt idx="{i}"><c:v>{_fmt(v)}</c:v></c:pt>'
+                       for i, v in enumerate(sizes))
+    return f"""<c:ser>
+          <c:idx val="{idx}"/>
+          <c:order val="{idx}"/>
+          <c:tx>
+            <c:strRef>
+              <c:f>{name_ref}</c:f>
+              <c:strCache>
+                <c:ptCount val="1"/>
+                <c:pt idx="0"><c:v>{name}</c:v></c:pt>
+              </c:strCache>
+            </c:strRef>
+          </c:tx>
+          <c:spPr>
+            <a:solidFill><a:srgbClr val="{color}"><a:alpha val="65000"/></a:srgbClr></a:solidFill>
+            <a:ln><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></a:ln>
+          </c:spPr>
+          <c:invertIfNegative val="0"/>
+          <c:xVal>
+            <c:numRef>
+              <c:f>{x_ref}</c:f>
+              <c:numCache>
+                <c:formatCode>General</c:formatCode>
+                <c:ptCount val="{n}"/>
+                {x_cache}
+              </c:numCache>
+            </c:numRef>
+          </c:xVal>
+          <c:yVal>
+            <c:numRef>
+              <c:f>{y_ref}</c:f>
+              <c:numCache>
+                <c:formatCode>General</c:formatCode>
+                <c:ptCount val="{n}"/>
+                {y_cache}
+              </c:numCache>
+            </c:numRef>
+          </c:yVal>
+          <c:bubbleSize>
+            <c:numRef>
+              <c:f>{sz_ref}</c:f>
+              <c:numCache>
+                <c:formatCode>General</c:formatCode>
+                <c:ptCount val="{n}"/>
+                {sz_cache}
+              </c:numCache>
+            </c:numRef>
+          </c:bubbleSize>
+          <c:bubble3D val="0"/>
         </c:ser>"""
 
 
