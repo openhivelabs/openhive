@@ -250,6 +250,35 @@ def main() -> int:
         "slides": slide_specs,
     }
 
+    # Validate the round-tripped spec so callers know whether `build_deck.py
+    # --spec out.json` will succeed without further hand-edits.
+    try:
+        from lib.spec import validate as _validate, SpecError as _SpecError
+        warnings.extend(_validate(deck))
+        spec_valid = True
+    except _SpecError as e:
+        warnings.append(f"extracted spec fails build-time validate(): {e}")
+        spec_valid = False
+
+    # Lossiness map — heuristic flags slide types the analyzer can't
+    # recover from cosmetic-only XML (no schema markers survive). The LLM
+    # uses this to decide whether to round-trip via spec or stay on the
+    # patch DSL.
+    bullets_count = sum(1 for s in slide_specs if s.get("type") == "bullets")
+    lossiness = {
+        "comparison": "→ bullets (column structure lost)",
+        "steps":      "→ bullets (numbered circle hierarchy lost)",
+        "kpi":        "→ bullets (stat/label/delta cells lost)",
+        "two_column": "→ bullets (column split lost)",
+        "quote":      "→ bullets (italic+attribution styling lost)",
+    }
+    if bullets_count > 0:
+        warnings.append(
+            f"{bullets_count} slides extracted as 'bullets' — original may "
+            f"have used comparison/steps/kpi/two_column/quote which collapse "
+            f"to a flat list on round-trip"
+        )
+
     out = resolve_out(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
@@ -259,6 +288,8 @@ def main() -> int:
         "ok": True,
         "path": str(out),
         "slides": len(slide_specs),
+        "spec_valid": spec_valid,
+        "lossiness": lossiness,
         "warnings": warnings,
     }, ensure_ascii=False))
     return 0

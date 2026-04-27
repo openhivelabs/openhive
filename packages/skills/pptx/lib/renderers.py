@@ -48,14 +48,36 @@ def _set_run_font(run, name: str) -> None:
     render as the chosen Noto cut end-to-end.
     """
     run.font.name = name
-    rPr = run._r.get_or_add_rPr()
+    _ensure_ea_cs(run._r.get_or_add_rPr(), name)
+
+
+def _ensure_ea_cs(rPr_el, name: str) -> None:
+    """Add ``<a:ea>`` and ``<a:cs>`` typeface elements to any rPr-style node.
+
+    Reused by chart legend / axis font setters where python-pptx's Font
+    proxy only writes the latin slot.
+    """
+    from lxml import etree as _etree
     for tag in ("ea", "cs"):
-        # Remove any stale node first so repeated calls don't duplicate.
-        for existing in rPr.findall(f"{{{_A_NS}}}{tag}"):
-            rPr.remove(existing)
-        from lxml import etree as _etree
-        el = _etree.SubElement(rPr, f"{{{_A_NS}}}{tag}")
+        for existing in rPr_el.findall(f"{{{_A_NS}}}{tag}"):
+            rPr_el.remove(existing)
+        el = _etree.SubElement(rPr_el, f"{{{_A_NS}}}{tag}")
         el.set("typeface", name)
+
+
+def _set_chart_font(font_proxy, name: str) -> None:
+    """Apply a font name to a python-pptx chart Font (legend/axis/title).
+
+    python-pptx's Font.name only writes ``<a:latin>``; we mirror the run
+    behaviour and add ea/cs slots so chart text renders the chosen script.
+    """
+    font_proxy.name = name
+    rPr = getattr(font_proxy, "_rPr", None)
+    if rPr is None:
+        # Some Font proxies expose the element via ._element instead.
+        rPr = getattr(font_proxy, "_element", None)
+    if rPr is not None:
+        _ensure_ea_cs(rPr, name)
 
 
 def fill_background(slide, theme: Theme) -> None:
@@ -170,9 +192,11 @@ def add_bullet_paragraphs(
         i += 1
 
 
-def add_image(slide, rect: Rect, image_ref: str, fit: str = "contain"):
+def add_image(slide, rect: Rect, image_ref: str, fit: str = "contain",
+              align: str = "center"):
     """Place an image at `rect`. `image_ref` may be a local path or http(s) URL.
-    `fit` is contain|cover|full_bleed.
+    `fit` is contain|cover|full_bleed. `align` shifts the image inside `rect`
+    horizontally when fit=='contain' leaves slack: left|center|right.
     """
     path = _resolve_image(image_ref)
     from PIL import Image  # python-pptx already depends on Pillow
@@ -193,7 +217,12 @@ def add_image(slide, rect: Rect, image_ref: str, fit: str = "contain"):
     else:
         draw_h = rect.h
         draw_w = rect.h * aspect_img
-    draw_x = rect.x + (rect.w - draw_w) / 2
+    if align == "left":
+        draw_x = rect.x
+    elif align == "right":
+        draw_x = rect.x + (rect.w - draw_w)
+    else:
+        draw_x = rect.x + (rect.w - draw_w) / 2
     draw_y = rect.y + (rect.h - draw_h) / 2
     slide.shapes.add_picture(path, Inches(draw_x), Inches(draw_y), Inches(draw_w), Inches(draw_h))
 
@@ -335,6 +364,7 @@ def _render_column(slide, col: dict, rect: Rect, theme: Theme) -> None:
 def render_image(slide, s: dict, theme: Theme, grid: Grid) -> None:
     fill_background(slide, theme)
     fit = s.get("fit", "contain")
+    align = s.get("align", "center")
     title = s.get("title")
     caption = s.get("caption")
 
@@ -350,14 +380,14 @@ def render_image(slide, s: dict, theme: Theme, grid: Grid) -> None:
             cap_h = 0.4
             img_rect = Rect(content.x, content.y, content.w, content.h - cap_h - 0.15)
             cap_rect = Rect(content.x, content.y + content.h - cap_h, content.w, cap_h)
-            add_image(slide, img_rect, s["image"], fit=fit)
+            add_image(slide, img_rect, s["image"], fit=fit, align=align)
             add_textbox(
                 slide, cap_rect, caption,
                 font=theme.body_font, size=theme.size_caption, color=theme.muted,
-                italic=True, align="center", anchor="middle",
+                italic=True, align=align, anchor="middle",
             )
         else:
-            add_image(slide, content, s["image"], fit=fit)
+            add_image(slide, content, s["image"], fit=fit, align=align)
     set_notes(slide, s.get("notes"))
 
 
@@ -393,6 +423,14 @@ def render_table(slide, s: dict, theme: Theme, grid: Grid) -> None:
 
     tbl_shape = slide.shapes.add_table(n_rows, n_cols, x_emu, y_emu, w_emu, h_emu)
     tbl = tbl_shape.table
+
+    # apply user-specified relative column widths if present
+    col_widths = s.get("col_widths")
+    if isinstance(col_widths, list) and len(col_widths) == n_cols:
+        total = float(sum(col_widths))
+        if total > 0:
+            for j, w in enumerate(col_widths):
+                tbl.columns[j].width = Inches(content.w * (w / total))
 
     # header row
     for j, h in enumerate(headers):
@@ -495,7 +533,7 @@ def render_chart(slide, s: dict, theme: Theme, grid: Grid) -> None:
     if chart.has_legend:
         chart.legend.position = XL_LEGEND_POSITION.RIGHT if kind != "pie" else XL_LEGEND_POSITION.BOTTOM
         chart.legend.include_in_layout = False
-        chart.legend.font.name = theme.body_font
+        _set_chart_font(chart.legend.font, theme.body_font)
         chart.legend.font.size = Pt(theme.size_caption)
         chart.legend.font.color.rgb = _rgb(theme.fg)
 
@@ -503,13 +541,23 @@ def render_chart(slide, s: dict, theme: Theme, grid: Grid) -> None:
     palette = theme.chart_series or (theme.accent,)
     try:
         plot = chart.plots[0]
-        for i, ser in enumerate(plot.series):
-            fill = ser.format.fill
-            fill.solid()
-            color = palette[i % len(palette)]
-            fill.fore_color.rgb = _rgb(color)
-            if kind in ("line", "scatter", "area"):
-                ser.format.line.color.rgb = _rgb(color)
+        if kind == "pie":
+            # Pie has a single series whose data points map to slices —
+            # so we colour points, not the series, otherwise every slice
+            # comes out the accent colour and the chart reads as one blob.
+            ser = plot.series[0]
+            for j, pt in enumerate(ser.points):
+                fill = pt.format.fill
+                fill.solid()
+                fill.fore_color.rgb = _rgb(palette[j % len(palette)])
+        else:
+            for i, ser in enumerate(plot.series):
+                fill = ser.format.fill
+                fill.solid()
+                color = palette[i % len(palette)]
+                fill.fore_color.rgb = _rgb(color)
+                if kind in ("line", "scatter", "area"):
+                    ser.format.line.color.rgb = _rgb(color)
     except Exception:
         # pptx chart internals occasionally refuse style overrides on certain
         # chart types; falling back to default palette is non-fatal.

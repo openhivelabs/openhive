@@ -76,13 +76,17 @@ NSMAP = {"a": A, "p": P, "r": R, "c": C}
 
 @dataclass
 class Step:
-    kind: str                   # slide | title | subtitle | body | bullet | notes | chart | image | shape
+    kind: str                   # slide | title | subtitle | body | bullet | notes | chart | image | shape | table | cell
     index: int | None = None    # numeric index, or None
     special: str | None = None  # "last" for slide:last
+    attrs: dict | None = None   # bracket-form attrs, e.g. cell[r=2,c=1] → {"r": 2, "c": 1}
 
 
 _STEP_RE = re.compile(
-    r"^\s*(?P<kind>[a-zA-Z_]+)\s*(?::\s*(?P<index>\d+|last)\s*)?\s*$"
+    r"^\s*(?P<kind>[a-zA-Z_]+)"
+    r"(?:\s*:\s*(?P<index>\d+|last))?"
+    r"(?:\s*\[\s*(?P<attrs>[^\]]+)\s*\])?"
+    r"\s*$"
 )
 
 
@@ -96,12 +100,22 @@ def parse_selector(s: str) -> list[Step]:
             raise ValueError(f"invalid selector step: {raw!r}")
         kind = m.group("kind").lower()
         idx_raw = m.group("index")
+        attrs_raw = m.group("attrs")
         step = Step(kind=kind)
         if idx_raw is not None:
             if idx_raw == "last":
                 step.special = "last"
             else:
                 step.index = int(idx_raw)
+        if attrs_raw is not None:
+            attrs: dict = {}
+            for kv in attrs_raw.split(","):
+                if "=" not in kv:
+                    raise ValueError(f"invalid bracket attr {kv!r} in {raw!r}")
+                k, v = kv.split("=", 1)
+                k = k.strip(); v = v.strip()
+                attrs[k] = int(v) if v.lstrip("-").isdigit() else v
+            step.attrs = attrs
         steps.append(step)
     return steps
 
@@ -240,6 +254,14 @@ def _graphic_frames(slide_root: etree._Element, uri_filter: str | None = None) -
 def _charts(slide_root: etree._Element) -> list[etree._Element]:
     """Returns <p:graphicFrame> elements that wrap a chart."""
     return _graphic_frames(slide_root, uri_filter=C)
+
+
+_TABLE_URI = "http://schemas.openxmlformats.org/drawingml/2006/table"
+
+
+def _tables(slide_root: etree._Element) -> list[etree._Element]:
+    """Returns <p:graphicFrame> elements that wrap an a:tbl."""
+    return _graphic_frames(slide_root, uri_filter=_TABLE_URI)
 
 
 # ---------------------------------------------------------------------------
@@ -536,7 +558,15 @@ def op_insert_slide(pkg: Package, position: int, slide_spec: dict) -> None:
 
     from lib.layouts import SIZES, Grid  # noqa: E402
     from lib.renderers import RENDERERS  # noqa: E402
+    from lib.spec import SpecError, validate  # noqa: E402
     from lib.themes import get_theme  # noqa: E402
+
+    # Validate slide_spec before we go anywhere near the renderer — fail
+    # early with a clear field path instead of a deep stack trace.
+    try:
+        validate({"slides": [slide_spec]})
+    except SpecError as e:
+        raise OpError(f"insert_slide: invalid slide spec: {e}") from None
 
     theme = get_theme("default")
     grid = Grid(size="16:9")
@@ -696,6 +726,75 @@ def _next_sld_id(sld_id_list: etree._Element) -> int:
     return i
 
 
+def op_update_table_cell(pkg: Package, target: str, value: str) -> None:
+    """Replace the text of a single table cell.
+
+    Selector: ``slide:N > table[:K] > cell[r=R,c=C]`` — zero-based row/col
+    indexes including the header row. Preserves the cell's first run rPr
+    (font/size/color) so styling survives the edit.
+    """
+    steps = parse_selector(target)
+    slide_part = resolve_slide(pkg, steps)
+    if len(steps) < 3:
+        raise OpError(
+            "update_table_cell needs three steps: 'slide:N > table[:K] > cell[r=R,c=C]'"
+        )
+    if steps[1].kind != "table":
+        raise OpError(f"second step must be 'table' or 'table:K', got {steps[1].kind!r}")
+    if steps[2].kind != "cell" or not steps[2].attrs:
+        raise OpError("third step must be 'cell[r=R,c=C]'")
+    r_idx = steps[2].attrs.get("r")
+    c_idx = steps[2].attrs.get("c")
+    if not isinstance(r_idx, int) or not isinstance(c_idx, int):
+        raise OpError("cell selector requires integer r= and c= attributes")
+
+    slide_root = slide_part.xml()
+    tbls = _tables(slide_root)
+    if not tbls:
+        raise OpError(f"no tables on {target}")
+    tbl_idx = steps[1].index or 0
+    if not (0 <= tbl_idx < len(tbls)):
+        raise OpError(f"table index {tbl_idx} out of range (have {len(tbls)})")
+    tbl_frame = tbls[tbl_idx]
+    tbl = tbl_frame.find(f".//{{{A}}}tbl")
+    if tbl is None:
+        raise OpError("graphicFrame has no <a:tbl>")
+    rows = tbl.findall(f"{{{A}}}tr")
+    if not (0 <= r_idx < len(rows)):
+        raise OpError(f"row {r_idx} out of range (have {len(rows)})")
+    cells = rows[r_idx].findall(f"{{{A}}}tc")
+    if not (0 <= c_idx < len(cells)):
+        raise OpError(f"col {c_idx} out of range (have {len(cells)})")
+    tc = cells[c_idx]
+    tx_body = tc.find(f"{{{A}}}txBody")
+    if tx_body is None:
+        # add empty body so we have somewhere to write
+        tx_body = etree.SubElement(tc, f"{{{A}}}txBody")
+        etree.SubElement(tx_body, f"{{{A}}}bodyPr")
+        etree.SubElement(tx_body, f"{{{A}}}lstStyle")
+
+    # preserve first rPr
+    proto_rPr = None
+    for p in tx_body.findall(f"{{{A}}}p"):
+        r = p.find(f"{{{A}}}r")
+        if r is not None:
+            rPr = r.find(f"{{{A}}}rPr")
+            if rPr is not None:
+                proto_rPr = copy.deepcopy(rPr)
+                break
+
+    for p in tx_body.findall(f"{{{A}}}p"):
+        tx_body.remove(p)
+
+    p = etree.SubElement(tx_body, f"{{{A}}}p")
+    r = etree.SubElement(p, f"{{{A}}}r")
+    if proto_rPr is not None:
+        r.append(proto_rPr)
+    t = etree.SubElement(r, f"{{{A}}}t")
+    t.text = value
+    slide_part.set_xml(slide_root)
+
+
 def op_set_style(pkg: Package, target: str, *, font: str | None = None,
                  size: int | None = None, color: tuple[int, int, int] | list | None = None,
                  bold: bool | None = None, italic: bool | None = None) -> None:
@@ -729,8 +828,10 @@ def op_set_style(pkg: Package, target: str, *, font: str | None = None,
     else:
         raise OpError(f"set_style cannot target kind {target_kind!r}")
 
+    runs_touched = 0
     for p in paragraphs:
         for r in p.findall(f"{{{A}}}r"):
+            runs_touched += 1
             rPr = r.find(f"{{{A}}}rPr")
             if rPr is None:
                 rPr = etree.SubElement(r, f"{{{A}}}rPr")
@@ -742,10 +843,11 @@ def op_set_style(pkg: Package, target: str, *, font: str | None = None,
             if italic is not None:
                 rPr.set("i", "1" if italic else "0")
             if font is not None:
-                # drop existing latin, add new
-                for child in rPr.findall(f"{{{A}}}latin"):
-                    rPr.remove(child)
-                etree.SubElement(rPr, f"{{{A}}}latin", typeface=font)
+                # write all three typeface slots so non-Latin text survives
+                for tag in ("latin", "ea", "cs"):
+                    for child in rPr.findall(f"{{{A}}}{tag}"):
+                        rPr.remove(child)
+                    etree.SubElement(rPr, f"{{{A}}}{tag}", typeface=font)
             if color is not None:
                 for child in rPr.findall(f"{{{A}}}solidFill"):
                     rPr.remove(child)
@@ -754,6 +856,7 @@ def op_set_style(pkg: Package, target: str, *, font: str | None = None,
                 etree.SubElement(fill, f"{{{A}}}srgbClr", val=hex_)
 
     slide_part.set_xml(slide_root)
+    return runs_touched
 
 
 # ---------------------------------------------------------------------------
@@ -769,6 +872,7 @@ DISPATCH = {
     "move_slide": lambda pkg, op: op_move_slide(pkg, op["from"], op["to"]),
     "insert_slide": lambda pkg, op: op_insert_slide(pkg, op["position"], op["slide"]),
     "swap_image": lambda pkg, op: op_swap_image(pkg, op["target"], op["value"]),
+    "update_table_cell": lambda pkg, op: op_update_table_cell(pkg, op["target"], op["value"]),
     "set_style": lambda pkg, op: op_set_style(
         pkg, op["target"],
         font=op.get("font"), size=op.get("size"), color=op.get("color"),
@@ -776,6 +880,53 @@ DISPATCH = {
     ),
     # update_chart handled via chart_data.py — see apply_patch below
 }
+
+
+def _patch_warnings(i: int, op: dict, result) -> list[str]:
+    """Generate non-fatal warnings for an op that already executed.
+
+    Mirrors lib.spec.validate's build-time warnings so the LLM hears about
+    overflow risks during edits too — replace_bullets bombing 20 items into
+    a slide, insert_slide adding a 30-row table, etc.
+    """
+    out: list[str] = []
+    kind = op.get("op")
+    here = f"op[{i}] ({kind})"
+    if kind == "replace_bullets":
+        n = _count_value_bullets(op.get("value"))
+        if n > 9:
+            out.append(f"{here}: {n} bullets — may overflow slide")
+    elif kind == "insert_slide":
+        spec = op.get("slide") or {}
+        if spec.get("type") == "table":
+            rows = spec.get("rows") or []
+            if len(rows) > 12:
+                out.append(
+                    f"{here}: table has {len(rows)} rows — renderer truncates to 12"
+                )
+        if spec.get("type") == "bullets":
+            n = _count_value_bullets(spec.get("bullets"))
+            if n > 9:
+                out.append(f"{here}: {n} bullets — may overflow")
+        if spec.get("type") == "chart":
+            ser = spec.get("series") or []
+            if len(ser) > 6:
+                out.append(f"{here}: {len(ser)} chart series — legend may overflow")
+    elif kind == "set_style" and isinstance(result, int) and result == 0:
+        out.append(f"{here}: matched 0 runs — selector may not have text yet")
+    return out
+
+
+def _count_value_bullets(items) -> int:
+    if not isinstance(items, list):
+        return 0
+    n = 0
+    for it in items:
+        if isinstance(it, str):
+            n += 1
+        elif isinstance(it, list):
+            n += _count_value_bullets(it)
+    return n
 
 
 def apply_patch(pkg: Package, patch: dict) -> list[str]:
@@ -792,6 +943,7 @@ def apply_patch(pkg: Package, patch: dict) -> list[str]:
     warnings: list[str] = []
     for i, op in enumerate(ops):
         kind = op.get("op")
+        result = None
         if kind == "update_chart":
             from .chart_data import op_update_chart
             op_update_chart(pkg, op["target"],
@@ -799,9 +951,10 @@ def apply_patch(pkg: Package, patch: dict) -> list[str]:
                             series=op.get("series"))
         elif kind in DISPATCH:
             try:
-                DISPATCH[kind](pkg, op)
+                result = DISPATCH[kind](pkg, op)
             except OpError as e:
                 raise OpError(f"op[{i}] ({kind}): {e}") from None
         else:
             raise OpError(f"op[{i}]: unknown op {kind!r}")
+        warnings.extend(_patch_warnings(i, op, result))
     return warnings

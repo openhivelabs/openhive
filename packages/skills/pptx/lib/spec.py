@@ -91,6 +91,9 @@ def _validate_slide(i: int, slide: Any, warnings: list[str]) -> None:
         fit = slide.get("fit", "contain")
         if fit not in {"contain", "cover", "full_bleed"}:
             raise SpecError(f"{here}.fit: must be contain|cover|full_bleed")
+        align = slide.get("align")
+        if align is not None and align not in {"left", "center", "right"}:
+            raise SpecError(f"{here}.align: must be left|center|right")
     elif t == "table":
         _opt_str(slide, "title", here)
         headers = slide.get("headers")
@@ -106,6 +109,15 @@ def _validate_slide(i: int, slide: Any, warnings: list[str]) -> None:
             warnings.append(f"{here}: {len(rows)} rows — table will be truncated to 12 for readability")
         if len(headers) > 8:
             warnings.append(f"{here}: {len(headers)} columns — consider splitting data")
+        col_widths = slide.get("col_widths")
+        if col_widths is not None:
+            if (not isinstance(col_widths, list)
+                    or len(col_widths) != len(headers)
+                    or any(not isinstance(w, (int, float)) or w <= 0 for w in col_widths)):
+                raise SpecError(
+                    f"{here}.col_widths: must be a list of {len(headers)} positive numbers "
+                    f"(relative weights — they get normalised)"
+                )
     elif t == "chart":
         _opt_str(slide, "title", here)
         kind = slide.get("kind")
