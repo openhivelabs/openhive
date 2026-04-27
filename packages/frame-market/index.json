@@ -67,7 +67,7 @@
     {
       "id": "pie-chart",
       "name": "Pie Chart",
-      "description": "Donut showing category share of a total. Best with 3-6 categories.",
+      "description": "Donut showing category share of a total. Up to 10 slices (9 + Other) — beyond that the extras collapse into one Other wedge.",
       "author": "OpenHive",
       "category": "chart",
       "tags": ["chart", "pie", "donut", "distribution", "universal"],
@@ -120,8 +120,8 @@
       "tags": ["kpi", "goal", "target", "progress", "okr"],
       "preview": {
         "kind": "kpi",
-        "value": "₩7.2M",
-        "target": "₩10M",
+        "value": "$7.2M",
+        "target": "$10M",
         "hint": "이번 달 목표",
         "progress": 72
       }
@@ -231,6 +231,19 @@
       }
     },
     {
+      "id": "sticky-note",
+      "name": "Sticky Note",
+      "description": "Free-form note panel. Click to edit, type Markdown, save. Content lives on the panel itself — no data binding, no SQL. Use for meeting notes, TODOs, links, or anything you want pinned to a dashboard.",
+      "author": "OpenHive",
+      "category": "memo",
+      "tags": ["memo", "note", "sticky", "markdown", "freeform"],
+      "preview": {
+        "kind": "memo",
+        "subtitle": "Note",
+        "text": "# Standup\n- Ship memo panel\n- Review PR #42\n- Sync w/ design"
+      }
+    },
+    {
       "id": "heatmap-chart",
       "name": "Heatmap",
       "description": "Two-dimensional density grid. Each cell is shaded by intensity. Use for patterns line/bar can't show — usage by day-of-week × hour, signups by region × month.",
@@ -241,14 +254,13 @@
         "kind": "heatmap",
         "subtitle": "Density",
         "colLabels": ["Mon", "Tue", "Wed", "Thu", "Fri"],
-        "rowLabels": ["08", "10", "12", "14", "16", "18"],
+        "rowLabels": ["09", "12", "15", "18", "21"],
         "values": [
           [1, 2, 3, 2, 1],
-          [4, 5, 7, 5, 3],
-          [6, 8, 11, 9, 7],
-          [9, 12, 15, 13, 10],
-          [7, 9, 11, 10, 6],
-          [3, 5, 6, 5, 2]
+          [4, 6, 9, 6, 4],
+          [7, 11, 15, 12, 8],
+          [5, 8, 11, 9, 6],
+          [2, 4, 6, 4, 2]
         ]
       }
     }

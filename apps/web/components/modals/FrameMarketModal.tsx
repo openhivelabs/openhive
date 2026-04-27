@@ -8,8 +8,11 @@ import {
   Gauge,
   Kanban,
   MagnifyingGlass,
+  CalendarBlank,
   Note,
+  NotePencil,
   Package,
+  Rows,
   Pulse,
   Robot,
   SquaresFour,
@@ -90,6 +93,9 @@ const CATEGORY_BLURB: Record<string, string> = {
   kanban: 'Cards grouped by a status column, drag to move.',
   activity: 'Chronological feed of writes and events.',
   note: 'Pinned markdown — charters, links, reference text.',
+  memo: 'Free-form sticky notes you write directly on the dashboard.',
+  calendar: 'Month grid + day timetable for events on dated rows.',
+  'stat-row': 'Compact horizontal row of related counters.',
 }
 
 const CATEGORY_ICON: Record<string, typeof UsersIcon> = {
@@ -99,6 +105,9 @@ const CATEGORY_ICON: Record<string, typeof UsersIcon> = {
   kanban: Kanban,
   activity: Pulse,
   note: Note,
+  memo: NotePencil,
+  calendar: CalendarBlank,
+  'stat-row': Rows,
 }
 
 const TAB_DEFS: { type: MarketType; label: string; icon: typeof UsersIcon }[] = [
@@ -223,12 +232,22 @@ export function FrameMarketModal({
       .finally(() => setLoading(false))
   }, [open])
 
+  // When the modal opens, snap the target company to the parent's default.
+  // Without this the modal retains whatever company was selected the first
+  // time it mounted — so opening the picker from ExternalDB after an earlier
+  // open from OpenHive would still install into OpenHive.
   useEffect(() => {
     if (!open) return
-    if (!targetCompanyId && companies.length > 0) {
-      setTargetCompanyId(defaultCompanyId ?? companies[0]!.id)
+    if (defaultCompanyId) {
+      setTargetCompanyId(defaultCompanyId)
+    } else if (companies.length > 0) {
+      setTargetCompanyId((prev) => prev ?? companies[0]!.id)
     }
-  }, [open, companies, defaultCompanyId, targetCompanyId])
+    // Intentionally only re-runs when `open` flips or the parent's default
+    // changes — not on every targetCompanyId edit, so the in-modal picker
+    // (when lockTarget is false) still works.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, defaultCompanyId])
 
   // Re-seed team target each time the company changes (or modal opens fresh).
   // Honour defaultTeamId only when it actually belongs to the current company;
@@ -716,11 +735,8 @@ export function FrameMarketModal({
                       )}
                     </div>
                     {preview && (
-                      <div className="shrink-0 w-[180px] hidden md:flex flex-col rounded-md border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-950 overflow-hidden self-stretch">
-                        <div className="shrink-0 px-2.5 py-1 border-b border-neutral-200 dark:border-neutral-700 text-[11.5px] font-medium text-neutral-700 dark:text-neutral-200 truncate">
-                          {preview.subtitle ?? entry.name}
-                        </div>
-                        <div className="flex-1 min-h-0 overflow-hidden bg-white dark:bg-neutral-900">
+                      <div className="shrink-0 w-[180px] hidden md:flex flex-col rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 overflow-hidden self-stretch">
+                        <div className="flex-1 min-h-0 overflow-hidden">
                           {renderPreview(preview, true)}
                         </div>
                       </div>
@@ -1378,6 +1394,7 @@ function renderPreview(p: PanelPreview, compact = false): React.ReactElement {
           delta={p.delta}
           target={p.target}
           progress={p.progress}
+          compact={compact}
         />
       )
     case 'kanban':
@@ -1396,7 +1413,17 @@ function renderPreview(p: PanelPreview, compact = false): React.ReactElement {
       return <StatRowPreview stats={p.stats} />
     case 'calendar':
       return <CalendarPreview month={p.month} days={p.days} />
+    case 'memo':
+      return <MemoPreview text={p.text} />
   }
+}
+
+function MemoPreview({ text }: { text: string }) {
+  return (
+    <div className="h-full w-full p-2 bg-yellow-50 dark:bg-yellow-950/20 text-[11px] text-neutral-700 dark:text-neutral-200 whitespace-pre-wrap overflow-hidden">
+      {text}
+    </div>
+  )
 }
 
 function CalendarPreview({
@@ -1463,10 +1490,10 @@ function CalendarPreviewDetail() {
   return (
     <div className="w-[42px] shrink-0 flex flex-col gap-1 p-1">
       <div className="text-[7.5px] text-neutral-400 truncate px-0.5">{t('calendar.preview.date')}</div>
-      <div className="rounded-sm border border-l-2 border-l-amber-400 border-neutral-200 dark:border-neutral-700 px-1 py-0.5">
+      <div className="rounded-r-sm border border-l-[3px] border-l-amber-400 border-y-neutral-200 border-r-neutral-200 dark:border-y-neutral-700 dark:border-r-neutral-700 bg-white dark:bg-neutral-900 px-1 py-0.5">
         <div className="text-[7px] text-neutral-700 dark:text-neutral-200 truncate">{t('calendar.preview.event1')}</div>
       </div>
-      <div className="rounded-sm border border-l-2 border-l-blue-400 border-neutral-200 dark:border-neutral-700 px-1 py-0.5">
+      <div className="rounded-r-sm border border-l-[3px] border-l-blue-400 border-y-neutral-200 border-r-neutral-200 dark:border-y-neutral-700 dark:border-r-neutral-700 bg-white dark:bg-neutral-900 px-1 py-0.5">
         <div className="text-[7px] text-neutral-700 dark:text-neutral-200 truncate">{t('calendar.preview.event2')}</div>
       </div>
       <div className="rounded-sm border border-dashed border-neutral-300 dark:border-neutral-600 px-1 py-0.5 text-[7px] text-neutral-400">
@@ -1480,50 +1507,20 @@ function CalendarPreviewDetail() {
  *  StatRowView — divided cells, label-on-top + medium number — at a smaller
  *  scale that fits the catalog tile. */
 function StatRowPreview({ stats }: { stats: { label: string; value: string }[] }) {
-  const t = useT()
-  const [unitMode, setUnitMode] = useState<'compact' | 'full'>('compact')
   if (stats.length === 0) return null
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex justify-end items-center gap-1 px-3 pt-2">
-        <button
-          type="button"
-          onClick={() => setUnitMode('compact')}
-          aria-pressed={unitMode === 'compact'}
-          className={
-            unitMode === 'compact'
-              ? 'px-2 py-0.5 rounded-sm text-[11.5px] font-medium bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 cursor-pointer'
-              : 'px-2 py-0.5 rounded-sm text-[11.5px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer'
-          }
-        >
-          {t('kpi.unit.compact')}
-        </button>
-        <button
-          type="button"
-          onClick={() => setUnitMode('full')}
-          aria-pressed={unitMode === 'full'}
-          className={
-            unitMode === 'full'
-              ? 'px-2 py-0.5 rounded-sm text-[11.5px] font-medium bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 cursor-pointer'
-              : 'px-2 py-0.5 rounded-sm text-[11.5px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer'
-          }
-        >
-          {t('kpi.unit.full')}
-        </button>
-      </div>
-      <div className="flex-1 flex items-center px-2">
-        <div className="flex w-full divide-x divide-neutral-200 dark:divide-neutral-800">
-          {stats.map((s, i) => (
-            <div key={`${s.label}-${i}`} className="flex-1 px-3 py-2.5 min-w-0">
-              <div className="text-[10.5px] text-neutral-500 uppercase tracking-wider font-medium truncate">
-                {s.label}
-              </div>
-              <div className="mt-1 text-[22px] font-semibold tracking-tight tabular-nums truncate">
-                {formatPreviewValue(s.value, unitMode)}
-              </div>
+    <div className="h-full flex items-center px-2">
+      <div className="flex w-full divide-x divide-neutral-200 dark:divide-neutral-800">
+        {stats.map((s, i) => (
+          <div key={`${s.label}-${i}`} className="flex-1 px-3 py-2.5 min-w-0">
+            <div className="text-[10.5px] text-neutral-500 uppercase tracking-wider font-medium truncate">
+              {s.label}
             </div>
-          ))}
-        </div>
+            <div className="mt-1 text-[22px] font-semibold tracking-tight tabular-nums truncate">
+              {formatPreviewValue(s.value, 'compact')}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -1545,35 +1542,31 @@ function HeatmapPreview({
   let max = 0
   for (const row of values) for (const v of row) if (v > max) max = v
   const safeMax = max > 0 ? max : 1
+  const cols = colLabels.length
+  const rows = rowLabels.length
   return (
-    <div className="h-full w-full p-3 flex items-center justify-center">
+    <div className="h-full w-full p-2 flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
       <div
         className="grid gap-[2px]"
         style={{
-          gridTemplateColumns: `auto repeat(${colLabels.length}, 1fr)`,
+          gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+          gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+          aspectRatio: `${cols} / ${rows}`,
+          maxHeight: '100%',
+          maxWidth: '100%',
+          height: '100%',
+          width: 'auto',
         }}
       >
-        <div />
-        {colLabels.map((c) => (
-          <div
-            key={c}
-            className="text-[9.5px] text-center text-neutral-400 font-medium tracking-wide pb-0.5"
-          >
-            {c}
-          </div>
-        ))}
         {rowLabels.map((rowLabel, ri) => (
           <Fragment key={rowLabel}>
-            <div className="text-[9.5px] text-right text-neutral-400 font-medium tracking-wide pr-1.5 self-center tabular-nums">
-              {rowLabel}
-            </div>
             {colLabels.map((colLabel, ci) => {
               const v = values[ri]?.[ci] ?? 0
               const intensity = v / safeMax
               return (
                 <div
                   key={colLabel}
-                  className="aspect-square rounded-[2px]"
+                  className="rounded-[2px]"
                   style={{
                     background:
                       intensity > 0
@@ -1596,6 +1589,7 @@ function KpiPreview({
   delta,
   target,
   progress,
+  compact,
 }: {
   value: string
   /** No longer rendered — panel title carries the label. Kept on the prop
@@ -1606,6 +1600,9 @@ function KpiPreview({
   delta?: string
   target?: string
   progress?: number
+  /** Catalog-tile thumbnails set this — hides the unit toggle since the
+   *  tile is too small for it to be useful. */
+  compact?: boolean
 }) {
   const t = useT()
   // Catalog preview's toggle is mostly a teaser — actual reformat only
@@ -1623,32 +1620,34 @@ function KpiPreview({
   })()
   return (
     <div className="h-full flex flex-col p-4">
-      <div className="flex justify-end items-center gap-1">
-        <button
-          type="button"
-          onClick={() => setUnitMode('compact')}
-          aria-pressed={unitMode === 'compact'}
-          className={
-            unitMode === 'compact'
-              ? 'px-2 py-0.5 rounded-sm text-[11.5px] font-medium bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 cursor-pointer'
-              : 'px-2 py-0.5 rounded-sm text-[11.5px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer'
-          }
-        >
-          {t('kpi.unit.compact')}
-        </button>
-        <button
-          type="button"
-          onClick={() => setUnitMode('full')}
-          aria-pressed={unitMode === 'full'}
-          className={
-            unitMode === 'full'
-              ? 'px-2 py-0.5 rounded-sm text-[11.5px] font-medium bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 cursor-pointer'
-              : 'px-2 py-0.5 rounded-sm text-[11.5px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer'
-          }
-        >
-          {t('kpi.unit.full')}
-        </button>
-      </div>
+      {!compact && (
+        <div className="flex justify-end items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setUnitMode('compact')}
+            aria-pressed={unitMode === 'compact'}
+            className={
+              unitMode === 'compact'
+                ? 'px-2 py-0.5 rounded-sm text-[11.5px] font-medium bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 cursor-pointer'
+                : 'px-2 py-0.5 rounded-sm text-[11.5px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer'
+            }
+          >
+            {t('kpi.unit.compact')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setUnitMode('full')}
+            aria-pressed={unitMode === 'full'}
+            className={
+              unitMode === 'full'
+                ? 'px-2 py-0.5 rounded-sm text-[11.5px] font-medium bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 cursor-pointer'
+                : 'px-2 py-0.5 rounded-sm text-[11.5px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer'
+            }
+          >
+            {t('kpi.unit.full')}
+          </button>
+        </div>
+      )}
       <div className="flex-1 flex items-end min-w-0 w-full">
         <div className="min-w-0 w-full">
           <div
@@ -1970,9 +1969,9 @@ function PieChartPreview({ slices, compact }: { slices: { label: string; value: 
         <div className="min-w-0 h-full">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
-              <Pie data={trimmed} dataKey="value" nameKey="label" innerRadius="55%" outerRadius="85%" paddingAngle={1} isAnimationActive={false}>
+              <Pie data={trimmed} dataKey="value" nameKey="label" innerRadius="55%" outerRadius="85%" paddingAngle={0} stroke="none" isAnimationActive={false}>
                 {trimmed.map((_, i) => (
-                  <Cell key={i} fill={PIE_PREVIEW_PALETTE[i % PIE_PREVIEW_PALETTE.length]} />
+                  <Cell key={i} fill={PIE_PREVIEW_PALETTE[i % PIE_PREVIEW_PALETTE.length]} stroke="none" />
                 ))}
               </Pie>
             </PieChart>

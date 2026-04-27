@@ -7,6 +7,7 @@ import {
   ActionError,
 } from '@/lib/server/panels/actions'
 import { synthesizeKanbanActions } from '@/lib/server/panels/synthesize'
+import { getMemo, setMemo } from '@/lib/server/panels/memos'
 import { get } from '@/lib/server/panels/cache'
 import { apply as applyMapper } from '@/lib/server/panels/mapper'
 import { enrichKanbanTaxonomy, refreshOneNow } from '@/lib/server/panels/refresher'
@@ -160,6 +161,35 @@ panels.post('/rebind', async (c) => {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ detail: message }, 502)
   }
+})
+
+// GET /api/panels/:panelId/memo?teamId=...
+panels.get('/:panelId/memo', (c) => {
+  const panelId = c.req.param('panelId')
+  const teamId = c.req.query('teamId')
+  if (typeof teamId !== 'string' || !teamId) {
+    return c.json({ detail: 'teamId required' }, 400)
+  }
+  const slugs = resolveTeamSlugs(teamId)
+  if (!slugs) return c.json({ detail: 'team not found' }, 404)
+  return c.json(getMemo(slugs.companySlug, teamId, panelId))
+})
+
+// PUT /api/panels/:panelId/memo
+// Body: { teamId: string, content: string }
+panels.put('/:panelId/memo', async (c) => {
+  const panelId = c.req.param('panelId')
+  const body = (await c.req.json().catch(() => ({}))) as {
+    teamId?: unknown
+    content?: unknown
+  }
+  if (typeof body.teamId !== 'string' || !body.teamId) {
+    return c.json({ detail: 'teamId required' }, 400)
+  }
+  const content = typeof body.content === 'string' ? body.content : ''
+  const slugs = resolveTeamSlugs(body.teamId)
+  if (!slugs) return c.json({ detail: 'team not found' }, 404)
+  return c.json(setMemo(slugs.companySlug, body.teamId, panelId, content))
 })
 
 // GET /api/panels/:panelId/data
