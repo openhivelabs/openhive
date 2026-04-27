@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { type CreateTaskInput, NewTaskModal } from '@/components/modals/NewTaskModal'
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal'
+import { PageEmptyState } from '@/components/ui/PageEmptyState'
 import { useT } from '@/lib/i18n'
 import { loadViewedIds, saveViewedIds } from '@/lib/sessionViewed'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
@@ -660,15 +661,9 @@ function EmptyInbox({
   truly: boolean
 }) {
   return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-3 px-8 text-center">
-      <ChatsCircle
-        weight="thin"
-        className="w-14 h-14 text-neutral-300 dark:text-neutral-700"
-      />
-      <div className="text-[13px] text-neutral-400 dark:text-neutral-500">
-        {truly ? t('tasks.sessionsEmpty') : t('tasks.noInTab')}
-      </div>
-    </div>
+    <PageEmptyState icon={<ChatsCircle weight="thin" className="w-10 h-10" />}>
+      {truly ? t('tasks.sessionsEmpty') : t('tasks.noInTab')}
+    </PageEmptyState>
   )
 }
 
