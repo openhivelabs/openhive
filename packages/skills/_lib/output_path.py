@@ -78,7 +78,12 @@ def is_scratch_target(path: str | pathlib.Path, *, scratch: bool = False) -> boo
     return _looks_like_scratch_name(p.name)
 
 
-def resolve_out(path: str | pathlib.Path, *, scratch: bool = False) -> pathlib.Path:
+def resolve_out(
+    path: str | pathlib.Path,
+    *,
+    scratch: bool = False,
+    ensure_ext: str | None = None,
+) -> pathlib.Path:
     """Resolve --out against the run's artifact directory.
 
     Returns an absolute Path. The caller is responsible for `mkdir(parents=...)`
@@ -87,6 +92,11 @@ def resolve_out(path: str | pathlib.Path, *, scratch: bool = False) -> pathlib.P
     `scratch=True` short-circuits the rewrite — the file lands wherever the
     caller said, completely skipping OPENHIVE_OUTPUT_DIR. Use it for
     verification renders that should not appear in the chat artifact panel.
+
+    `ensure_ext` (e.g. ".xlsx") rewrites the basename's suffix when it doesn't
+    match. Smaller models keep handing in legacy/aliased extensions (`.xls`
+    when openpyxl actually emits `.xlsx`); without normalization Excel
+    rejects the file as a format mismatch even though the bytes are valid.
     """
     if not path:
         # Caller's argparse should have made this required, but guard anyway.
@@ -97,6 +107,17 @@ def resolve_out(path: str | pathlib.Path, *, scratch: bool = False) -> pathlib.P
     internal = os.environ.get("OPENHIVE_SKILL_INTERNAL") == "1"
 
     p = pathlib.Path(raw).expanduser()
+
+    if ensure_ext:
+        want = ensure_ext if ensure_ext.startswith(".") else f".{ensure_ext}"
+        if p.suffix.lower() != want.lower():
+            corrected = p.with_suffix(want) if p.suffix else pathlib.Path(f"{p}{want}")
+            sys.stderr.write(
+                f"note: --out {p.name!r} has the wrong extension; "
+                f"rewriting to {corrected.name!r} (this skill only emits {want}).\n"
+            )
+            p = corrected
+            raw = str(corrected)
 
     # Auto-promote obvious throwaway names (test*.pdf, probe*.pdf, tmp*.pdf,
     # out*.pdf, …) to scratch — even if the caller didn't pass --scratch.

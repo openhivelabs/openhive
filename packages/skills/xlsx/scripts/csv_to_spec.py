@@ -85,7 +85,7 @@ def main() -> int:
     if nfmts:
         spec["sheets"][0]["number_formats"] = nfmts
 
-    out = resolve_out(args.out)
+    out = resolve_out(args.out, ensure_ext=".json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(spec, ensure_ascii=False, indent=2),
                    encoding="utf-8")

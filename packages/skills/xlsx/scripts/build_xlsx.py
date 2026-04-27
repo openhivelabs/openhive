@@ -66,7 +66,7 @@ def main() -> int:
     except Exception as e:
         return _fail(f"render failed: {e}\n{traceback.format_exc()}")
 
-    out = resolve_out(args.out)
+    out = resolve_out(args.out, ensure_ext=".xlsx")
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(out))
 

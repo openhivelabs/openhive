@@ -55,7 +55,7 @@ def main() -> int:
         import traceback
         return _fail(f"unexpected: {e}\n{traceback.format_exc()}")
 
-    out = resolve_out(args.out)
+    out = resolve_out(args.out, ensure_ext=".xlsx")
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(out))
 

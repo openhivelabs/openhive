@@ -104,7 +104,7 @@ def main() -> int:
         warnings.append(f"extracted spec fails build-time validate(): {e}")
         spec_valid = False
 
-    out = resolve_out(args.out)
+    out = resolve_out(args.out, ensure_ext=".json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(deck, ensure_ascii=False, indent=2),
                    encoding="utf-8")
