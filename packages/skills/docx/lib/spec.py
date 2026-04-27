@@ -14,20 +14,7 @@ A docx spec is a JSON object:
       "blocks": [ ... ]          // ordered list of blocks
     }
 
-Block types:
-    heading           { level: 1-6, text }
-    paragraph         { text, align?, style? }   align: left|center|right|justify
-    bullets           { items: [...nested...] }
-    numbered          { items: [...nested...] }
-    table             { headers: [...], rows: [[...], ...], style?: "grid"|"light"|"plain" }
-    image             { path, caption?, width_in?, align? }
-    page_break        { }
-    quote             { text, attribution? }
-    code              { text, language? }   // monospace block
-    horizontal_rule   { }
-    toc               { levels?: 1-3 }      // table of contents placeholder
-    kpi_row           { stats: [{value, label, delta?}] }
-    two_column        { left: block|[blocks], right: block|[blocks] }
+Block types: see BLOCK_TYPES below.
 """
 from __future__ import annotations
 
@@ -38,10 +25,29 @@ BLOCK_TYPES = {
     "heading", "paragraph", "bullets", "numbered", "table",
     "image", "page_break", "quote", "code", "horizontal_rule",
     "toc", "kpi_row", "two_column",
+    # new visual blocks
+    "cover", "chart", "callout", "sidebar", "spacer", "divider",
+    "section_break",
+    # extended
+    "pull_quote", "definition_list", "image_gallery", "equation",
+    "bookmark", "xref",
+    "timeline", "progress", "card_grid", "drop_cap",
+    "comment", "table_of_figures", "table_of_charts", "table_of_tables",
+    "gantt",
+    "faq", "pricing_table", "author", "step_list", "code_diff",
+    "bibliography", "qr_code", "stat_list",
+    "columns", "margin_note", "checklist", "page_border", "index",
+    "image_card", "summary_box", "metric_compare", "color_swatch",
+    "split_layout",
 }
 
 ALIGN_VALUES = {"left", "center", "right", "justify"}
-TABLE_STYLES = {"grid", "light", "plain"}
+TABLE_STYLES = {"grid", "light", "plain", "zebra", "minimal"}
+CALLOUT_VARIANTS = {"info", "success", "warning", "danger", "note", "tip",
+                    "action", "decision", "question", "mention", "key"}
+CHART_VARIANTS = {"bar", "hbar", "line", "area", "donut", "pie",
+                  "scatter", "stacked_bar", "sparkline", "combo",
+                  "radar", "bubble"}
 
 
 class SpecError(ValueError):
@@ -127,7 +133,153 @@ def _validate_block(i: int, block: Any, warnings: list[str]) -> None:
             col = block.get(side)
             if col is None:
                 raise SpecError(f"{here}.{side}: required")
-    # page_break, horizontal_rule: no extra fields required
+    elif t == "cover":
+        _req_str(block, "title", here)
+    elif t == "chart":
+        variant = block.get("variant", "bar")
+        if variant not in CHART_VARIANTS:
+            raise SpecError(f"{here}.variant: must be one of {sorted(CHART_VARIANTS)}")
+        if variant in ("bar", "line", "area", "scatter", "stacked_bar", "hbar",
+                       "combo", "radar", "bubble"):
+            series = block.get("series")
+            if not isinstance(series, list) or not series:
+                raise SpecError(f"{here}.series: non-empty array required for {variant}")
+            for j, s in enumerate(series):
+                if not isinstance(s, dict) or not isinstance(s.get("values"), list):
+                    raise SpecError(f"{here}.series[{j}].values: array required")
+        elif variant in ("donut", "pie"):
+            slices = block.get("slices")
+            if not isinstance(slices, list) or not slices:
+                raise SpecError(f"{here}.slices: non-empty array required for {variant}")
+        elif variant == "sparkline":
+            values = block.get("values")
+            if not isinstance(values, list) or not values:
+                raise SpecError(f"{here}.values: non-empty array required for sparkline")
+    elif t == "callout":
+        variant = block.get("variant", "info")
+        if variant not in CALLOUT_VARIANTS:
+            raise SpecError(f"{here}.variant: must be one of {sorted(CALLOUT_VARIANTS)}")
+        if not (block.get("text") or block.get("title") or block.get("bullets")):
+            raise SpecError(f"{here}: needs text, title, or bullets")
+    elif t == "sidebar":
+        if not (block.get("text") or block.get("title") or block.get("bullets")):
+            raise SpecError(f"{here}: needs text, title, or bullets")
+    elif t == "pull_quote":
+        _req_str(block, "text", here)
+    elif t == "definition_list":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.items: non-empty array required")
+        for j, it in enumerate(items):
+            if not isinstance(it, dict) or "term" not in it or "definition" not in it:
+                raise SpecError(f"{here}.items[{j}]: requires term and definition")
+    elif t == "image_gallery":
+        imgs = block.get("images")
+        if not isinstance(imgs, list) or not imgs:
+            raise SpecError(f"{here}.images: non-empty array required")
+    elif t == "equation":
+        _req_str(block, "latex", here)
+    elif t == "bookmark":
+        _req_str(block, "name", here)
+    elif t == "xref":
+        _req_str(block, "target", here)
+    elif t == "timeline":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.items: non-empty array required")
+        for j, it in enumerate(items):
+            if not isinstance(it, dict) or "title" not in it:
+                raise SpecError(f"{here}.items[{j}]: requires title")
+    elif t == "progress":
+        bars = block.get("bars")
+        if not isinstance(bars, list) or not bars:
+            raise SpecError(f"{here}.bars: non-empty array required")
+        for j, b in enumerate(bars):
+            if not isinstance(b, dict) or "label" not in b or "value" not in b:
+                raise SpecError(f"{here}.bars[{j}]: requires label and value")
+    elif t == "card_grid":
+        cards = block.get("cards")
+        if not isinstance(cards, list) or not cards:
+            raise SpecError(f"{here}.cards: non-empty array required")
+    elif t == "drop_cap":
+        _req_str(block, "text", here)
+    elif t == "comment":
+        _req_str(block, "text", here)
+        _req_str(block, "author", here)
+    elif t in ("table_of_figures", "table_of_charts", "table_of_tables"):
+        # Auto-built lists; no required fields. ``title`` optional.
+        pass
+    elif t == "gantt":
+        items = block.get("tasks")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.tasks: non-empty array required")
+    elif t == "faq":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.items: non-empty array required")
+        for j, it in enumerate(items):
+            if not isinstance(it, dict) or "q" not in it or "a" not in it:
+                raise SpecError(f"{here}.items[{j}]: requires q and a")
+    elif t == "pricing_table":
+        plans = block.get("plans")
+        if not isinstance(plans, list) or not plans:
+            raise SpecError(f"{here}.plans: non-empty array required")
+    elif t == "author":
+        _req_str(block, "name", here)
+    elif t == "step_list":
+        items = block.get("steps")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.steps: non-empty array required")
+    elif t == "code_diff":
+        _req_str(block, "text", here)
+    elif t == "bibliography":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.items: non-empty array required")
+    elif t == "qr_code":
+        _req_str(block, "data", here)
+    elif t == "stat_list":
+        items = block.get("stats")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.stats: non-empty array required")
+    elif t == "columns":
+        cols = block.get("cols", 2)
+        if not isinstance(cols, int) or not (1 <= cols <= 6):
+            raise SpecError(f"{here}.cols: must be int 1..6")
+    elif t == "margin_note":
+        _req_str(block, "text", here)
+    elif t == "checklist":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.items: non-empty array required")
+    elif t == "page_border":
+        # decorative — fields all optional
+        pass
+    elif t == "index":
+        pass
+    elif t == "image_card":
+        _req_str(block, "path", here)
+    elif t == "summary_box":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.items: non-empty array required")
+    elif t == "metric_compare":
+        rows = block.get("rows")
+        if not isinstance(rows, list) or not rows:
+            raise SpecError(f"{here}.rows: non-empty array required")
+    elif t == "color_swatch":
+        colors = block.get("colors")
+        if not isinstance(colors, list) or not colors:
+            raise SpecError(f"{here}.colors: non-empty array required")
+    elif t == "split_layout":
+        for side in ("left", "right"):
+            if side not in block:
+                raise SpecError(f"{here}.{side}: required")
+    elif t == "spacer":
+        h = block.get("height", 12)
+        if not isinstance(h, (int, float)) or h < 0:
+            raise SpecError(f"{here}.height: must be a non-negative number (pt)")
+    # page_break, horizontal_rule, divider: no extra fields required
 
 
 def _req_str(obj: dict, key: str, here: str) -> None:

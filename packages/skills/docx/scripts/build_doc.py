@@ -74,6 +74,15 @@ def main() -> int:
     orient = meta.get("orientation", "portrait")
     _apply_page_setup(doc, size_name, orient, theme)
 
+    # header / footer / page numbers
+    from lib.headerfooter import apply_header_footer, apply_page_number_format
+    apply_header_footer(doc, meta, theme)
+    apply_page_number_format(doc, meta)
+
+    # auto-number headings if requested
+    if meta.get("auto_number_headings"):
+        _apply_auto_numbering(spec["blocks"])
+
     # render blocks
     for i, block in enumerate(spec["blocks"]):
         renderer = RENDERERS[block["type"]]
@@ -84,9 +93,37 @@ def main() -> int:
                   + traceback.format_exc())
             return 1
 
+    # Tell Word to auto-update all fields (TOC, page numbers, refs) on open.
+    _enable_field_auto_update(doc)
+
     out = resolve_out(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(out))
+
+    # Post-process: inject native OOXML chart parts (if any chart blocks
+    # opted into ``native: true``). Must happen after doc.save() so we can
+    # patch the saved zip directly.
+    native_charts = getattr(doc, "_native_charts", [])
+    if native_charts:
+        from lib.native_inject import inject as inject_native_charts
+        inject_native_charts(str(out), native_charts, theme)
+
+    # Footnotes: inline parser stashed entries on doc.part._footnotes_stash.
+    footnotes = list(getattr(doc.part, "_footnotes_stash", []))
+    if footnotes:
+        from lib.footnotes import inject as inject_footnotes
+        inject_footnotes(str(out), footnotes, theme)
+
+    # Comments: render_comment stashed entries on doc.part._comments_stash.
+    comment_stash = list(getattr(doc.part, "_comments_stash", []))
+    if comment_stash:
+        from lib.comments import inject as inject_comments
+        inject_comments(str(out), comment_stash, theme)
+
+    # Watermark
+    if meta.get("watermark"):
+        from lib.watermark import inject as inject_watermark
+        inject_watermark(str(out), meta["watermark"], theme)
 
     # also save the spec alongside (for edit-via-rebuild flow)
     spec_out = out.with_suffix(out.suffix + ".spec.json")
@@ -124,6 +161,58 @@ def _apply_page_setup(doc, size_name: str, orient: str, theme) -> None:
     section.right_margin = Inches(theme.margin_right)
     section.top_margin = Inches(theme.margin_top)
     section.bottom_margin = Inches(theme.margin_bottom)
+
+
+def _apply_auto_numbering(blocks: list) -> None:
+    """Prefix heading.text with hierarchical numbers (1., 1.1, 1.1.1...).
+
+    Skips headings whose text already starts with ``\\d+\\.`` so authors
+    can still hand-number when they want.
+    """
+    import re
+
+    counters = [0] * 7  # index 0 unused
+    for b in blocks:
+        if not (isinstance(b, dict) and b.get("type") == "heading"):
+            continue
+        level = int(b.get("level", 1))
+        if not (1 <= level <= 6):
+            continue
+        if re.match(r"^\d+(\.\d+)*\.?\s", b.get("text", "")):
+            continue
+        counters[level] += 1
+        for k in range(level + 1, 7):
+            counters[k] = 0
+        prefix = ".".join(str(counters[k]) for k in range(1, level + 1))
+        # Top-level (level 1) gets a trailing period — matches Word's
+        # Heading 1 default. Sub-levels keep just the dotted numerals.
+        if level == 1:
+            prefix = f"{prefix}."
+        b["text"] = f"{prefix} {b['text']}"
+
+
+def _enable_field_auto_update(doc) -> None:
+    """Add <w:updateFields w:val=\"true\"/> + companion settings so Word
+    refreshes TOC / PAGE / NUMPAGES / TOC-of-figures fields on open with
+    correct page numbers.
+    """
+    from docx.oxml.ns import qn
+    from lxml import etree
+
+    settings_el = doc.settings.element
+
+    def _ensure(tag: str, value: str = "true") -> None:
+        existing = settings_el.find(qn(tag))
+        if existing is None:
+            el = etree.SubElement(settings_el, qn(tag))
+            el.set(qn("w:val"), value)
+
+    _ensure("w:updateFields", "true")
+    # ``saveSubsetFonts`` keeps Word from re-flowing on open, which can
+    # invalidate the auto-computed page numbers; combined with
+    # ``zoom`` and ``compatSetting`` (default), TOC pagination tends
+    # to settle on first refresh.
+    _ensure("w:saveSubsetFonts", "true")
 
 
 def _gather_text(obj) -> str:
