@@ -618,7 +618,20 @@ def render_cover(doc, block: dict, theme: Theme) -> None:
 
 
 def render_chart(doc, block: dict, theme: Theme) -> None:
-    """Render chart via matplotlib → PNG → embed as image."""
+    """Render chart. Two backends:
+
+    - PNG (default): matplotlib → image. Fast, no editing in Word.
+    - Native (``native: true``): emit a placeholder drawing tied to a
+      native chart part. The placeholder rId is resolved post-save by
+      ``lib/native_inject``. Editable in Word's chart editor.
+    """
+    if block.get("native"):
+        _render_chart_native(doc, block, theme)
+    else:
+        _render_chart_png(doc, block, theme)
+
+
+def _render_chart_png(doc, block: dict, theme: Theme) -> None:
     from .charts import render_chart_png
 
     path, w_in, _ = render_chart_png(block, theme)
@@ -629,13 +642,44 @@ def render_chart(doc, block: dict, theme: Theme) -> None:
         p.alignment = a
     run = p.add_run()
     run.add_picture(path, width=Inches(w_in))
+    _emit_caption(doc, block, theme)
+
+
+def _render_chart_native(doc, block: dict, theme: Theme) -> None:
+    """Stash the spec on doc and emit a placeholder drawing.
+
+    ``build_doc.py`` reads ``doc._native_charts`` after save and runs the
+    injector. Placeholder ``rIdNATIVE{i}`` strings appear in document.xml;
+    the injector swaps them for real rIds tied to the chart parts.
+    """
+    from .native_chart import build_drawing_xml
+
+    if not hasattr(doc, "_native_charts"):
+        doc._native_charts = []
+    idx = len(doc._native_charts)
+    placeholder = f"rIdNATIVE{idx}"
+    doc._native_charts.append({"block": block, "placeholder_rid": placeholder})
+
+    align = block.get("align", "center")
+    p = doc.add_paragraph()
+    a = _align(align)
+    if a is not None:
+        p.alignment = a
+    run = p.add_run()
+    drawing_xml = build_drawing_xml(block, idx, placeholder)
+    run._r.append(etree.fromstring(drawing_xml))
+    _emit_caption(doc, block, theme)
+
+
+def _emit_caption(doc, block: dict, theme: Theme) -> None:
     caption = block.get("caption")
-    if caption:
-        cap_p = doc.add_paragraph()
-        cap_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        cap_run = cap_p.add_run(caption)
-        _style_run(cap_run, font=theme.body_font, size=theme.size_small,
-                   color=theme.muted, italic=True)
+    if not caption:
+        return
+    cap_p = doc.add_paragraph()
+    cap_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    cap_run = cap_p.add_run(caption)
+    _style_run(cap_run, font=theme.body_font, size=theme.size_small,
+               color=theme.muted, italic=True)
 
 
 def render_callout(doc, block: dict, theme: Theme) -> None:

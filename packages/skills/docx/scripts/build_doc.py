@@ -88,6 +88,14 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(out))
 
+    # Post-process: inject native OOXML chart parts (if any chart blocks
+    # opted into ``native: true``). Must happen after doc.save() so we can
+    # patch the saved zip directly.
+    native_charts = getattr(doc, "_native_charts", [])
+    if native_charts:
+        from lib.native_inject import inject as inject_native_charts
+        inject_native_charts(str(out), native_charts, theme)
+
     # also save the spec alongside (for edit-via-rebuild flow)
     spec_out = out.with_suffix(out.suffix + ".spec.json")
     spec_out.write_text(json.dumps(spec, ensure_ascii=False, indent=2),
