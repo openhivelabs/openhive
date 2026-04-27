@@ -541,13 +541,23 @@ def render_chart(slide, s: dict, theme: Theme, grid: Grid) -> None:
     palette = theme.chart_series or (theme.accent,)
     try:
         plot = chart.plots[0]
-        for i, ser in enumerate(plot.series):
-            fill = ser.format.fill
-            fill.solid()
-            color = palette[i % len(palette)]
-            fill.fore_color.rgb = _rgb(color)
-            if kind in ("line", "scatter", "area"):
-                ser.format.line.color.rgb = _rgb(color)
+        if kind == "pie":
+            # Pie has a single series whose data points map to slices —
+            # so we colour points, not the series, otherwise every slice
+            # comes out the accent colour and the chart reads as one blob.
+            ser = plot.series[0]
+            for j, pt in enumerate(ser.points):
+                fill = pt.format.fill
+                fill.solid()
+                fill.fore_color.rgb = _rgb(palette[j % len(palette)])
+        else:
+            for i, ser in enumerate(plot.series):
+                fill = ser.format.fill
+                fill.solid()
+                color = palette[i % len(palette)]
+                fill.fore_color.rgb = _rgb(color)
+                if kind in ("line", "scatter", "area"):
+                    ser.format.line.color.rgb = _rgb(color)
     except Exception:
         # pptx chart internals occasionally refuse style overrides on certain
         # chart types; falling back to default palette is non-fatal.
