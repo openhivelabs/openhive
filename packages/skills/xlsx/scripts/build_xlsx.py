@@ -48,6 +48,18 @@ def main() -> int:
 
     meta = spec.get("meta") or {}
     theme = get_theme(meta.get("theme"), meta.get("theme_overrides"))
+    # Pin the theme fonts to the dominant non-Latin script in the
+    # workbook text so Excel/Numbers don't fall through to a system
+    # default that lacks coverage. Mirrors the pptx/docx behaviour.
+    try:
+        from _lib import fonts as _fonts  # type: ignore
+        from dataclasses import replace as _dc_replace
+        _script = _fonts.dominant_script(_gather_text(spec))
+        if _script != _fonts.SCRIPT_LATIN:
+            _name = _fonts.display_name(_script)
+            theme = _dc_replace(theme, body_font=_name, heading_font=_name)
+    except Exception:
+        pass
 
     try:
         wb = render_workbook(spec, theme)
@@ -66,6 +78,23 @@ def main() -> int:
         "warnings": warnings,
     }, ensure_ascii=False))
     return 0
+
+
+def _gather_text(obj) -> str:
+    buf: list[str] = []
+
+    def _walk(v) -> None:
+        if isinstance(v, str):
+            buf.append(v)
+        elif isinstance(v, dict):
+            for item in v.values():
+                _walk(item)
+        elif isinstance(v, list):
+            for item in v:
+                _walk(item)
+
+    _walk(obj)
+    return " ".join(buf)
 
 
 def _load_spec(path: str | None) -> dict:
