@@ -128,6 +128,26 @@ def main() -> int:
 
         has_notes = bool(pkg.related(sp, RT_NOTES))
 
+        # Suggested patch DSL selectors for this slide. The LLM uses these
+        # to write edit_deck.py patches without having to guess the grammar.
+        selectors: dict[str, str] = {
+            "title":    f"slide:{i} > title",
+            "subtitle": f"slide:{i} > subtitle",
+            "body":     f"slide:{i} > body",
+            "notes":    f"slide:{i} > notes",
+        }
+        for k in range(len(charts)):
+            key = "chart" if k == 0 else f"chart:{k}"
+            selectors[key] = f"slide:{i} > {key}"
+        for k in range(len(tables)):
+            key = "table" if k == 0 else f"table:{k}"
+            selectors[key] = f"slide:{i} > {key}"
+            # also surface a sample cell selector for the LLM
+            selectors[f"{key}_cell"] = f"slide:{i} > {key} > cell[r=0,c=0]"
+        for k in range(len(pics)):
+            key = "image" if k == 0 else f"image:{k}"
+            selectors[key] = f"slide:{i} > {key}"
+
         slides_out.append({
             "index": i,
             "shapes": len(shapes),
@@ -138,6 +158,7 @@ def main() -> int:
             "tables": table_details,
             "images": len(pics),
             "has_notes": has_notes,
+            "selectors": selectors,
         })
 
     print(json.dumps({
