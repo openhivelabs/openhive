@@ -161,24 +161,32 @@ export async function refreshOneNow(panelId: string): Promise<ReturnType<typeof 
   return null
 }
 
-/** Attach `stage_taxonomy` to the shaped data of a kanban panel sourced
- *  from team_data. The DB schema's CHECK constraint on the group_by
- *  column is the canonical source — KanbanView reads it to render every
- *  stage as its own column even when only some have rows, and to seed
- *  the create form's stage select even on bindings the AI emitted before
- *  we required `actions[]`. Quietly no-ops for non-kanban panels and for
- *  sources we can't introspect (mcp / http / etc.). */
-function enrichKanbanTaxonomy(
+/** Attach `stage_taxonomy` to the shaped data of a kanban panel.
+ *  KanbanView reads it to render every stage as its own column even when
+ *  only some have rows. Two sources, in order:
+ *    1. The binding's own `actions[].form.fields[name=group_by].options`
+ *       (the kanban prompt requires this — works for any source kind).
+ *    2. The team_data table's CHECK constraint on the group_by column —
+ *       backstop for older bindings that don't declare options.
+ *  Quietly no-ops for non-kanban panels. */
+export function enrichKanbanTaxonomy(
   shaped: Record<string, unknown>,
   panelType: string,
   binding: Record<string, unknown>,
   companySlug: string,
 ): void {
   if (panelType !== 'kanban') return
-  const source = (binding.source ?? {}) as { kind?: unknown; config?: unknown }
-  if (source.kind !== 'team_data') return
   const groupBy = (binding.map as { group_by?: unknown } | undefined)?.group_by
   if (typeof groupBy !== 'string' || groupBy.length === 0) return
+
+  const fromBinding = stageOptionsFromBindingActions(binding, groupBy)
+  if (fromBinding.length > 0) {
+    shaped.stage_taxonomy = fromBinding
+    return
+  }
+
+  const source = (binding.source ?? {}) as { kind?: unknown; config?: unknown }
+  if (source.kind !== 'team_data') return
   const sql = String((source.config as { sql?: unknown } | undefined)?.sql ?? '')
   // Match the same FROM/JOIN regex the binder uses; first table is the
   // one whose schema actually owns the group_by column.
@@ -189,6 +197,29 @@ function enrichKanbanTaxonomy(
   if (!createSql) return
   const taxonomy = extractCheckOptions(createSql, groupBy)
   if (taxonomy.length > 0) shaped.stage_taxonomy = taxonomy
+}
+
+function stageOptionsFromBindingActions(
+  binding: Record<string, unknown>,
+  groupBy: string,
+): string[] {
+  const actions = binding.actions
+  if (!Array.isArray(actions)) return []
+  for (const a of actions) {
+    if (!a || typeof a !== 'object') continue
+    const form = (a as { form?: unknown }).form as { fields?: unknown } | undefined
+    const fields = form?.fields
+    if (!Array.isArray(fields)) continue
+    for (const f of fields) {
+      if (!f || typeof f !== 'object') continue
+      const fr = f as { name?: unknown; options?: unknown }
+      if (fr.name !== groupBy) continue
+      if (!Array.isArray(fr.options)) continue
+      const opts = fr.options.filter((o): o is string => typeof o === 'string' && o.length > 0)
+      if (opts.length > 0) return opts
+    }
+  }
+  return []
 }
 
 /** Attach actions the binding doesn't carry but the panel type implies

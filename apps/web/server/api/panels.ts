@@ -9,7 +9,7 @@ import {
 import { synthesizeKanbanActions } from '@/lib/server/panels/synthesize'
 import { get } from '@/lib/server/panels/cache'
 import { apply as applyMapper } from '@/lib/server/panels/mapper'
-import { refreshOneNow } from '@/lib/server/panels/refresher'
+import { enrichKanbanTaxonomy, refreshOneNow } from '@/lib/server/panels/refresher'
 import { execute as executeSource } from '@/lib/server/panels/sources'
 import { describeSchema, dryRunWithSetup } from '@/lib/server/team-data'
 
@@ -59,6 +59,7 @@ panels.post('/preview', async (c) => {
       (body.binding.map as Record<string, unknown> | undefined) ?? {},
       body.panel_type,
     )
+    enrichKanbanTaxonomy(shaped, body.panel_type, body.binding, ctx.companySlug)
     return c.json({ ok: true, data: shaped })
   } catch (exc) {
     const name = exc instanceof Error ? exc.name : 'Error'
@@ -145,6 +146,14 @@ panels.post('/rebind', async (c) => {
       }
     } catch (exc) {
       execError = exc instanceof Error ? exc.message : String(exc)
+    }
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      enrichKanbanTaxonomy(
+        data as Record<string, unknown>,
+        panelType,
+        binding as unknown as Record<string, unknown>,
+        ctx.companySlug,
+      )
     }
     return c.json({ binding, panel_type: panelType, data, error: execError })
   } catch (err) {

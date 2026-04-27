@@ -24,6 +24,7 @@ import {
 import { usePanelData } from '@/lib/hooks/usePanelData'
 import type { CellAction, PanelAction, PanelSpec } from '@/lib/api/dashboards'
 import { useLocaleTag, useT } from '@/lib/i18n'
+import { actionLabel } from '@/lib/panels/actionLabel'
 import { ActionFormModal, runConfirmAction } from './ActionForm'
 
 /** Renders a panel whose `binding` is set — data comes from the server's
@@ -103,10 +104,10 @@ export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string 
                 })
             }}
             className="flex items-center gap-1 px-2 py-1 rounded-sm text-[12px] text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
-            title={a.label}
+            title={actionLabel(a, t)}
           >
             <Plus className="w-3 h-3" />
-            <span>{a.label}</span>
+            <span>{actionLabel(a, t)}</span>
           </button>
         ))}
     </div>
@@ -143,7 +144,7 @@ export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string 
           <span className="flex-1 truncate font-mono text-[11.5px]" title={error}>
             {friendlyError(error, t)}
           </span>
-          {errorCta(error)}
+          {errorCta(error, t)}
         </div>
       )}
       {header}
@@ -155,7 +156,7 @@ export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string 
             onClick={() => setActionError(null)}
             className="underline hover:no-underline cursor-pointer"
           >
-            OK
+            {t('panel.actionDismiss')}
           </button>
         </div>
       )}
@@ -173,7 +174,7 @@ export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string 
   )
 }
 
-function errorCta(raw: string): React.ReactNode {
+function errorCta(raw: string, t: (k: string) => string): React.ReactNode {
   const cred = raw.match(/missing credential:\s*"([^"]+)"/i)
   if (cred?.[1]) {
     const href = `/settings?section=credentials&prefill_ref=${encodeURIComponent(cred[1])}`
@@ -182,7 +183,7 @@ function errorCta(raw: string): React.ReactNode {
         href={href}
         className="shrink-0 text-neutral-600 dark:text-neutral-200 hover:underline"
       >
-        Set up
+        {t('panel.errorCta.setup')}
       </a>
     )
   }
@@ -193,12 +194,13 @@ function errorCta(raw: string): React.ReactNode {
         href="/settings?section=mcp"
         className="shrink-0 text-neutral-600 dark:text-neutral-200 hover:underline"
       >
-        Install
+        {t('panel.errorCta.install')}
       </a>
     )
   }
   return null
 }
+
 
 function friendlyError(
   raw: string,
@@ -2076,7 +2078,7 @@ function FormView({
             disabled={busy || !panelId || !teamId}
             className="h-8 px-4 text-[13px] rounded-sm bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
-            {action.label || (busy ? '…' : 'Submit')}
+            {busy ? '…' : actionLabel(action, t) || t('action.submit')}
           </button>
           {feedback && (
             <span
@@ -2258,6 +2260,7 @@ function TableView({
   onInlineError?: (msg: string) => void
   props?: Record<string, unknown>
 }) {
+  const t = useT()
   const colFormatters =
     (props?.column_formatters as Record<string, ColumnFormat> | undefined) ?? {}
   const [editing, setEditing] = useState<{ rowIdx: number; col: string } | null>(null)
@@ -2376,8 +2379,8 @@ function TableView({
                         e.stopPropagation()
                         onRowAction!(r, a)
                       }}
-                      aria-label={a.label}
-                      title={a.label}
+                      aria-label={actionLabel(a, t)}
+                      title={actionLabel(a, t)}
                       className={clsx(
                         'w-6 h-6 flex items-center justify-center rounded-sm cursor-pointer',
                         a.kind === 'delete'

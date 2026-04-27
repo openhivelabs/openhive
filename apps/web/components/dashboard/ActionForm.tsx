@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import type { FormField, PanelAction } from '@/lib/api/dashboards'
 import { executePanelAction } from '@/lib/api/panels'
 import { useT } from '@/lib/i18n'
+import { actionLabel } from '@/lib/panels/actionLabel'
 
 /**
  * Generic form renderer for a panel `create` / `update` / `custom` action.
@@ -64,7 +65,7 @@ export function ActionFormModal({
       >
         <div className="px-4 py-3 border-b border-neutral-100 dark:border-neutral-800 flex items-center gap-2">
           <span className="flex-1 text-[15px] font-semibold text-neutral-900 dark:text-neutral-100">
-            {action.label}
+            {actionLabel(action, t)}
           </span>
           <button
             type="button"
@@ -116,7 +117,7 @@ export function ActionFormModal({
               submitting && 'opacity-60 cursor-wait',
             )}
           >
-            {submitting ? t('common.submitting') : action.label}
+            {submitting ? t('common.submitting') : actionLabel(action, t)}
           </button>
         </div>
       </div>
@@ -252,9 +253,10 @@ export async function runConfirmAction(opts: {
 }): Promise<void> {
   const { panelId, teamId, action, values, t } = opts
   if (action.confirm) {
+    const label = actionLabel(action, t)
     const msg = action.irreversible
-      ? t('action.irreversibleConfirm').replace('{label}', action.label)
-      : t('action.confirm').replace('{label}', action.label)
+      ? t('action.irreversibleConfirm').replace('{label}', label)
+      : t('action.confirm').replace('{label}', label)
     if (!window.confirm(msg)) return
   }
   try {
