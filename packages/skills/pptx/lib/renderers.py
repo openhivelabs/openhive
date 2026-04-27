@@ -48,14 +48,36 @@ def _set_run_font(run, name: str) -> None:
     render as the chosen Noto cut end-to-end.
     """
     run.font.name = name
-    rPr = run._r.get_or_add_rPr()
+    _ensure_ea_cs(run._r.get_or_add_rPr(), name)
+
+
+def _ensure_ea_cs(rPr_el, name: str) -> None:
+    """Add ``<a:ea>`` and ``<a:cs>`` typeface elements to any rPr-style node.
+
+    Reused by chart legend / axis font setters where python-pptx's Font
+    proxy only writes the latin slot.
+    """
+    from lxml import etree as _etree
     for tag in ("ea", "cs"):
-        # Remove any stale node first so repeated calls don't duplicate.
-        for existing in rPr.findall(f"{{{_A_NS}}}{tag}"):
-            rPr.remove(existing)
-        from lxml import etree as _etree
-        el = _etree.SubElement(rPr, f"{{{_A_NS}}}{tag}")
+        for existing in rPr_el.findall(f"{{{_A_NS}}}{tag}"):
+            rPr_el.remove(existing)
+        el = _etree.SubElement(rPr_el, f"{{{_A_NS}}}{tag}")
         el.set("typeface", name)
+
+
+def _set_chart_font(font_proxy, name: str) -> None:
+    """Apply a font name to a python-pptx chart Font (legend/axis/title).
+
+    python-pptx's Font.name only writes ``<a:latin>``; we mirror the run
+    behaviour and add ea/cs slots so chart text renders the chosen script.
+    """
+    font_proxy.name = name
+    rPr = getattr(font_proxy, "_rPr", None)
+    if rPr is None:
+        # Some Font proxies expose the element via ._element instead.
+        rPr = getattr(font_proxy, "_element", None)
+    if rPr is not None:
+        _ensure_ea_cs(rPr, name)
 
 
 def fill_background(slide, theme: Theme) -> None:
@@ -495,7 +517,7 @@ def render_chart(slide, s: dict, theme: Theme, grid: Grid) -> None:
     if chart.has_legend:
         chart.legend.position = XL_LEGEND_POSITION.RIGHT if kind != "pie" else XL_LEGEND_POSITION.BOTTOM
         chart.legend.include_in_layout = False
-        chart.legend.font.name = theme.body_font
+        _set_chart_font(chart.legend.font, theme.body_font)
         chart.legend.font.size = Pt(theme.size_caption)
         chart.legend.font.color.rgb = _rgb(theme.fg)
 
