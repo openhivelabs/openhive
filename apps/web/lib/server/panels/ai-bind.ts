@@ -218,6 +218,26 @@ USER GOAL: ${goal}`
       )
     }
   }
+  // KPI currency guard. The binder likes to default `format:"currency"`
+  // for anything titled "Target" / "Goal" / "이번 달 …", even when the SQL
+  // is a plain COUNT/SUM of people, items, or sightings. Strip it unless
+  // the SQL actually mentions a money-shaped identifier so panels don't
+  // show "$16" / "₩16" for headcount.
+  if (String(panel.type ?? '') === 'kpi') {
+    const props = (rest.props as Record<string, unknown> | undefined) ?? {}
+    if (String(props.format ?? '').toLowerCase() === 'currency') {
+      const sql =
+        source.kind === 'team_data'
+          ? String((source.config as { sql?: unknown } | undefined)?.sql ?? '')
+          : ''
+      if (!looksLikeMoneySql(sql)) {
+        delete (props as Record<string, unknown>).format
+        delete (props as Record<string, unknown>).currency
+        rest.props = props
+      }
+    }
+  }
+
   // Backstop: keep the kanban binding self-describing even when the AI
   // emits a create/move action whose group_by select is missing options.
   // Source of truth is the CHECK constraint in setup_sql; we mirror it
@@ -249,6 +269,20 @@ USER GOAL: ${goal}`
 /** Pull table names from FROM/JOIN clauses in a SELECT. Lowercased,
  *  unquoted. Doesn't try to handle subqueries or CTEs deeply — good
  *  enough for the simple SELECTs the binder writes. */
+/** Heuristic: does this SQL look like it's reading a money-valued column?
+ *  Triggers on common money identifiers in SELECT/aggregate/alias positions
+ *  so a SUM(price) → currency, a COUNT(*) → not currency. Conservative —
+ *  errs toward stripping when the column name doesn't say "money". */
+export function looksLikeMoneySql(sql: string): boolean {
+  const s = sql.toLowerCase()
+  // Match identifiers like price, amount, revenue, cost, sales, fee, salary,
+  // budget, balance, total_<money>, *_usd / *_krw / *_eur / *_btc, etc.
+  // Bare tokens, possibly inside SUM(...) / AVG(...) / aliases (AS xxx).
+  const pat =
+    /\b(price|amount|revenue|cost|costs|sales|salary|wage|fee|fees|payment|payments|spend|spent|earned|earnings|budget|balance|gmv|arpu|mrr|arr|ltv|cac|profit|loss|invoice|invoiced|net|gross|tax|tip|tips|refund|refunded|payout|payouts|deposit|withdraw|charge|charges|due|paid|owe|owed|krw|usd|eur|jpy|gbp|cny|btc|eth|won|dollar|dollars|euro|euros|yen|pound|pounds|cash|money|cents|cent|cash_|_krw|_usd|_eur|_jpy|_gbp|_cny|_btc|_eth)\b/
+  return pat.test(s)
+}
+
 function extractFromTables(sql: string): string[] {
   const out = new Set<string>()
   const re = /\b(?:from|join)\s+["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/gi

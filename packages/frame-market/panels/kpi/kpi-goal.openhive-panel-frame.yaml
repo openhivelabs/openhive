@@ -1,7 +1,7 @@
 id: kpi-goal
 name: Goal Progress
 description: >-
-  현재 값 + 목표값 + 진행 바. "₩7.2M / ₩10M (72%)" 같이 OKR /
+  현재 값 + 목표값 + 진행 바. "$7.2M / $10M (72%)" 같이 OKR /
   매출 목표 / 사용량 한도 추적할 때. SQL은 한 행에 두 컬럼(현재 / 목표)을
   같이 돌려주면 됨. 목표가 고정이면 SELECT 안에 상수로 박아도 OK
   (예: SELECT SUM(value) AS now, 10000000 AS goal ...).
@@ -27,8 +27,6 @@ panel:
   rowSpan: 1
   props:
     hint: 이번 달 목표
-    format: currency
-    currency: "₩"
   binding:
     source:
       kind: team_data

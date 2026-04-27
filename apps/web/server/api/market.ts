@@ -3,7 +3,7 @@ import { listConnected } from '@/lib/server/tokens'
 import { installAgentFrame } from '@/lib/server/agent-frames'
 import { installFrame } from '@/lib/server/frames'
 import { loadDashboard, saveDashboard } from '@/lib/server/dashboards'
-import { aiBindPanel } from '@/lib/server/panels/ai-bind'
+import { aiBindPanel, looksLikeMoneySql } from '@/lib/server/panels/ai-bind'
 import { acquireInstallLock } from '@/lib/server/panels/install-lock'
 import { buildInstallPlan } from '@/lib/server/panels/install-plan'
 import { apply as applyMapper } from '@/lib/server/panels/mapper'
@@ -331,6 +331,26 @@ market.post('/install/apply', async (c) => {
       }
     }
 
+    // KPI currency guard at the panel-level. The frame manifest may carry a
+    // hardcoded `props.format=currency` (legacy default), and even after the
+    // ai-bind strip the manifest props still flow through. Drop both
+    // format/currency unless the resolved SQL actually reads a money column.
+    if (panel.type === 'kpi' && panel.props && typeof panel.props === 'object') {
+      const props = panel.props as Record<string, unknown>
+      if (String(props.format ?? '').toLowerCase() === 'currency') {
+        const src = (panel.binding as { source?: { kind?: unknown; config?: unknown } } | undefined)
+          ?.source
+        const sql =
+          src?.kind === 'team_data'
+            ? String((src.config as { sql?: unknown } | undefined)?.sql ?? '')
+            : ''
+        if (!looksLikeMoneySql(sql)) {
+          delete props.format
+          delete props.currency
+        }
+      }
+    }
+
     // 2) Add the panel to the team's dashboard.
     panel.id = `p-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`
     if (typeof body.col_span === 'number') {
@@ -447,6 +467,25 @@ market.post('/install/ai-bind-preview', async (c) => {
       typeof panel.props === 'object' && panel.props !== null
         ? (panel.props as Record<string, unknown>)
         : null
+    // Mirror the install/apply currency strip so the live preview also
+    // reflects the cleaned-up unit. Without this the user sees "₩122"
+    // in the preview, hits Install, and the saved panel renders bare —
+    // confusing.
+    if (
+      panelType === 'kpi' &&
+      panelProps &&
+      String(panelProps.format ?? '').toLowerCase() === 'currency'
+    ) {
+      const src = (binding.source ?? {}) as { kind?: unknown; config?: unknown }
+      const sql =
+        src.kind === 'team_data'
+          ? String((src.config as { sql?: unknown } | undefined)?.sql ?? '')
+          : ''
+      if (!looksLikeMoneySql(sql)) {
+        delete panelProps.format
+        delete panelProps.currency
+      }
+    }
     return c.json({
       binding,
       panel_type: panelType,

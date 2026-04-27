@@ -10,6 +10,7 @@ export type PanelType =
   | 'markdown'
   | 'metric_grid'
   | 'calendar'
+  | 'memo'
 
 /** Where a block's data comes from. The shape inside `config` varies by kind:
  *   - mcp:        { server, tool, args }
@@ -195,6 +196,33 @@ export async function saveDashboard(teamId: string, layout: DashboardLayout): Pr
     body: JSON.stringify({ layout }),
   })
   if (!res.ok) throw new Error(`PUT dashboard ${res.status}`)
+}
+
+export interface MemoData {
+  content: string
+  updated_at: number | null
+}
+
+export async function fetchMemo(teamId: string, panelId: string): Promise<MemoData> {
+  const res = await fetch(
+    `/api/panels/${encodeURIComponent(panelId)}/memo?teamId=${encodeURIComponent(teamId)}`,
+  )
+  if (!res.ok) throw new Error(`GET memo ${res.status}`)
+  return (await res.json()) as MemoData
+}
+
+export async function saveMemo(
+  teamId: string,
+  panelId: string,
+  content: string,
+): Promise<MemoData> {
+  const res = await fetch(`/api/panels/${encodeURIComponent(panelId)}/memo`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ teamId, content }),
+  })
+  if (!res.ok) throw new Error(`PUT memo ${res.status}`)
+  return (await res.json()) as MemoData
 }
 
 export interface DashboardBackup {

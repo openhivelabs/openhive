@@ -26,6 +26,7 @@ import type { CellAction, PanelAction, PanelSpec } from '@/lib/api/dashboards'
 import { useLocaleTag, useT } from '@/lib/i18n'
 import { actionLabel } from '@/lib/panels/actionLabel'
 import { ActionFormModal, runConfirmAction } from './ActionForm'
+import { MemoView } from './MemoView'
 
 /** Renders a panel whose `binding` is set — data comes from the server's
  *  block cache (refreshed by the scheduler). The frontend is dumb: it trusts
@@ -35,6 +36,23 @@ import { ActionFormModal, runConfirmAction } from './ActionForm'
  *  item). When the binding declares `map.on_click`, Cells become clickable
  *  and trigger the action (detail modal, open URL, …). */
 export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string }) {
+  if (spec.type === 'memo') {
+    return <MemoPanel panelId={spec.id} teamId={teamId} />
+  }
+  return <BoundPanelInner spec={spec} teamId={teamId} />
+}
+
+function MemoPanel({ panelId, teamId }: { panelId: string; teamId?: string }) {
+  return (
+    <div className="h-full flex flex-col">
+      <div className="flex-1 min-h-0 overflow-auto">
+        <MemoView panelId={panelId} teamId={teamId} />
+      </div>
+    </div>
+  )
+}
+
+function BoundPanelInner({ spec, teamId }: { spec: PanelSpec; teamId?: string }) {
   const t = useT()
   const { data, error, refresh } = usePanelData(spec.id, true)
   const onClick = spec.binding?.map?.on_click ?? null
@@ -62,9 +80,12 @@ export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string 
   // A panel with a `create` action but no explicit toolbar placement has
   // no way to surface the action — promote it so users always have at
   // least an "Add" button. Keeps older bindings (pre-toolbar prompt)
-  // working without a re-bind.
+  // working without a re-bind. Calendar carries its own + FAB inside the
+  // body so the header Add would just duplicate it.
   const fallbackCreate =
-    explicitToolbar.length === 0 ? actions.find((a) => a.kind === 'create') : undefined
+    explicitToolbar.length === 0 && spec.type !== 'calendar'
+      ? actions.find((a) => a.kind === 'create')
+      : undefined
   const toolbarActions = fallbackCreate ? [fallbackCreate] : explicitToolbar
   const rowActions = actions.filter((a) => a.placement === 'row')
   const inlineActions = actions.filter((a) => a.placement === 'inline')
@@ -160,7 +181,7 @@ export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string 
           </button>
         </div>
       )}
-      <div className="flex-1 min-h-0 overflow-auto">{body}</div>
+      <div className="flex-1 min-h-0 overflow-hidden">{body}</div>
       {openAction && teamId && (
         <ActionFormModal
           panelId={spec.id}
@@ -420,8 +441,11 @@ interface KpiProps {
   /** "currency" | "percent" | "number" | "duration" — controls the value
    *  formatter. Defaults to plain number with locale grouping. */
   format?: string
-  /** Currency symbol when format=currency. Defaults to ₩. */
+  /** Currency symbol when format=currency. Defaults to $. */
   currency?: string
+  /** Free-form unit appended after the number — "명", "건", "m"… Used when
+   *  the value isn't money/percent/duration but still needs a label. */
+  suffix?: string
 }
 function KpiView({ data, props }: { data: KpiShape; props?: Record<string, unknown> }) {
   const t = useT()
@@ -538,7 +562,7 @@ function KpiView({ data, props }: { data: KpiShape; props?: Record<string, unkno
 
 function formatKpi(
   n: number,
-  p: { format?: string; currency?: string },
+  p: { format?: string; currency?: string; suffix?: string },
   unitMode: 'compact' | 'full' = 'compact',
 ): string {
   const f = (p.format ?? '').toLowerCase()
@@ -549,11 +573,13 @@ function formatKpi(
     if (n < 86_400) return `${(n / 3600).toFixed(1)}h`
     return `${(n / 86_400).toFixed(1)}d`
   }
-  const sym = f === 'currency' ? (p.currency ?? '₩') : ''
-  if (unitMode === 'full') {
-    return `${sym}${Intl.NumberFormat().format(Math.round(n))}`
-  }
-  return `${sym}${compactNumber(n)}`
+  const prefix = f === 'currency' ? (p.currency ?? '$') : ''
+  const suffix = p.suffix ? p.suffix : ''
+  const body =
+    unitMode === 'full'
+      ? Intl.NumberFormat().format(Math.round(n))
+      : compactNumber(n)
+  return `${prefix}${body}${suffix}`
 }
 
 /** SI-style compact: 1.2k / 3.4M / 1.5B / 2.1T. Sub-thousand passes through
@@ -906,6 +932,21 @@ function kindColor(kind: unknown): { chip: string; border: string; fill: string 
 }
 
 const HIDDEN_RAW_KEYS = new Set(['id', 'team_id', 'created_at', 'updated_at'])
+
+/** Calendar detail-modal field order. Anything not listed stays in source
+ *  order, but `note` always sinks to right after `status`. */
+function orderEventFields<T>(entries: [string, T][]): [string, T][] {
+  const noteIdx = entries.findIndex(([k]) => k === 'note')
+  if (noteIdx === -1) return entries
+  const statusIdx = entries.findIndex(([k]) => k === 'status')
+  if (statusIdx === -1) return entries
+  const out = entries.slice()
+  const [note] = out.splice(noteIdx, 1)
+  if (!note) return entries
+  const insertAt = noteIdx < statusIdx ? statusIdx : statusIdx + 1
+  out.splice(insertAt, 0, note)
+  return out
+}
 
 /** Older calendar installs declared the date column with `type: date`
  *  (date-only, no time picker). The new calendar UX needs a time of day,
@@ -1266,7 +1307,7 @@ function CalendarView({
                   onClick={() => selectDate(key)}
                   className={
                     isSelected
-                      ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 px-1 py-1 min-h-[68px] flex flex-col gap-0.5 text-left cursor-pointer'
+                      ? 'bg-neutral-200 dark:bg-neutral-700 text-neutral-900 dark:text-neutral-50 ring-1 ring-inset ring-neutral-400 dark:ring-neutral-500 px-1 py-1 min-h-[68px] flex flex-col gap-0.5 text-left cursor-pointer'
                       : isToday
                         ? 'bg-neutral-100 dark:bg-neutral-800 px-1 py-1 min-h-[68px] flex flex-col gap-0.5 text-left cursor-pointer hover:bg-neutral-200 dark:hover:bg-neutral-700'
                         : 'bg-white dark:bg-neutral-900 px-1 py-1 min-h-[68px] flex flex-col gap-0.5 text-left cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800'
@@ -1275,7 +1316,7 @@ function CalendarView({
                   <div
                     className={
                       isSelected
-                        ? 'text-[11px] font-semibold tabular-nums px-0.5'
+                        ? 'text-[11px] font-semibold text-neutral-900 dark:text-neutral-50 tabular-nums px-0.5'
                         : inMonth
                           ? isToday
                             ? 'text-[11px] font-semibold text-neutral-900 dark:text-neutral-50 tabular-nums px-0.5'
@@ -1292,12 +1333,10 @@ function CalendarView({
                         key={i}
                         onClick={(ev) => {
                           ev.stopPropagation()
-                          openEvent(e, key)
+                          selectDate(key)
                         }}
                         title={String(e.title ?? '')}
-                        className={`text-[9.5px] truncate rounded-[2px] px-1 py-px ${
-                          isSelected ? 'bg-white/20 text-white' : c.chip
-                        }`}
+                        className={`text-[9.5px] truncate rounded-[2px] px-1 py-px ${c.chip}`}
                       >
                         {e.time ? `${e.time} ` : ''}{String(e.title ?? '·')}
                       </span>
@@ -1305,11 +1344,7 @@ function CalendarView({
                   })}
                   {more > 0 && (
                     <div
-                      className={
-                        isSelected
-                          ? 'text-[9.5px] opacity-80 px-0.5'
-                          : 'text-[9.5px] text-neutral-400 px-0.5'
-                      }
+                      className="text-[9.5px] text-neutral-400 px-0.5"
                     >
                       {t('calendar.more', { n: String(more) })}
                     </div>
@@ -1568,7 +1603,7 @@ function CalendarDayPane({
                 key={idStr ?? Math.random()}
                 type="button"
                 onClick={() => idStr != null && onOpenEvent(e)}
-                className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm text-left text-[11.5px] truncate cursor-pointer ${c.chip}`}
+                className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm text-left text-[11.5px] truncate cursor-pointer border-l-2 ${c.border} bg-neutral-50 dark:bg-neutral-900 text-neutral-800 dark:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800`}
               >
                 <span className="truncate">{String(e.title ?? '')}</span>
               </button>
@@ -1638,7 +1673,7 @@ function CalendarDayPane({
               <div
                 key={idStr}
                 onPointerDown={(ev) => startPress(ev, e)}
-                className={`absolute left-10 right-2 rounded-sm border border-l-2 ${c.border} ${c.fill} mix-blend-multiply dark:mix-blend-screen text-neutral-800 dark:text-neutral-100 px-1.5 py-1 text-[11.5px] cursor-grab active:cursor-grabbing overflow-hidden ${
+                className={`absolute left-10 right-2 rounded-sm border border-l-4 ${c.border} border-y-neutral-200 border-r-neutral-200 dark:border-y-neutral-800 dark:border-r-neutral-800 bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-100 px-1.5 py-1 text-[11.5px] cursor-grab active:cursor-grabbing overflow-hidden ${
                   isExpanded ? 'ring-2 ring-neutral-400 dark:ring-neutral-500' : ''
                 }`}
                 style={{ top, height }}
@@ -1665,23 +1700,38 @@ function CalendarDayPane({
         </button>
       )}
 
-      {/* Overlay: detail / edit / add */}
+      {/* Modal: detail / edit / add */}
       {showOverlay && (
-        <div className="absolute inset-x-0 bottom-0 max-h-[70%] bg-white dark:bg-neutral-900 border-t border-neutral-200 dark:border-neutral-700 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] dark:shadow-none overflow-auto">
-          <div className="flex items-center justify-between px-3 py-1.5 border-b border-neutral-100 dark:border-neutral-800">
-            <div className="text-[11.5px] text-neutral-500">
-              {addingNew ? t('calendar.add') : editingId ? t('calendar.edit') : String(expandedEvent?.title ?? '')}
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={onClose}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') onClose()
+          }}
+          role="dialog"
+          aria-modal="true"
+          tabIndex={-1}
+        >
+          <div
+            className="w-[420px] max-w-[92vw] max-h-[80vh] bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-md shadow-xl overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            role="document"
+          >
+            <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-100 dark:border-neutral-800">
+              <div className="text-[12.5px] font-medium text-neutral-700 dark:text-neutral-200 truncate">
+                {addingNew ? t('calendar.add') : editingId ? t('calendar.edit') : String(expandedEvent?.title ?? '')}
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-[14px] leading-none text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 cursor-pointer w-6 h-6 flex items-center justify-center rounded-sm"
+                aria-label={t('calendar.cancel')}
+              >
+                ×
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="text-[14px] leading-none text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 cursor-pointer w-6 h-6 flex items-center justify-center rounded-sm"
-              aria-label={t('calendar.cancel')}
-            >
-              ×
-            </button>
-          </div>
-          <div className="p-3">
+            <div className="p-3">
             {addingNew && createAction && (
               <CalendarEventForm
                 fields={promoteDateFields(createAction.form?.fields ?? [])}
@@ -1712,16 +1762,18 @@ function CalendarDayPane({
               <>
                 {expandedEvent.raw && typeof expandedEvent.raw === 'object' ? (
                   <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[12px]">
-                    {Object.entries(expandedEvent.raw as Record<string, unknown>)
-                      .filter(([k]) => !HIDDEN_RAW_KEYS.has(k))
-                      .map(([k, v]) => (
-                        <Fragment key={k}>
-                          <dt className="text-neutral-400 truncate">{k}</dt>
-                          <dd className="text-neutral-700 dark:text-neutral-200 break-all">
-                            {v == null || v === '' ? '—' : String(v)}
-                          </dd>
-                        </Fragment>
-                      ))}
+                    {orderEventFields(
+                      Object.entries(expandedEvent.raw as Record<string, unknown>).filter(
+                        ([k]) => !HIDDEN_RAW_KEYS.has(k),
+                      ),
+                    ).map(([k, v]) => (
+                      <Fragment key={k}>
+                        <dt className="text-neutral-400 truncate">{k}</dt>
+                        <dd className="text-neutral-700 dark:text-neutral-200 break-all">
+                          {v == null || v === '' ? '—' : String(v)}
+                        </dd>
+                      </Fragment>
+                    ))}
                   </dl>
                 ) : null}
                 <div className="flex items-center gap-2 mt-3">
@@ -1763,6 +1815,7 @@ function CalendarDayPane({
                 </div>
               </>
             )}
+            </div>
           </div>
         </div>
       )}
@@ -2738,8 +2791,10 @@ function ChartView({ data, props }: { data: ChartShape; props?: Record<string, u
   const fullXs = data.x ?? []
   const fullYs = data.y ?? []
   // Auto-trim ISO timestamps to date-only for axis/tooltip readability.
-  // Anything matching `YYYY-MM-DDTHH:MM:SS...` collapses to `YYYY-MM-DD`.
-  const trimX = (v: string) => /^\d{4}-\d{2}-\d{2}T/.test(v) ? v.slice(0, 10) : v
+  // Catches both ISO (`YYYY-MM-DDTHH:MM:SS…`, SQLite/JSON) and Postgres
+  // (`YYYY-MM-DD HH:MM:SS+TZ`, returned by date_trunc/timestamptz).
+  const trimX = (v: string) =>
+    /^\d{4}-\d{2}-\d{2}[T ]/.test(v) ? v.slice(0, 10) : v
   const trimmedXs = fullXs.map((v) => trimX(String(v)))
 
   // When the panel uses time_ranges and all x values look like calendar
@@ -3383,11 +3438,16 @@ function PieView({
                 nameKey="x"
                 innerRadius="50%"
                 outerRadius="85%"
-                paddingAngle={1}
+                paddingAngle={0}
+                stroke="none"
                 isAnimationActive={false}
               >
                 {pieRows.map((_, i) => (
-                  <Cell key={i} fill={PIE_PALETTE[i % PIE_PALETTE.length]} />
+                  <Cell
+                    key={i}
+                    fill={PIE_PALETTE[i % PIE_PALETTE.length]}
+                    stroke="none"
+                  />
                 ))}
               </Pie>
             </PieChart>

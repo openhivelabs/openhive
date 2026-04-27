@@ -1,0 +1,15 @@
+id: sticky-note
+name: Sticky Note
+description: >-
+  Free-form note panel. Click to edit, type Markdown, save. Content lives
+  on the panel itself — no data binding, no SQL. Use for meeting notes,
+  TODOs, links, or anything you want pinned to a dashboard.
+author: OpenHive
+category: memo
+tags: [memo, note, sticky, markdown, freeform]
+
+panel:
+  type: memo
+  title: Note
+  colSpan: 2
+  rowSpan: 2
