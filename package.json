@@ -10,7 +10,11 @@
     "format": "biome format --write .",
     "fonts:fetch": "python3 packages/skills/_lib/fonts.py",
     "fonts:fetch:all": "python3 packages/skills/_lib/fonts.py --all",
-    "openhive:ledger:backfill": "tsx apps/web/scripts/ledger-backfill.ts"
+    "openhive:ledger:backfill": "tsx apps/web/scripts/ledger-backfill.ts",
+    "release": "node scripts/release.mjs",
+    "release:patch": "node scripts/release.mjs patch",
+    "release:minor": "node scripts/release.mjs minor",
+    "release:major": "node scripts/release.mjs major"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

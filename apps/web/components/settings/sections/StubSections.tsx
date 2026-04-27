@@ -42,7 +42,7 @@ export function AboutSection() {
     <>
       <SectionHeader title={t('settings.about.header')} desc={t('settings.about.headerDesc')} />
       <SettingRow label={t('settings.about.version')}>
-        <span className="text-[13px] font-mono text-neutral-500">0.0.1</span>
+        <span className="text-[13px] font-mono text-neutral-500">{__APP_VERSION__}</span>
       </SettingRow>
       <SettingRow label={t('settings.about.license')}>
         <a
