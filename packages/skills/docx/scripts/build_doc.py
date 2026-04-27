@@ -114,6 +114,12 @@ def main() -> int:
         from lib.footnotes import inject as inject_footnotes
         inject_footnotes(str(out), footnotes, theme)
 
+    # Comments: render_comment stashed entries on doc.part._comments_stash.
+    comment_stash = list(getattr(doc.part, "_comments_stash", []))
+    if comment_stash:
+        from lib.comments import inject as inject_comments
+        inject_comments(str(out), comment_stash, theme)
+
     # Watermark
     if meta.get("watermark"):
         from lib.watermark import inject as inject_watermark
@@ -186,17 +192,27 @@ def _apply_auto_numbering(blocks: list) -> None:
 
 
 def _enable_field_auto_update(doc) -> None:
-    """Add <w:updateFields w:val=\"true\"/> to settings.xml so Word
-    refreshes TOC / PAGE / NUMPAGES fields on open.
+    """Add <w:updateFields w:val=\"true\"/> + companion settings so Word
+    refreshes TOC / PAGE / NUMPAGES / TOC-of-figures fields on open with
+    correct page numbers.
     """
     from docx.oxml.ns import qn
     from lxml import etree
 
     settings_el = doc.settings.element
-    existing = settings_el.find(qn("w:updateFields"))
-    if existing is None:
-        upd = etree.SubElement(settings_el, qn("w:updateFields"))
-        upd.set(qn("w:val"), "true")
+
+    def _ensure(tag: str, value: str = "true") -> None:
+        existing = settings_el.find(qn(tag))
+        if existing is None:
+            el = etree.SubElement(settings_el, qn(tag))
+            el.set(qn("w:val"), value)
+
+    _ensure("w:updateFields", "true")
+    # ``saveSubsetFonts`` keeps Word from re-flowing on open, which can
+    # invalidate the auto-computed page numbers; combined with
+    # ``zoom`` and ``compatSetting`` (default), TOC pagination tends
+    # to settle on first refresh.
+    _ensure("w:saveSubsetFonts", "true")
 
 
 def _gather_text(obj) -> str:

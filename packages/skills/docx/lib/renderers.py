@@ -342,6 +342,49 @@ def render_image(doc, block: dict, theme: Theme) -> None:
                    color=theme.muted, italic=True)
 
 
+def _emit_cover_background(doc, image_ref: str) -> None:
+    """Drop a behindDoc anchor image at the top of the document so the
+    cover content reads on top. Image is sized to A4 portrait by default.
+    """
+    path = _resolve_image(image_ref)
+    p = doc.add_paragraph()
+    run = p.add_run()
+    run.add_picture(path, width=Inches(8.27))
+    drawings = run._r.findall(qn("w:drawing"))
+    if not drawings:
+        return
+    drawing = drawings[0]
+    inline = drawing.find(qn("wp:inline"))
+    if inline is None:
+        return
+    anchor = etree.SubElement(drawing, qn("wp:anchor"))
+    for k, v in (("distT", "0"), ("distB", "0"), ("distL", "0"),
+                 ("distR", "0"), ("simplePos", "0"),
+                 ("relativeHeight", "1"),
+                 ("behindDoc", "1"), ("locked", "0"),
+                 ("layoutInCell", "1"), ("allowOverlap", "1")):
+        anchor.set(k, v)
+    sp = etree.SubElement(anchor, qn("wp:simplePos"))
+    sp.set("x", "0"); sp.set("y", "0")
+    posH = etree.SubElement(anchor, qn("wp:positionH"))
+    posH.set("relativeFrom", "page")
+    pH = etree.SubElement(posH, qn("wp:posOffset"))
+    pH.text = "0"
+    posV = etree.SubElement(anchor, qn("wp:positionV"))
+    posV.set("relativeFrom", "page")
+    pV = etree.SubElement(posV, qn("wp:posOffset"))
+    pV.text = "0"
+    for child in list(inline):
+        anchor.append(child)
+    wrap = etree.Element(qn("wp:wrapNone"))
+    graphic = anchor.find(qn("a:graphic"))
+    if graphic is not None:
+        anchor.insert(list(anchor).index(graphic), wrap)
+    else:
+        anchor.append(wrap)
+    drawing.remove(inline)
+
+
 def _convert_inline_to_anchor(run, side: str) -> None:
     """Convert an inline image (<wp:inline>) into an anchored floating
     image with text wrap on the given side. Only the layout properties
@@ -647,10 +690,15 @@ def _set_table_borders(table, size: int = 0, color: str = "FFFFFF") -> None:
 def render_cover(doc, block: dict, theme: Theme) -> None:
     """Full-page cover. title + subtitle + meta row + colored band.
 
-    The cover is one paragraph stack followed by an automatic page break
-    so the next block starts on page 2 — callers don't need a manual break.
+    Optional ``background_image``: full-bleed image rendered behind the
+    cover content via a wp:anchor floating shape. The other elements
+    inherit a slightly muted color so they read on top.
     """
     from docx.enum.text import WD_BREAK
+
+    bg = block.get("background_image")
+    if bg:
+        _emit_cover_background(doc, bg)
 
     # top spacer (push title down ~25% of page)
     for _ in range(4):
@@ -1157,7 +1205,13 @@ def _register_extended() -> None:
         "progress": _ext.render_progress,
         "card_grid": _ext.render_card_grid,
         "drop_cap": _ext.render_drop_cap,
+        "table_of_figures": _ext.render_table_of_figures,
+        "table_of_charts": _ext.render_table_of_charts,
+        "table_of_tables": _ext.render_table_of_tables,
+        "gantt": _ext.render_gantt,
     })
+    from . import comments as _cmt
+    RENDERERS["comment"] = _cmt.render_comment
 
 
 _register_extended()

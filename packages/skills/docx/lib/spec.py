@@ -32,6 +32,8 @@ BLOCK_TYPES = {
     "pull_quote", "definition_list", "image_gallery", "equation",
     "bookmark", "xref",
     "timeline", "progress", "card_grid", "drop_cap",
+    "comment", "table_of_figures", "table_of_charts", "table_of_tables",
+    "gantt",
 }
 
 ALIGN_VALUES = {"left", "center", "right", "justify"}
@@ -196,6 +198,16 @@ def _validate_block(i: int, block: Any, warnings: list[str]) -> None:
             raise SpecError(f"{here}.cards: non-empty array required")
     elif t == "drop_cap":
         _req_str(block, "text", here)
+    elif t == "comment":
+        _req_str(block, "text", here)
+        _req_str(block, "author", here)
+    elif t in ("table_of_figures", "table_of_charts", "table_of_tables"):
+        # Auto-built lists; no required fields. ``title`` optional.
+        pass
+    elif t == "gantt":
+        items = block.get("tasks")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.tasks: non-empty array required")
     elif t == "spacer":
         h = block.get("height", 12)
         if not isinstance(h, (int, float)) or h < 0:

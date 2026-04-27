@@ -438,6 +438,111 @@ def render_card_grid(doc, block: dict, theme: Theme) -> None:
                             color=theme.fg)
 
 
+def render_table_of_figures(doc, block: dict, theme: Theme) -> None:
+    _emit_field_list(doc, block, theme, instr=' TOC \\h \\z \\c "Figure" ')
+
+
+def render_table_of_charts(doc, block: dict, theme: Theme) -> None:
+    _emit_field_list(doc, block, theme, instr=' TOC \\h \\z \\c "Chart" ')
+
+
+def render_table_of_tables(doc, block: dict, theme: Theme) -> None:
+    _emit_field_list(doc, block, theme, instr=' TOC \\h \\z \\c "Table" ')
+
+
+def _emit_field_list(doc, block, theme, *, instr) -> None:
+    title = block.get("title")
+    if title:
+        tp = doc.add_paragraph()
+        tp.paragraph_format.space_after = Pt(4)
+        tr = tp.add_run(title)
+        _stylize(tr, font=theme.heading_font, size=theme.size_h2,
+                 color=theme.heading, bold=True)
+    p = doc.add_paragraph()
+    run = p.add_run()
+    fld = etree.SubElement(run._r, qn("w:fldChar"))
+    fld.set(qn("w:fldCharType"), "begin"); fld.set(qn("w:dirty"), "true")
+    instr_run = p.add_run()
+    it = etree.SubElement(instr_run._r, qn("w:instrText"))
+    it.text = instr; it.set(qn("xml:space"), "preserve")
+    sep_run = p.add_run()
+    sep = etree.SubElement(sep_run._r, qn("w:fldChar"))
+    sep.set(qn("w:fldCharType"), "separate")
+    placeholder_run = p.add_run("Updating list…")
+    _stylize(placeholder_run, font=theme.body_font, size=theme.size_small,
+             color=theme.muted, italic=True)
+    end_run = p.add_run()
+    end = etree.SubElement(end_run._r, qn("w:fldChar"))
+    end.set(qn("w:fldCharType"), "end")
+
+
+def render_gantt(doc, block: dict, theme: Theme) -> None:
+    """Gantt-style task timeline. Each task: {label, start, end, color?}.
+
+    Times are positioned by token order (not real dates) — i.e. ``start``
+    and ``end`` are integer column indices into ``periods``. Renders as a
+    table with the label column on the left and a band of cells, the
+    occupied range filled with the task color.
+    """
+    from .themes import palette_color
+
+    periods = block.get("periods") or []
+    if not periods:
+        # auto-derive from tasks' start/end max
+        tasks = block["tasks"]
+        max_end = max(int(t.get("end", t.get("start", 0))) for t in tasks)
+        periods = [f"{i+1}" for i in range(max_end + 1)]
+
+    tasks = block["tasks"]
+    n_cols = 1 + len(periods)
+    table = doc.add_table(rows=1 + len(tasks), cols=n_cols)
+    _set_table_borders(table, size=2, color="DDDDDD")
+    label_w = Inches(1.6)
+    period_w = Inches(min(4.6, 4.6 / len(periods))) if periods else Inches(0.3)
+    _set_col_widths(table, [label_w] + [period_w] * len(periods))
+
+    # header
+    hdr = table.rows[0]
+    hcell = hdr.cells[0]
+    for pp in list(hcell.paragraphs):
+        hcell._tc.remove(pp._p)
+    hp = hcell.add_paragraph()
+    hr = hp.add_run("Task")
+    _stylize(hr, font=theme.heading_font, size=theme.size_small,
+             color=theme.heading, bold=True)
+    for j, period in enumerate(periods):
+        c = hdr.cells[1 + j]
+        for pp in list(c.paragraphs):
+            c._tc.remove(pp._p)
+        hp = c.add_paragraph()
+        hp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        hr = hp.add_run(str(period))
+        _stylize(hr, font=theme.heading_font, size=theme.size_small,
+                 color=theme.muted, bold=True)
+
+    for ti, task in enumerate(tasks):
+        row = table.rows[1 + ti]
+        # label
+        lc = row.cells[0]
+        for pp in list(lc.paragraphs):
+            lc._tc.remove(pp._p)
+        lp = lc.add_paragraph()
+        lr = lp.add_run(str(task["label"]))
+        _stylize(lr, font=theme.body_font, size=theme.size_body,
+                 color=theme.fg, bold=False)
+        start = int(task.get("start", 0))
+        end = int(task.get("end", start))
+        color = tuple(task["color"]) if task.get("color") else palette_color(theme, ti)
+        for j in range(len(periods)):
+            cc = row.cells[1 + j]
+            for pp in list(cc.paragraphs):
+                cc._tc.remove(pp._p)
+            cp = cc.add_paragraph()
+            cp.add_run(" ")
+            if start <= j <= end:
+                _shade_fill(cc, color)
+
+
 def render_drop_cap(doc, block: dict, theme: Theme) -> None:
     """Magazine-style first-letter big paragraph.
 
