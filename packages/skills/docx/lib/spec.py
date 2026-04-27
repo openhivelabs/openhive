@@ -27,13 +27,14 @@ BLOCK_TYPES = {
     "toc", "kpi_row", "two_column",
     # new visual blocks
     "cover", "chart", "callout", "sidebar", "spacer", "divider",
+    "section_break",
 }
 
 ALIGN_VALUES = {"left", "center", "right", "justify"}
 TABLE_STYLES = {"grid", "light", "plain", "zebra", "minimal"}
 CALLOUT_VARIANTS = {"info", "success", "warning", "danger", "note", "tip"}
 CHART_VARIANTS = {"bar", "hbar", "line", "area", "donut", "pie",
-                  "scatter", "stacked_bar", "sparkline"}
+                  "scatter", "stacked_bar", "sparkline", "combo"}
 
 
 class SpecError(ValueError):
@@ -125,7 +126,7 @@ def _validate_block(i: int, block: Any, warnings: list[str]) -> None:
         variant = block.get("variant", "bar")
         if variant not in CHART_VARIANTS:
             raise SpecError(f"{here}.variant: must be one of {sorted(CHART_VARIANTS)}")
-        if variant in ("bar", "line", "area", "scatter", "stacked_bar", "hbar"):
+        if variant in ("bar", "line", "area", "scatter", "stacked_bar", "hbar", "combo"):
             series = block.get("series")
             if not isinstance(series, list) or not series:
                 raise SpecError(f"{here}.series: non-empty array required for {variant}")

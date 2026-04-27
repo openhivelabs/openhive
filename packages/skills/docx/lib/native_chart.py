@@ -102,6 +102,8 @@ def _normalize_data(block: dict, variant: str) -> tuple[list[str], list[dict]]:
             item["axis"] = s["axis"]
         if "x" in s:
             item["x"] = s["x"]
+        if "kind" in s:
+            item["kind"] = s["kind"]
         series_list.append(item)
     if not cats and series_list:
         cats = [f"#{i+1}" for i in range(len(series_list[0]["values"]))]
@@ -120,19 +122,27 @@ def _build_chart_xml(block: dict, theme: Theme, variant: str,
     title = block.get("title", "")
     title_xml = _title_xml(title, theme) if title else ""
 
-    if variant in ("bar", "stacked_bar", "hbar"):
-        plot_xml = _plot_bar(variant, cats, series_list, theme)
+    x_label = block.get("x_label", "")
+    y_label = block.get("y_label", "")
+    show_values = bool(block.get("show_values"))
+
+    if variant == "combo":
+        plot_xml = _plot_combo(cats, series_list, theme, x_label, y_label, show_values)
+    elif variant in ("bar", "stacked_bar", "hbar"):
+        plot_xml = _plot_bar(variant, cats, series_list, theme,
+                             x_label, y_label, show_values)
     elif variant == "line":
-        plot_xml = _plot_line(cats, series_list, theme, fill=False)
+        plot_xml = _plot_line(cats, series_list, theme, fill=False,
+                              x_label=x_label, y_label=y_label,
+                              show_values=show_values)
     elif variant == "area":
-        plot_xml = _plot_area(cats, series_list, theme)
+        plot_xml = _plot_area(cats, series_list, theme, x_label, y_label)
     elif variant in ("pie", "donut"):
         plot_xml = _plot_pie(cats, series_list, theme, donut=(variant == "donut"))
     elif variant == "scatter":
-        plot_xml = _plot_scatter(cats, series_list, theme)
+        plot_xml = _plot_scatter(cats, series_list, theme, x_label, y_label)
     else:
-        # fallback: bar
-        plot_xml = _plot_bar("bar", cats, series_list, theme)
+        plot_xml = _plot_bar("bar", cats, series_list, theme, "", "", False)
 
     # pie/donut: legend default ON (single series but multiple slices)
     if variant in ("pie", "donut"):
@@ -221,11 +231,13 @@ def _legend_xml() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _plot_bar(variant: str, cats: list[str], series: list[dict], theme: Theme) -> str:
+def _plot_bar(variant: str, cats: list[str], series: list[dict], theme: Theme,
+              x_label: str = "", y_label: str = "", show_values: bool = False) -> str:
     bar_dir = "bar" if variant == "hbar" else "col"
     grouping = "stacked" if variant == "stacked_bar" else "clustered"
     overlap = "100" if variant == "stacked_bar" else "-20"
-    series_xml = "".join(_series_xml_bar(s, i, theme) for i, s in enumerate(series))
+    series_xml = "".join(_series_xml_bar(s, i, theme, show_values=show_values)
+                         for i, s in enumerate(series))
     cat_ax_id, val_ax_id = "111111111", "222222222"
     return f"""<c:barChart>
         <c:barDir val="{bar_dir}"/>
@@ -237,12 +249,19 @@ def _plot_bar(variant: str, cats: list[str], series: list[dict], theme: Theme) -
         <c:axId val="{cat_ax_id}"/>
         <c:axId val="{val_ax_id}"/>
       </c:barChart>
-      {_cat_axis(cat_ax_id, val_ax_id, position="b" if bar_dir == "col" else "l")}
-      {_val_axis(val_ax_id, cat_ax_id, position="l" if bar_dir == "col" else "b")}"""
+      {_cat_axis(cat_ax_id, val_ax_id,
+                 position="b" if bar_dir == "col" else "l",
+                 label=x_label if bar_dir == "col" else y_label)}
+      {_val_axis(val_ax_id, cat_ax_id,
+                 position="l" if bar_dir == "col" else "b",
+                 label=y_label if bar_dir == "col" else x_label)}"""
 
 
-def _plot_line(cats: list[str], series: list[dict], theme: Theme, fill: bool) -> str:
-    series_xml = "".join(_series_xml_line(s, i, theme) for i, s in enumerate(series))
+def _plot_line(cats: list[str], series: list[dict], theme: Theme, fill: bool,
+               x_label: str = "", y_label: str = "",
+               show_values: bool = False) -> str:
+    series_xml = "".join(_series_xml_line(s, i, theme, show_values=show_values)
+                         for i, s in enumerate(series))
     cat_ax_id, val_ax_id = "111111111", "222222222"
     return f"""<c:lineChart>
         <c:grouping val="standard"/>
@@ -252,11 +271,12 @@ def _plot_line(cats: list[str], series: list[dict], theme: Theme, fill: bool) ->
         <c:axId val="{cat_ax_id}"/>
         <c:axId val="{val_ax_id}"/>
       </c:lineChart>
-      {_cat_axis(cat_ax_id, val_ax_id, position="b")}
-      {_val_axis(val_ax_id, cat_ax_id, position="l")}"""
+      {_cat_axis(cat_ax_id, val_ax_id, position="b", label=x_label)}
+      {_val_axis(val_ax_id, cat_ax_id, position="l", label=y_label)}"""
 
 
-def _plot_area(cats: list[str], series: list[dict], theme: Theme) -> str:
+def _plot_area(cats: list[str], series: list[dict], theme: Theme,
+               x_label: str = "", y_label: str = "") -> str:
     series_xml = "".join(_series_xml_area(s, i, theme) for i, s in enumerate(series))
     cat_ax_id, val_ax_id = "111111111", "222222222"
     return f"""<c:areaChart>
@@ -266,8 +286,49 @@ def _plot_area(cats: list[str], series: list[dict], theme: Theme) -> str:
         <c:axId val="{cat_ax_id}"/>
         <c:axId val="{val_ax_id}"/>
       </c:areaChart>
-      {_cat_axis(cat_ax_id, val_ax_id, position="b")}
-      {_val_axis(val_ax_id, cat_ax_id, position="l")}"""
+      {_cat_axis(cat_ax_id, val_ax_id, position="b", label=x_label)}
+      {_val_axis(val_ax_id, cat_ax_id, position="l", label=y_label)}"""
+
+
+def _plot_combo(cats: list[str], series: list[dict], theme: Theme,
+                x_label: str = "", y_label: str = "",
+                show_values: bool = False) -> str:
+    """Bar + line in one chart. Each series picks its own kind via
+    ``"kind": "bar"|"line"`` (default bar). Both share one cat/val axis pair.
+    """
+    bar_series = [(i, s) for i, s in enumerate(series) if s.get("kind", "bar") == "bar"]
+    line_series = [(i, s) for i, s in enumerate(series) if s.get("kind") == "line"]
+
+    cat_ax_id, val_ax_id = "111111111", "222222222"
+    out_parts: list[str] = []
+
+    if bar_series:
+        bar_xml = "".join(_series_xml_bar(s, i, theme, show_values=show_values)
+                          for i, s in bar_series)
+        out_parts.append(f"""<c:barChart>
+        <c:barDir val="col"/>
+        <c:grouping val="clustered"/>
+        <c:varyColors val="0"/>
+        {bar_xml}
+        <c:gapWidth val="80"/>
+        <c:overlap val="-20"/>
+        <c:axId val="{cat_ax_id}"/>
+        <c:axId val="{val_ax_id}"/>
+      </c:barChart>""")
+    if line_series:
+        line_xml = "".join(_series_xml_line(s, i, theme, show_values=show_values)
+                           for i, s in line_series)
+        out_parts.append(f"""<c:lineChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+        {line_xml}
+        <c:marker val="1"/>
+        <c:axId val="{cat_ax_id}"/>
+        <c:axId val="{val_ax_id}"/>
+      </c:lineChart>""")
+    out_parts.append(_cat_axis(cat_ax_id, val_ax_id, position="b", label=x_label))
+    out_parts.append(_val_axis(val_ax_id, cat_ax_id, position="l", label=y_label))
+    return "\n".join(out_parts)
 
 
 def _plot_pie(cats: list[str], series: list[dict], theme: Theme, donut: bool) -> str:
@@ -286,7 +347,8 @@ def _plot_pie(cats: list[str], series: list[dict], theme: Theme, donut: bool) ->
       </c:pieChart>"""
 
 
-def _plot_scatter(cats: list[str], series: list[dict], theme: Theme) -> str:
+def _plot_scatter(cats: list[str], series: list[dict], theme: Theme,
+                  x_label: str = "", y_label: str = "") -> str:
     series_xml = "".join(_series_xml_scatter(s, i, theme) for i, s in enumerate(series))
     cat_ax_id, val_ax_id = "111111111", "222222222"
     return f"""<c:scatterChart>
@@ -296,8 +358,8 @@ def _plot_scatter(cats: list[str], series: list[dict], theme: Theme) -> str:
         <c:axId val="{cat_ax_id}"/>
         <c:axId val="{val_ax_id}"/>
       </c:scatterChart>
-      {_val_axis(cat_ax_id, val_ax_id, position="b")}
-      {_val_axis(val_ax_id, cat_ax_id, position="l")}"""
+      {_val_axis(cat_ax_id, val_ax_id, position="b", label=x_label)}
+      {_val_axis(val_ax_id, cat_ax_id, position="l", label=y_label)}"""
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +367,8 @@ def _plot_scatter(cats: list[str], series: list[dict], theme: Theme) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _series_xml_bar(s: dict, idx: int, theme: Theme) -> str:
+def _series_xml_bar(s: dict, idx: int, theme: Theme,
+                    show_values: bool = False) -> str:
     color = "{:02X}{:02X}{:02X}".format(*palette_color(theme, idx))
     name = _xml_escape(s["name"])
     cat_col = chr(ord("A"))
@@ -335,6 +398,7 @@ def _series_xml_bar(s: dict, idx: int, theme: Theme) -> str:
             <a:ln><a:noFill/></a:ln>
           </c:spPr>
           <c:invertIfNegative val="0"/>
+          {_dlbls_value() if show_values else ""}
           <c:cat>
             <c:strRef>
               <c:f>{cat_ref}</c:f>
@@ -357,7 +421,8 @@ def _series_xml_bar(s: dict, idx: int, theme: Theme) -> str:
         </c:ser>"""
 
 
-def _series_xml_line(s: dict, idx: int, theme: Theme) -> str:
+def _series_xml_line(s: dict, idx: int, theme: Theme,
+                     show_values: bool = False) -> str:
     color = "{:02X}{:02X}{:02X}".format(*palette_color(theme, idx))
     name = _xml_escape(s["name"])
     val_col = chr(ord("B") + idx)
@@ -392,6 +457,7 @@ def _series_xml_line(s: dict, idx: int, theme: Theme) -> str:
               <a:ln><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></a:ln>
             </c:spPr>
           </c:marker>
+          {_dlbls_value() if show_values else ""}
           <c:cat>
             <c:strRef>
               <c:f>{cat_ref}</c:f>
@@ -605,12 +671,14 @@ def _series_xml_scatter(s: dict, idx: int, theme: Theme) -> str:
 
 
 def _cat_axis(ax_id: str, cross_ax: str, position: str = "b",
-              deleted: bool = False) -> str:
+              deleted: bool = False, label: str = "") -> str:
+    title = _axis_title(label) if label else ""
     return f"""<c:catAx>
         <c:axId val="{ax_id}"/>
         <c:scaling><c:orientation val="minMax"/></c:scaling>
         <c:delete val="{1 if deleted else 0}"/>
         <c:axPos val="{position}"/>
+        {title}
         <c:crossAx val="{cross_ax}"/>
         <c:crosses val="autoZero"/>
         <c:auto val="1"/>
@@ -621,16 +689,51 @@ def _cat_axis(ax_id: str, cross_ax: str, position: str = "b",
 
 
 def _val_axis(ax_id: str, cross_ax: str, position: str = "l",
-              crosses: str = "autoZero") -> str:
+              crosses: str = "autoZero", label: str = "") -> str:
+    title = _axis_title(label) if label else ""
     return f"""<c:valAx>
         <c:axId val="{ax_id}"/>
         <c:scaling><c:orientation val="minMax"/></c:scaling>
         <c:delete val="0"/>
         <c:axPos val="{position}"/>
+        {title}
         <c:crossAx val="{cross_ax}"/>
         <c:crosses val="{crosses}"/>
         <c:crossBetween val="between"/>
       </c:valAx>"""
+
+
+def _dlbls_value() -> str:
+    """Series-level data label that shows the bar/line value at each point."""
+    return """<c:dLbls>
+            <c:txPr>
+              <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square"/>
+              <a:lstStyle/>
+              <a:p><a:pPr><a:defRPr sz="800" b="0"/></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+            </c:txPr>
+            <c:dLblPos val="outEnd"/>
+            <c:showLegendKey val="0"/>
+            <c:showVal val="1"/>
+            <c:showCatName val="0"/>
+            <c:showSerName val="0"/>
+            <c:showPercent val="0"/>
+            <c:showBubbleSize val="0"/>
+          </c:dLbls>"""
+
+
+def _axis_title(text: str) -> str:
+    safe = _xml_escape(text)
+    return f"""<c:title>
+          <c:tx><c:rich>
+            <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
+            <a:lstStyle/>
+            <a:p>
+              <a:pPr><a:defRPr sz="900" b="0"/></a:pPr>
+              <a:r><a:rPr lang="en-US" sz="900" b="0"/><a:t>{safe}</a:t></a:r>
+            </a:p>
+          </c:rich></c:tx>
+          <c:overlay val="0"/>
+        </c:title>"""
 
 
 # ---------------------------------------------------------------------------

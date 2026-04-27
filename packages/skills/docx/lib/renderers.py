@@ -138,7 +138,16 @@ def render_heading(doc, block: dict, theme: Theme) -> None:
 
 
 def render_paragraph(doc, block: dict, theme: Theme) -> None:
-    _add_paragraph(doc, block["text"], theme, align=block.get("align"))
+    from .inline import add_inline_runs
+
+    p = doc.add_paragraph()
+    if block.get("align"):
+        a = _align(block.get("align"))
+        if a is not None:
+            p.alignment = a
+    add_inline_runs(p, block["text"], theme,
+                    font=theme.body_font, size=theme.size_body,
+                    color=theme.fg)
 
 
 def render_bullets(doc, block: dict, theme: Theme) -> None:
@@ -150,23 +159,22 @@ def render_numbered(doc, block: dict, theme: Theme) -> None:
 
 
 def _emit_list(doc, items: list, theme: Theme, *, ordered: bool, level: int) -> None:
+    from .inline import add_inline_runs
+
     style_name = "List Number" if ordered else "List Bullet"
     i = 0
     while i < len(items):
         it = items[i]
         if isinstance(it, str):
             p = doc.add_paragraph(style=style_name if level == 0 else None)
-            run = p.add_run(it)
-            _style_run(run, font=theme.body_font, size=theme.size_body, color=theme.fg)
-            # indent for nested levels (List Bullet style only goes 1 level)
+            text = it
             if level > 0:
                 p.paragraph_format.left_indent = Inches(0.25 + 0.3 * level)
-                # prepend a visual marker since we're off the list style
-                prefix = {1: "– ", 2: "· "}.get(level, "· ")
-                # re-create run with prefix
                 p.clear()
-                run = p.add_run(prefix + it)
-                _style_run(run, font=theme.body_font, size=theme.size_body, color=theme.fg)
+                prefix = {1: "– ", 2: "· "}.get(level, "· ")
+                text = prefix + it
+            add_inline_runs(p, text, theme, font=theme.body_font,
+                            size=theme.size_body, color=theme.fg)
             if i + 1 < len(items) and isinstance(items[i + 1], list):
                 _emit_list(doc, items[i + 1], theme, ordered=ordered, level=level + 1)
                 i += 2
@@ -351,21 +359,29 @@ def render_horizontal_rule(doc, block: dict, theme: Theme) -> None:
 
 
 def render_toc(doc, block: dict, theme: Theme) -> None:
-    """Insert a TOC field. User must press F9 in Word to populate."""
+    """Insert a TOC field with dirty=true so Word auto-refreshes on open.
+
+    Combined with the ``<w:updateFields w:val="true"/>`` setting (added in
+    build_doc.py), the TOC populates the moment the reader opens the doc
+    — no F9 needed.
+    """
     levels = block.get("levels", 3)
     p = doc.add_paragraph()
     run = p.add_run()
     fldChar = etree.SubElement(run._r, qn("w:fldChar"))
     fldChar.set(qn("w:fldCharType"), "begin")
+    fldChar.set(qn("w:dirty"), "true")
     instrText = etree.SubElement(run._r, qn("w:instrText"))
     instrText.text = f'TOC \\o "1-{levels}" \\h \\z \\u'
     fldChar2 = etree.SubElement(run._r, qn("w:fldChar"))
-    fldChar2.set(qn("w:fldCharType"), "end")
-    # placeholder paragraph shown until F9
-    note_p = doc.add_paragraph()
-    note_run = note_p.add_run("(Refresh TOC with F9 in Word)")
-    _style_run(note_run, font=theme.body_font, size=theme.size_small,
+    fldChar2.set(qn("w:fldCharType"), "separate")
+    # placeholder run text (replaced by Word on refresh)
+    placeholder = p.add_run("Updating table of contents…")
+    _style_run(placeholder, font=theme.body_font, size=theme.size_small,
                color=theme.muted, italic=True)
+    end_run = p.add_run()
+    fldChar3 = etree.SubElement(end_run._r, qn("w:fldChar"))
+    fldChar3.set(qn("w:fldCharType"), "end")
 
 
 def render_kpi_row(doc, block: dict, theme: Theme) -> None:
@@ -778,6 +794,30 @@ def render_spacer(doc, block: dict, theme: Theme) -> None:
     p.paragraph_format.space_after = Pt(h_pt)
 
 
+def render_section_break(doc, block: dict, theme: Theme) -> None:
+    """Insert a new section so subsequent content can switch orientation
+    or page size. Optional ``orientation: "portrait"|"landscape"`` and
+    ``size: "A4"|"Letter"|"Legal"``.
+    """
+    from docx.enum.section import WD_SECTION, WD_ORIENT
+    from docx.shared import Inches as _Inches
+
+    new_section = doc.add_section(WD_SECTION.NEW_PAGE)
+    sizes = {"A4": (8.27, 11.69), "Letter": (8.5, 11.0), "Legal": (8.5, 14.0)}
+    sw, sh = sizes.get(block.get("size", "A4"), sizes["A4"])
+    if block.get("orientation", "portrait") == "landscape":
+        sw, sh = sh, sw
+        new_section.orientation = WD_ORIENT.LANDSCAPE
+    else:
+        new_section.orientation = WD_ORIENT.PORTRAIT
+    new_section.page_width = _Inches(sw)
+    new_section.page_height = _Inches(sh)
+    new_section.left_margin = _Inches(theme.margin_left)
+    new_section.right_margin = _Inches(theme.margin_right)
+    new_section.top_margin = _Inches(theme.margin_top)
+    new_section.bottom_margin = _Inches(theme.margin_bottom)
+
+
 def render_divider(doc, block: dict, theme: Theme) -> None:
     """Thicker divider with theme accent color (richer than horizontal_rule)."""
     p = doc.add_paragraph()
@@ -893,4 +933,5 @@ RENDERERS = {
     "sidebar": render_sidebar,
     "spacer": render_spacer,
     "divider": render_divider,
+    "section_break": render_section_break,
 }

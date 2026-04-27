@@ -74,6 +74,10 @@ def main() -> int:
     orient = meta.get("orientation", "portrait")
     _apply_page_setup(doc, size_name, orient, theme)
 
+    # header / footer / page numbers
+    from lib.headerfooter import apply_header_footer
+    apply_header_footer(doc, meta, theme)
+
     # render blocks
     for i, block in enumerate(spec["blocks"]):
         renderer = RENDERERS[block["type"]]
@@ -83,6 +87,9 @@ def main() -> int:
             _fail(f"block[{i}] ({block['type']}): render failed: {e}\n"
                   + traceback.format_exc())
             return 1
+
+    # Tell Word to auto-update all fields (TOC, page numbers, refs) on open.
+    _enable_field_auto_update(doc)
 
     out = resolve_out(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +139,20 @@ def _apply_page_setup(doc, size_name: str, orient: str, theme) -> None:
     section.right_margin = Inches(theme.margin_right)
     section.top_margin = Inches(theme.margin_top)
     section.bottom_margin = Inches(theme.margin_bottom)
+
+
+def _enable_field_auto_update(doc) -> None:
+    """Add <w:updateFields w:val=\"true\"/> to settings.xml so Word
+    refreshes TOC / PAGE / NUMPAGES fields on open.
+    """
+    from docx.oxml.ns import qn
+    from lxml import etree
+
+    settings_el = doc.settings.element
+    existing = settings_el.find(qn("w:updateFields"))
+    if existing is None:
+        upd = etree.SubElement(settings_el, qn("w:updateFields"))
+        upd.set(qn("w:val"), "true")
 
 
 def _gather_text(obj) -> str:
