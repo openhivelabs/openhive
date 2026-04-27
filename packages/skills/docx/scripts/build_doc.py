@@ -103,6 +103,17 @@ def main() -> int:
         from lib.native_inject import inject as inject_native_charts
         inject_native_charts(str(out), native_charts, theme)
 
+    # Footnotes: inline parser stashed entries on doc.part._footnotes_stash.
+    footnotes = list(getattr(doc.part, "_footnotes_stash", []))
+    if footnotes:
+        from lib.footnotes import inject as inject_footnotes
+        inject_footnotes(str(out), footnotes, theme)
+
+    # Watermark
+    if meta.get("watermark"):
+        from lib.watermark import inject as inject_watermark
+        inject_watermark(str(out), meta["watermark"], theme)
+
     # also save the spec alongside (for edit-via-rebuild flow)
     spec_out = out.with_suffix(out.suffix + ".spec.json")
     spec_out.write_text(json.dumps(spec, ensure_ascii=False, indent=2),

@@ -32,6 +32,7 @@ from lxml import etree
 # (greedy **) before italic (single * / _).
 _TOKENS: list[tuple[str, "re.Pattern[str]"]] = [
     ("code",      re.compile(r"`([^`\n]+)`")),
+    ("footnote",  re.compile(r"\[\^([^\]\n]+)\]")),
     ("link",      re.compile(r"\[([^\]\n]+)\]\(([^)\s]+)\)")),
     ("bold",      re.compile(r"\*\*([^*\n]+)\*\*")),
     ("strike",    re.compile(r"~~([^~\n]+)~~")),
@@ -74,6 +75,9 @@ def add_inline_runs(p, text: str, theme, **defaults) -> None:
             text_part, url = payload
             _add_hyperlink(p, text_part, url, theme,
                            defaults.get("size", theme.size_body))
+        elif kind == "footnote":
+            _add_footnote_ref(p, payload, theme,
+                              defaults.get("size", theme.size_body))
 
 
 def _parse(text: str) -> list[tuple[str, Any]]:
@@ -154,6 +158,35 @@ def _style_run(run, theme, *, font: str, size: int, color,
         sh.set(qn("w:val"), "clear")
         sh.set(qn("w:color"), "auto")
         sh.set(qn("w:fill"), "{:02X}{:02X}{:02X}".format(*shade))
+
+
+def _add_footnote_ref(p, body_text: str, theme, size: int) -> None:
+    """Add a superscript footnote-reference run and stash the body on
+    ``doc._footnotes``. The post-save injector turns each stash entry
+    into an actual ``<w:footnote>`` in word/footnotes.xml.
+    """
+    doc_part = p.part
+    doc = doc_part.document if hasattr(doc_part, "document") else None
+    # walk up to Document — python-docx exposes part.document only sometimes;
+    # easier: read/init the stash on the part itself.
+    if not hasattr(doc_part, "_footnotes_stash"):
+        doc_part._footnotes_stash = []
+    doc_part._footnotes_stash.append({"text": body_text})
+    fn_id = len(doc_part._footnotes_stash)  # 1-based to match the part
+
+    run_el = etree.SubElement(p._p, qn("w:r"))
+    rPr = etree.SubElement(run_el, qn("w:rPr"))
+    rFonts = etree.SubElement(rPr, qn("w:rFonts"))
+    for k in ("ascii", "hAnsi", "eastAsia", "cs"):
+        rFonts.set(qn(f"w:{k}"), theme.body_font)
+    sz = etree.SubElement(rPr, qn("w:sz"))
+    sz.set(qn("w:val"), str(max(size - 2, 7) * 2))
+    color = etree.SubElement(rPr, qn("w:color"))
+    color.set(qn("w:val"), "{:02X}{:02X}{:02X}".format(*theme.accent))
+    vert = etree.SubElement(rPr, qn("w:vertAlign"))
+    vert.set(qn("w:val"), "superscript")
+    fn_ref = etree.SubElement(run_el, qn("w:footnoteReference"))
+    fn_ref.set(qn("w:id"), str(fn_id))
 
 
 def _add_hyperlink(p, text: str, url: str, theme, size: int) -> None:

@@ -28,6 +28,9 @@ BLOCK_TYPES = {
     # new visual blocks
     "cover", "chart", "callout", "sidebar", "spacer", "divider",
     "section_break",
+    # extended
+    "pull_quote", "definition_list", "image_gallery", "equation",
+    "bookmark", "xref",
 }
 
 ALIGN_VALUES = {"left", "center", "right", "justify"}
@@ -150,6 +153,25 @@ def _validate_block(i: int, block: Any, warnings: list[str]) -> None:
     elif t == "sidebar":
         if not (block.get("text") or block.get("title") or block.get("bullets")):
             raise SpecError(f"{here}: needs text, title, or bullets")
+    elif t == "pull_quote":
+        _req_str(block, "text", here)
+    elif t == "definition_list":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            raise SpecError(f"{here}.items: non-empty array required")
+        for j, it in enumerate(items):
+            if not isinstance(it, dict) or "term" not in it or "definition" not in it:
+                raise SpecError(f"{here}.items[{j}]: requires term and definition")
+    elif t == "image_gallery":
+        imgs = block.get("images")
+        if not isinstance(imgs, list) or not imgs:
+            raise SpecError(f"{here}.images: non-empty array required")
+    elif t == "equation":
+        _req_str(block, "latex", here)
+    elif t == "bookmark":
+        _req_str(block, "name", here)
+    elif t == "xref":
+        _req_str(block, "target", here)
     elif t == "spacer":
         h = block.get("height", 12)
         if not isinstance(h, (int, float)) or h < 0:

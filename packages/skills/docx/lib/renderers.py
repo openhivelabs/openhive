@@ -183,6 +183,16 @@ def _emit_list(doc, items: list, theme: Theme, *, ordered: bool, level: int) -> 
 
 
 def render_table(doc, block: dict, theme: Theme) -> None:
+    """Render a table.
+
+    Extra options:
+      column_widths: list of inches, e.g. [1.5, 1.0, 1.0, 0.8]
+      cell_align: "left" | "center" | "right"  (per-table default)
+      merge: list of {row, col, rowspan?, colspan?} for merged cells
+      first_col_emphasis: bool — bold + accent color for first column
+    """
+    from .inline import add_inline_runs
+
     headers = block["headers"]
     rows = block["rows"]
     n_cols = len(headers)
@@ -224,6 +234,9 @@ def render_table(doc, block: dict, theme: Theme) -> None:
         cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
     zebra_fill = _mix(theme.surface, (255, 255, 255), 0.55)
+    cell_align = block.get("cell_align")
+    first_col_emp = bool(block.get("first_col_emphasis"))
+
     # body rows
     for ri, row in enumerate(rows):
         tr = table.rows[ri + 1]
@@ -232,13 +245,54 @@ def render_table(doc, block: dict, theme: Theme) -> None:
             cell = tr.cells[j]
             cell.text = ""
             p = cell.paragraphs[0]
-            run = p.add_run(_fmt_cell(val))
-            _style_run(run, font=theme.body_font, size=theme.size_body, color=theme.fg)
+            if cell_align:
+                aligned = _align(cell_align)
+                if aligned is not None:
+                    p.alignment = aligned
+            # rich text + inline styles via inline parser
+            font = theme.body_font
+            color = theme.fg
+            bold = False
+            if first_col_emp and j == 0:
+                color = theme.heading
+                bold = True
+            text = _fmt_cell(val)
+            if any(ch in text for ch in ("*", "`", "[", "~", "=")):
+                add_inline_runs(p, text, theme, font=font,
+                                size=theme.size_body, color=color, bold=bold)
+            else:
+                run = p.add_run(text)
+                _style_run(run, font=font, size=theme.size_body,
+                           color=color, bold=bold)
             cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
             if style_choice == "zebra" and ri % 2 == 1:
                 _shade_cell(cell, zebra_fill)
             if style_choice == "minimal" and ri < len(rows) - 1:
                 _set_cell_bottom_border(cell, _mix(theme.muted, (255, 255, 255), 0.7), size=4)
+
+    # Column widths (Inches list)
+    cw = block.get("column_widths")
+    if isinstance(cw, list):
+        from docx.shared import Inches as _Inches
+        widths = [_Inches(float(w)) for w in cw[:n_cols]]
+        # pad with last value
+        while len(widths) < n_cols:
+            widths.append(widths[-1] if widths else _Inches(1.0))
+        for row in table.rows:
+            for cell, w in zip(row.cells, widths):
+                cell.width = w
+
+    # Merged cells
+    for m in block.get("merge", []) or []:
+        try:
+            r0, c0 = int(m["row"]), int(m["col"])
+            rowspan = int(m.get("rowspan", 1))
+            colspan = int(m.get("colspan", 1))
+            top_left = table.rows[r0].cells[c0]
+            bot_right = table.rows[r0 + rowspan - 1].cells[c0 + colspan - 1]
+            top_left.merge(bot_right)
+        except Exception:
+            pass
 
 
 def _shade_cell(cell, fill_rgb) -> None:
@@ -320,7 +374,12 @@ def render_quote(doc, block: dict, theme: Theme) -> None:
 
 
 def render_code(doc, block: dict, theme: Theme) -> None:
-    # one paragraph per line, monospace, light background via table trick
+    """Code block with optional naive syntax highlighting per language.
+
+    Highlighting is intentionally simple — keyword / string / comment /
+    number coloring for python/javascript/sql/json. Anything else falls
+    back to plain mono.
+    """
     table = doc.add_table(rows=1, cols=1)
     table.alignment = WD_TABLE_ALIGNMENT.LEFT
     cell = table.rows[0].cells[0]
@@ -332,17 +391,23 @@ def render_code(doc, block: dict, theme: Theme) -> None:
         b = etree.SubElement(tcBorders, qn(f"w:{side}"))
         b.set(qn("w:val"), "single"); b.set(qn("w:sz"), "2")
         b.set(qn("w:color"), "CCCCCC")
-    # write lines
+    _set_cell_left_border(cell, theme.accent, size=20)
+
+    language = (block.get("language") or "").lower()
     lines = block["text"].split("\n")
-    # clear the default paragraph, add one per line
     for pg in list(cell.paragraphs):
         cell._tc.remove(pg._p)
     for line in lines:
         p = cell.add_paragraph()
         p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after = Pt(0)
-        run = p.add_run(line or " ")
-        _style_run(run, font=theme.mono_font, size=theme.size_code, color=theme.fg)
+        spans = _highlight(line or " ", language)
+        for kind, text in spans:
+            run = p.add_run(text)
+            color = _code_color(kind, theme)
+            italic = (kind == "comment")
+            _style_run(run, font=theme.mono_font, size=theme.size_code,
+                       color=color, italic=italic)
 
 
 def render_horizontal_rule(doc, block: dict, theme: Theme) -> None:
@@ -840,6 +905,85 @@ def render_divider(doc, block: dict, theme: Theme) -> None:
 # ---------------------------------------------------------------------------
 
 
+_KEYWORDS = {
+    "python": {"def", "class", "return", "if", "elif", "else", "for", "while",
+               "in", "not", "and", "or", "is", "from", "import", "as", "with",
+               "try", "except", "finally", "raise", "lambda", "yield", "pass",
+               "break", "continue", "True", "False", "None", "self", "async",
+               "await"},
+    "javascript": {"function", "const", "let", "var", "return", "if", "else",
+                   "for", "while", "do", "switch", "case", "break", "continue",
+                   "new", "this", "class", "extends", "import", "from", "export",
+                   "default", "async", "await", "try", "catch", "throw", "true",
+                   "false", "null", "undefined"},
+    "ts": {"interface", "type", "extends", "implements", "as", "enum", "public",
+           "private", "protected", "readonly"},
+    "sql": {"SELECT", "FROM", "WHERE", "GROUP", "BY", "ORDER", "HAVING", "JOIN",
+            "INNER", "LEFT", "RIGHT", "OUTER", "ON", "AS", "INSERT", "INTO",
+            "VALUES", "UPDATE", "SET", "DELETE", "CREATE", "TABLE", "DROP",
+            "ALTER", "INDEX", "WITH", "UNION", "ALL", "DISTINCT", "AND", "OR",
+            "NOT", "IN", "LIKE", "BETWEEN", "IS", "NULL", "LIMIT", "OFFSET"},
+}
+
+
+def _highlight(line: str, language: str) -> list[tuple[str, str]]:
+    """Return list of (kind, text) spans where kind ∈ {plain, keyword, string,
+    comment, number}. Pure stdlib, single-pass. Falls back to plain for
+    unknown languages.
+    """
+    import re
+
+    if language not in {"python", "javascript", "js", "ts", "typescript", "sql"}:
+        return [("plain", line)]
+    lang_key = {"javascript": "javascript", "js": "javascript",
+                "ts": "javascript", "typescript": "javascript"}.get(language, language)
+    keywords = _KEYWORDS.get(lang_key, set())
+    if lang_key == "javascript":
+        keywords = keywords | _KEYWORDS.get("ts", set())
+
+    # Comment first — strip end-of-line comment from further parsing
+    comment_marker = "#" if language == "python" else (
+        "--" if language == "sql" else "//")
+    pre, _, comment = line.partition(comment_marker)
+    spans: list[tuple[str, str]] = []
+    # Now tokenize `pre`
+    pat = re.compile(
+        r"""(?P<str>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|"""
+        r"""(?P<num>\b\d[\d_]*(?:\.\d+)?\b)|"""
+        r"""(?P<word>\b[A-Za-z_][A-Za-z0-9_]*\b)|"""
+        r"""(?P<other>[^"'\w]+|.)""",
+        re.VERBOSE,
+    )
+    for m in pat.finditer(pre):
+        if m.lastgroup == "str":
+            spans.append(("string", m.group(0)))
+        elif m.lastgroup == "num":
+            spans.append(("number", m.group(0)))
+        elif m.lastgroup == "word":
+            tok = m.group(0)
+            if tok in keywords or tok.upper() in keywords:
+                spans.append(("keyword", tok))
+            else:
+                spans.append(("plain", tok))
+        else:
+            spans.append(("plain", m.group(0)))
+    if comment:
+        spans.append(("comment", comment_marker + comment))
+    return spans
+
+
+def _code_color(kind: str, theme: Theme) -> tuple[int, int, int]:
+    if kind == "keyword":
+        return (109, 40, 217)         # violet
+    if kind == "string":
+        return (22, 101, 52)          # dark green
+    if kind == "comment":
+        return theme.muted
+    if kind == "number":
+        return (180, 83, 9)           # orange
+    return theme.fg
+
+
 def _mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
     """Blend a→b by t∈[0,1]. t=0 returns a, t=1 returns b."""
     return (
@@ -935,3 +1079,18 @@ RENDERERS = {
     "divider": render_divider,
     "section_break": render_section_break,
 }
+
+
+def _register_extended() -> None:
+    from . import extended as _ext
+    RENDERERS.update({
+        "pull_quote": _ext.render_pull_quote,
+        "definition_list": _ext.render_definition_list,
+        "image_gallery": _ext.render_image_gallery,
+        "equation": _ext.render_equation,
+        "bookmark": _ext.render_bookmark,
+        "xref": _ext.render_xref,
+    })
+
+
+_register_extended()
