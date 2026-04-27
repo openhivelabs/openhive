@@ -27,6 +27,29 @@ from docx.shared import Pt
 from lxml import etree
 
 
+def apply_page_number_format(doc, meta: dict) -> None:
+    """Set page-number format and start value for section 0.
+
+    meta.page_numbers_format: "decimal" (1,2,3) | "lowerRoman" (i,ii) |
+                               "upperRoman" (I,II) | "lowerLetter" (a,b) |
+                               "upperLetter" (A,B)
+    meta.page_numbers_start: int (e.g. 1 to restart count after cover)
+    """
+    fmt = meta.get("page_numbers_format")
+    start = meta.get("page_numbers_start")
+    if fmt is None and start is None:
+        return
+    section = doc.sections[0]
+    sectPr = section._sectPr
+    pgNumType = sectPr.find(qn("w:pgNumType"))
+    if pgNumType is None:
+        pgNumType = etree.SubElement(sectPr, qn("w:pgNumType"))
+    if fmt is not None:
+        pgNumType.set(qn("w:fmt"), str(fmt))
+    if start is not None:
+        pgNumType.set(qn("w:start"), str(int(start)))
+
+
 def apply_header_footer(doc, meta: dict, theme) -> None:
     header = meta.get("header") or {}
     footer = meta.get("footer") or {}

@@ -36,7 +36,8 @@ BLOCK_TYPES = {
 
 ALIGN_VALUES = {"left", "center", "right", "justify"}
 TABLE_STYLES = {"grid", "light", "plain", "zebra", "minimal"}
-CALLOUT_VARIANTS = {"info", "success", "warning", "danger", "note", "tip"}
+CALLOUT_VARIANTS = {"info", "success", "warning", "danger", "note", "tip",
+                    "action", "decision", "question", "mention", "key"}
 CHART_VARIANTS = {"bar", "hbar", "line", "area", "donut", "pie",
                   "scatter", "stacked_bar", "sparkline", "combo",
                   "radar", "bubble"}

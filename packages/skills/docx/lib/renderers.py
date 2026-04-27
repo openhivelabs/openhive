@@ -320,8 +320,9 @@ def _fmt_cell(v: Any) -> str:
 def render_image(doc, block: dict, theme: Theme) -> None:
     path = _resolve_image(block["path"])
     width = block.get("width_in")
+    float_side = block.get("float")  # "left" | "right" | None
     p = doc.add_paragraph()
-    if block.get("align"):
+    if block.get("align") and not float_side:
         a = _align(block.get("align"))
         if a is not None:
             p.alignment = a
@@ -330,6 +331,8 @@ def render_image(doc, block: dict, theme: Theme) -> None:
         run.add_picture(path, width=Inches(float(width)))
     else:
         run.add_picture(path)
+    if float_side in ("left", "right"):
+        _convert_inline_to_anchor(run, float_side)
     caption = block.get("caption")
     if caption:
         cap_p = doc.add_paragraph()
@@ -337,6 +340,52 @@ def render_image(doc, block: dict, theme: Theme) -> None:
         cap_run = cap_p.add_run(caption)
         _style_run(cap_run, font=theme.body_font, size=theme.size_small,
                    color=theme.muted, italic=True)
+
+
+def _convert_inline_to_anchor(run, side: str) -> None:
+    """Convert an inline image (<wp:inline>) into an anchored floating
+    image with text wrap on the given side. Only the layout properties
+    change — pic data stays put.
+    """
+    drawings = run._r.findall(qn("w:drawing"))
+    if not drawings:
+        return
+    drawing = drawings[0]
+    inline = drawing.find(qn("wp:inline"))
+    if inline is None:
+        return
+    # Build the anchor element with key positioning attrs
+    nsmap = {"wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"}
+    anchor = etree.SubElement(drawing, qn("wp:anchor"))
+    for k, v in (("distT", "0"), ("distB", "0"), ("distL", "114300"),
+                 ("distR", "114300"), ("simplePos", "0"),
+                 ("relativeHeight", "251658240"),
+                 ("behindDoc", "0"), ("locked", "0"),
+                 ("layoutInCell", "1"), ("allowOverlap", "1")):
+        anchor.set(k, v)
+    sp = etree.SubElement(anchor, qn("wp:simplePos"))
+    sp.set("x", "0"); sp.set("y", "0")
+    posH = etree.SubElement(anchor, qn("wp:positionH"))
+    posH.set("relativeFrom", "margin")
+    align_h = etree.SubElement(posH, qn("wp:align"))
+    align_h.text = side
+    posV = etree.SubElement(anchor, qn("wp:positionV"))
+    posV.set("relativeFrom", "paragraph")
+    posOffsetV = etree.SubElement(posV, qn("wp:posOffset"))
+    posOffsetV.text = "0"
+    # Move children of inline (extent, docPr, graphic, …) into anchor
+    for child in list(inline):
+        anchor.append(child)
+    # Add wrapSquare BEFORE graphic so schema is satisfied
+    wrap = etree.Element(qn("wp:wrapSquare"))
+    wrap.set("wrapText", "bothSides")
+    # find graphic to insert wrap before it
+    graphic = anchor.find(qn("a:graphic"))
+    if graphic is not None:
+        anchor.insert(list(anchor).index(graphic), wrap)
+    else:
+        anchor.append(wrap)
+    drawing.remove(inline)
 
 
 def render_page_break(doc, block: dict, theme: Theme) -> None:
@@ -773,12 +822,17 @@ def render_callout(doc, block: dict, theme: Theme) -> None:
     """Colored callout box. Variants: info / success / warning / danger / note / tip."""
     variant = block.get("variant", "info")
     palette_map = {
-        "info":    theme.info,
-        "success": theme.success,
-        "warning": theme.warning,
-        "danger":  theme.danger,
-        "note":    theme.muted,
-        "tip":     theme.accent,
+        "info":     theme.info,
+        "success":  theme.success,
+        "warning":  theme.warning,
+        "danger":   theme.danger,
+        "note":     theme.muted,
+        "tip":      theme.accent,
+        "action":   (139, 92, 246),
+        "decision": (14, 165, 233),
+        "question": (236, 72, 153),
+        "mention":  (99, 102, 241),
+        "key":      (217, 119, 6),
     }
     accent = palette_map.get(variant, theme.info)
     bg = _mix(accent, (255, 255, 255), 0.90)
@@ -802,7 +856,10 @@ def render_callout(doc, block: dict, theme: Theme) -> None:
         tp = cell.add_paragraph()
         tp.paragraph_format.space_after = Pt(2)
         prefix = {"warning": "⚠ ", "danger": "✕ ", "success": "✓ ",
-                  "info": "ⓘ ", "note": "● ", "tip": "★ "}.get(variant, "")
+                  "info": "ⓘ ", "note": "● ", "tip": "★ ",
+                  "action": "▶ ", "decision": "◆ ",
+                  "question": "? ", "mention": "@ ",
+                  "key": "🔑 "}.get(variant, "")
         tr = tp.add_run(prefix + str(title))
         _style_run(tr, font=theme.heading_font, size=theme.size_body,
                    color=accent, bold=True)

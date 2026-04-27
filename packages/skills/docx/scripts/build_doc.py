@@ -75,8 +75,13 @@ def main() -> int:
     _apply_page_setup(doc, size_name, orient, theme)
 
     # header / footer / page numbers
-    from lib.headerfooter import apply_header_footer
+    from lib.headerfooter import apply_header_footer, apply_page_number_format
     apply_header_footer(doc, meta, theme)
+    apply_page_number_format(doc, meta)
+
+    # auto-number headings if requested
+    if meta.get("auto_number_headings"):
+        _apply_auto_numbering(spec["blocks"])
 
     # render blocks
     for i, block in enumerate(spec["blocks"]):
@@ -150,6 +155,34 @@ def _apply_page_setup(doc, size_name: str, orient: str, theme) -> None:
     section.right_margin = Inches(theme.margin_right)
     section.top_margin = Inches(theme.margin_top)
     section.bottom_margin = Inches(theme.margin_bottom)
+
+
+def _apply_auto_numbering(blocks: list) -> None:
+    """Prefix heading.text with hierarchical numbers (1., 1.1, 1.1.1...).
+
+    Skips headings whose text already starts with ``\\d+\\.`` so authors
+    can still hand-number when they want.
+    """
+    import re
+
+    counters = [0] * 7  # index 0 unused
+    for b in blocks:
+        if not (isinstance(b, dict) and b.get("type") == "heading"):
+            continue
+        level = int(b.get("level", 1))
+        if not (1 <= level <= 6):
+            continue
+        if re.match(r"^\d+(\.\d+)*\.?\s", b.get("text", "")):
+            continue
+        counters[level] += 1
+        for k in range(level + 1, 7):
+            counters[k] = 0
+        prefix = ".".join(str(counters[k]) for k in range(1, level + 1))
+        # Top-level (level 1) gets a trailing period — matches Word's
+        # Heading 1 default. Sub-levels keep just the dotted numerals.
+        if level == 1:
+            prefix = f"{prefix}."
+        b["text"] = f"{prefix} {b['text']}"
 
 
 def _enable_field_auto_update(doc) -> None:

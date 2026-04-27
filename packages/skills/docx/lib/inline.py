@@ -39,6 +39,7 @@ _TOKENS: list[tuple[str, "re.Pattern[str]"]] = [
     ("highlight", re.compile(r"==([^=\n]+)==")),
     ("italic",    re.compile(r"(?<![*\w])\*([^*\n]+)\*(?!\w)")),
     ("italic_u",  re.compile(r"(?<![_\w])_([^_\n]+)_(?!\w)")),
+    ("badge",     re.compile(r"\{\{([^{}\n]+)\}\}")),
 ]
 
 
@@ -78,6 +79,9 @@ def add_inline_runs(p, text: str, theme, **defaults) -> None:
         elif kind == "footnote":
             _add_footnote_ref(p, payload, theme,
                               defaults.get("size", theme.size_body))
+        elif kind == "badge":
+            _add_badge(p, payload, theme,
+                       defaults.get("size", theme.size_body))
 
 
 def _parse(text: str) -> list[tuple[str, Any]]:
@@ -158,6 +162,56 @@ def _style_run(run, theme, *, font: str, size: int, color,
         sh.set(qn("w:val"), "clear")
         sh.set(qn("w:color"), "auto")
         sh.set(qn("w:fill"), "{:02X}{:02X}{:02X}".format(*shade))
+
+
+_BADGE_COLORS = {
+    "done":     ((22, 163, 74), (255, 255, 255)),
+    "ok":       ((22, 163, 74), (255, 255, 255)),
+    "wip":      ((217, 119, 6), (255, 255, 255)),
+    "todo":     ((148, 163, 184), (255, 255, 255)),
+    "blocked":  ((220, 38, 38), (255, 255, 255)),
+    "fail":     ((220, 38, 38), (255, 255, 255)),
+    "new":      ((37, 99, 235), (255, 255, 255)),
+    "beta":     ((139, 92, 246), (255, 255, 255)),
+    "ga":       ((22, 163, 74), (255, 255, 255)),
+    "deprecated": ((100, 116, 139), (255, 255, 255)),
+    "warn":     ((217, 119, 6), (255, 255, 255)),
+}
+
+
+def _add_badge(p, payload: str, theme, size: int) -> None:
+    """Inline status pill — colored shaded run with white bold text.
+
+    Recognized labels (case-insensitive): done, wip, todo, blocked, fail,
+    new, beta, ga, deprecated, warn. Unrecognized labels fall back to
+    theme.accent. Custom colors via ``{{label|#RRGGBB}}``.
+    """
+    label = payload.strip()
+    color_override = None
+    if "|" in label:
+        label, _, hex_color = label.partition("|")
+        label = label.strip()
+        hex_color = hex_color.strip().lstrip("#")
+        if len(hex_color) == 6:
+            try:
+                color_override = (int(hex_color[0:2], 16),
+                                  int(hex_color[2:4], 16),
+                                  int(hex_color[4:6], 16))
+            except ValueError:
+                pass
+    bg, fg = _BADGE_COLORS.get(label.lower(), (theme.accent, (255, 255, 255)))
+    if color_override:
+        bg = color_override
+
+    # Pad with thin spaces so the shaded run looks like a pill.
+    text = f" {label.upper()} "
+    run = p.add_run(text)
+    _style_run(run, theme,
+               font=theme.heading_font,
+               size=max(size - 2, 8),
+               color=fg,
+               bold=True,
+               shade=bg)
 
 
 def _add_footnote_ref(p, body_text: str, theme, size: int) -> None:
