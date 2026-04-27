@@ -112,9 +112,12 @@ function coerceField(field: FormFieldSpec, raw: unknown): unknown {
     case 'toggle':
       return Boolean(raw)
     case 'select':
-      if (field.options && !field.options.includes(String(raw))) {
+      if (
+        field.options &&
+        !field.options.map((o) => String(o)).includes(String(raw))
+      ) {
         throw new ActionError(
-          `field "${field.name}" must be one of ${field.options.join(', ')}`,
+          `field "${field.name}" must be one of ${field.options.map((o) => String(o)).join(', ')}`,
         )
       }
       return String(raw)
@@ -144,7 +147,10 @@ export async function executeAction(
         rowsChanged = execTeamDataAction(ctx, action, values)
         break
       case 'mcp':
-        result = await execMcpAction(action, values)
+        // Inject team_id like team_data does so external tables with a
+        // tenant column can write under the OpenHive team scope without
+        // the binder having to learn it as a form field.
+        result = await execMcpAction(action, { ...values, team_id: ctx.teamId })
         break
       case 'http_recipe':
       case 'http_raw':
@@ -240,11 +246,24 @@ async function execMcpAction(
   const server = String(action.target.config?.server ?? '')
   const tool = String(action.target.config?.tool ?? '')
   if (!server || !tool) throw new ActionError('mcp action requires server + tool')
+  // Two binder formats coexist for mcp actions:
+  //   1. args_template with `{{var}}` placeholders — synthesizer + new
+  //      kanban/table prompt output. Rendered through renderTemplate.
+  //   2. plain args with `:var` placeholders inline (especially in
+  //      `query`) — older calendar / kpi binder output. Without
+  //      substitution Supabase receives literal `:var` strings and
+  //      errors out. We sub them in here so binder-emitted actions work
+  //      even before the prompt is updated.
   const template = action.target.config?.args_template
-  const args =
-    template && typeof template === 'object' && !Array.isArray(template)
-      ? renderTemplate(template as Record<string, unknown>, values)
-      : values
+  const rawArgs = action.target.config?.args
+  let args: Record<string, unknown>
+  if (template && typeof template === 'object' && !Array.isArray(template)) {
+    args = renderTemplate(template as Record<string, unknown>, values)
+  } else if (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)) {
+    args = renderColonTemplate(rawArgs as Record<string, unknown>, values)
+  } else {
+    args = values
+  }
   const text = await mcpCallTool(server, tool, args as Record<string, unknown>)
   try {
     return JSON.parse(text)
@@ -325,4 +344,32 @@ function renderString(s: string, values: Record<string, unknown>): string {
     const v = values[k]
     return v === undefined || v === null ? '' : String(v)
   })
+}
+
+/** Substitute `:placeholder` tokens in any string field of an args object,
+ *  matching the SQL parameter syntax the binder uses for team_data
+ *  actions. Strings (text / date) are wrapped in single quotes; numbers
+ *  stay raw. Used by execMcpAction so binder-emitted mcp actions whose
+ *  `query` carries inline `:var` placeholders run correctly without
+ *  forcing every binder to switch to args_template + {{var}}. */
+function renderColonTemplate(
+  template: Record<string, unknown>,
+  values: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(template)) {
+    if (typeof v === 'string') {
+      out[k] = v.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (m, name: string) => {
+        if (!(name in values)) return m
+        const val = values[name]
+        if (val === null || val === undefined) return 'NULL'
+        if (typeof val === 'number' || typeof val === 'boolean') return String(val)
+        // Escape single quotes for SQL string literals.
+        return `'${String(val).replace(/'/g, "''")}'`
+      })
+    } else {
+      out[k] = v
+    }
+  }
+  return out
 }

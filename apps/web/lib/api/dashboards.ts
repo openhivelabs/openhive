@@ -198,31 +198,64 @@ export async function saveDashboard(teamId: string, layout: DashboardLayout): Pr
   if (!res.ok) throw new Error(`PUT dashboard ${res.status}`)
 }
 
-export interface MemoData {
+export interface MemoNote {
+  note_id: string
   content: string
-  updated_at: number | null
+  sort_order: number
+  updated_at: number
 }
 
-export async function fetchMemo(teamId: string, panelId: string): Promise<MemoData> {
+export async function fetchMemos(teamId: string, panelId: string): Promise<MemoNote[]> {
   const res = await fetch(
-    `/api/panels/${encodeURIComponent(panelId)}/memo?teamId=${encodeURIComponent(teamId)}`,
+    `/api/panels/${encodeURIComponent(panelId)}/memos?teamId=${encodeURIComponent(teamId)}`,
   )
-  if (!res.ok) throw new Error(`GET memo ${res.status}`)
-  return (await res.json()) as MemoData
+  if (!res.ok) throw new Error(`GET memos ${res.status}`)
+  const j = (await res.json()) as { notes: MemoNote[] }
+  return j.notes ?? []
 }
 
-export async function saveMemo(
+export async function createMemoNote(
   teamId: string,
   panelId: string,
-  content: string,
-): Promise<MemoData> {
-  const res = await fetch(`/api/panels/${encodeURIComponent(panelId)}/memo`, {
-    method: 'PUT',
+  content = '',
+): Promise<MemoNote> {
+  const res = await fetch(`/api/panels/${encodeURIComponent(panelId)}/memos`, {
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ teamId, content }),
   })
-  if (!res.ok) throw new Error(`PUT memo ${res.status}`)
-  return (await res.json()) as MemoData
+  if (!res.ok) throw new Error(`POST memo ${res.status}`)
+  return (await res.json()) as MemoNote
+}
+
+export async function updateMemoNote(
+  teamId: string,
+  panelId: string,
+  noteId: string,
+  patch: { content?: string; sort_order?: number },
+): Promise<MemoNote> {
+  const res = await fetch(
+    `/api/panels/${encodeURIComponent(panelId)}/memos/${encodeURIComponent(noteId)}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ teamId, ...patch }),
+    },
+  )
+  if (!res.ok) throw new Error(`PATCH memo ${res.status}`)
+  return (await res.json()) as MemoNote
+}
+
+export async function deleteMemoNote(
+  teamId: string,
+  panelId: string,
+  noteId: string,
+): Promise<void> {
+  const res = await fetch(
+    `/api/panels/${encodeURIComponent(panelId)}/memos/${encodeURIComponent(noteId)}?teamId=${encodeURIComponent(teamId)}`,
+    { method: 'DELETE' },
+  )
+  if (!res.ok) throw new Error(`DELETE memo ${res.status}`)
 }
 
 export interface DashboardBackup {

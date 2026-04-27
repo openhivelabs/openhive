@@ -18,7 +18,7 @@ import {
 } from '@/lib/api/teamData'
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
-import { Package, Plus } from '@phosphor-icons/react'
+import { Plus, SquaresFour } from '@phosphor-icons/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 /** Cell unit in pixels — must match the grid template (auto-rows + cols).
@@ -300,7 +300,10 @@ function PanelCell({
         setDraggingId(null)
       }}
     >
-      {spec.binding ? (
+      {spec.binding || spec.type === 'memo' ? (
+        // Memo panels have no binding (content lives in panel_memos),
+        // but BoundPanel handles them specially — route there instead
+        // of falling through to BlockContent which has no memo case.
         <BoundPanel spec={spec} teamId={teamId} />
       ) : (
         <BlockContent
@@ -507,7 +510,7 @@ function StageBars({
 function EmptyState() {
   const t = useT()
   return (
-    <PageEmptyState icon={<Package className="w-10 h-10" weight="thin" />}>
+    <PageEmptyState icon={<SquaresFour className="w-10 h-10" weight="thin" />}>
       {t('dashboard.empty.title')}
     </PageEmptyState>
   )

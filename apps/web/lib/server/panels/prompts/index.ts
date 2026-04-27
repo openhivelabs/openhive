@@ -11,6 +11,7 @@ import { COMMON_PROMPT } from './common'
 import { FORM_CHAPTER } from './form'
 import { KANBAN_CHAPTER } from './kanban'
 import { KPI_CHAPTER } from './kpi'
+import { TABLE_CHAPTER } from './table'
 
 const CHAPTERS: Record<string, string> = {
   chart: CHART_CHAPTER,
@@ -18,6 +19,7 @@ const CHAPTERS: Record<string, string> = {
   calendar: CALENDAR_CHAPTER,
   form: FORM_CHAPTER,
   kpi: KPI_CHAPTER,
+  table: TABLE_CHAPTER,
 }
 
 export function buildSystemPrompt(panelType: string): string {

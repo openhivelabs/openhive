@@ -39,3 +39,27 @@ panel:
       columns: [id, name, email, stage, value, created_at]
       on_click: { kind: detail }
     refresh_seconds: 600
+    actions:
+      - id: create
+        kind: create
+        label: Add
+        target:
+          kind: team_data
+          config:
+            sql: |
+              INSERT INTO customer (name, email, stage, value, team_id)
+              VALUES (:name, :email, :stage, :value, :team_id)
+        form:
+          fields:
+            - { name: name,  label: Name,  type: text,   required: true }
+            - { name: email, label: Email, type: text }
+            - { name: stage, label: Stage, type: select, options: [prospect, qualified, proposal, won, lost], default: prospect }
+            - { name: value, label: Value, type: number, default: 0 }
+      - id: delete
+        kind: delete
+        label: Delete
+        target:
+          kind: team_data
+          config:
+            sql: |
+              DELETE FROM customer WHERE id = :id AND team_id = :team_id

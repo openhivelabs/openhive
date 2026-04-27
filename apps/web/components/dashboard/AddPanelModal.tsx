@@ -177,48 +177,51 @@ export function AddPanelModal({
                 />
               </Section>
 
-              {/* Section: data */}
-              <Section>
-                <label
-                  htmlFor="panel-edit-intent"
-                  className="block text-[12px] font-medium text-neutral-500 dark:text-neutral-400 mb-1.5"
-                >
-                  {t('panel.edit.data')}
-                </label>
-                <textarea
-                  id="panel-edit-intent"
-                  value={intent}
-                  onChange={(e) => setIntent(e.target.value)}
-                  placeholder={t('panel.edit.intentPlaceholder')}
-                  rows={3}
-                  className="w-full px-3 py-2 text-[13px] rounded-sm border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-300 resize-none"
-                />
-                <button
-                  type="button"
-                  onClick={onApply}
-                  disabled={busy !== null || !teamId}
-                  className="mt-2 w-full inline-flex items-center justify-center gap-1.5 h-8 px-4 text-[13px] rounded-sm bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  {busy === 'rebind' ? (
-                    <CircleNotch className="w-3.5 h-3.5 animate-spin" />
-                  ) : null}
-                  {busy === 'rebind'
-                    ? t('market.install.applying')
-                    : t('market.install.apply')}
-                </button>
-                {error && (
-                  <div className="mt-2 text-[12px] text-red-600 dark:text-red-300 font-mono break-all">
-                    {error}
-                  </div>
-                )}
-                <BindingCodeEditor
-                  binding={binding ?? (existingSpec.binding as PanelBinding)}
-                  panelType={existingSpec.type}
-                  teamId={teamId}
-                  onChange={setBinding}
-                  onPreview={setData}
-                />
-              </Section>
+              {/* Section: data — memo panels carry no binding, so the
+                  Data / Apply / Code controls are noise. Hide them. */}
+              {existingSpec.type !== 'memo' && (
+                <Section>
+                  <label
+                    htmlFor="panel-edit-intent"
+                    className="block text-[12px] font-medium text-neutral-500 dark:text-neutral-400 mb-1.5"
+                  >
+                    {t('panel.edit.data')}
+                  </label>
+                  <textarea
+                    id="panel-edit-intent"
+                    value={intent}
+                    onChange={(e) => setIntent(e.target.value)}
+                    placeholder={t('panel.edit.intentPlaceholder')}
+                    rows={3}
+                    className="w-full px-3 py-2 text-[13px] rounded-sm border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-300 resize-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={onApply}
+                    disabled={busy !== null || !teamId}
+                    className="mt-2 w-full inline-flex items-center justify-center gap-1.5 h-8 px-4 text-[13px] rounded-sm bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {busy === 'rebind' ? (
+                      <CircleNotch className="w-3.5 h-3.5 animate-spin" />
+                    ) : null}
+                    {busy === 'rebind'
+                      ? t('market.install.applying')
+                      : t('market.install.apply')}
+                  </button>
+                  {error && (
+                    <div className="mt-2 text-[12px] text-red-600 dark:text-red-300 font-mono break-all">
+                      {error}
+                    </div>
+                  )}
+                  <BindingCodeEditor
+                    binding={binding ?? (existingSpec.binding as PanelBinding)}
+                    panelType={existingSpec.type}
+                    teamId={teamId}
+                    onChange={setBinding}
+                    onPreview={setData}
+                  />
+                </Section>
+              )}
 
               {/* Section: size */}
               <Section>

@@ -844,7 +844,7 @@ function EntryDetailView({
         </p>
       )}
 
-      {entry.type === 'panel' && (
+      {entry.type === 'panel' && entry.category !== 'memo' && (
         <div className="flex flex-col gap-1.5">
           <label
             htmlFor="install-intent"
@@ -1011,50 +1011,55 @@ function PanelDetailView({
             )}
           </div>
 
-          <div className="px-5 py-4 border-b border-neutral-100 dark:border-neutral-800">
-            <label
-              htmlFor="install-intent"
-              className="block text-[12px] font-medium text-neutral-500 dark:text-neutral-400 mb-1.5"
-            >
-              {t('panel.edit.data')}
-            </label>
-            <textarea
-              id="install-intent"
-              value={installIntent}
-              onChange={(e) => setInstallIntent(e.target.value)}
-              placeholder={t('market.install.intentPlaceholder')}
-              rows={3}
-              className="w-full px-3 py-2 text-[13px] rounded-sm border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-300 resize-none"
-            />
-            <button
-              type="button"
-              onClick={onApplyAiPreview}
-              disabled={aiPreviewLoading || isInstalling || !canInstall}
-              className="mt-2 w-full inline-flex items-center justify-center gap-1.5 h-8 px-4 text-[13px] rounded-sm bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-            >
-              {aiPreviewLoading ? (
-                <CircleNotch className="w-3.5 h-3.5 animate-spin" />
-              ) : null}
-              {aiPreviewLoading
-                ? t('market.install.applying')
-                : t('market.install.apply')}
-            </button>
-            {aiPreviewError && (
-              <div className="mt-2 text-[12px] text-red-600 dark:text-red-300 font-mono break-all">
-                {aiPreviewError}
-              </div>
-            )}
-            <BindingCodeEditor
-              binding={
-                bindingOverride ??
-                ((aiPreview?.binding as PanelBinding | undefined) ?? null)
-              }
-              panelType={aiPreview?.panel_type ?? entry.category ?? ''}
-              teamId={teamId}
-              onChange={setBindingOverride}
-              onPreview={setPreviewDataOverride}
-            />
-          </div>
+          {/* Memo panels are content-only (no SQL / data binding), so the
+              Data + Apply + Code controls don't apply — hide them so the
+              install flow is just a one-click affair. */}
+          {entry.category !== 'memo' && (
+            <div className="px-5 py-4 border-b border-neutral-100 dark:border-neutral-800">
+              <label
+                htmlFor="install-intent"
+                className="block text-[12px] font-medium text-neutral-500 dark:text-neutral-400 mb-1.5"
+              >
+                {t('panel.edit.data')}
+              </label>
+              <textarea
+                id="install-intent"
+                value={installIntent}
+                onChange={(e) => setInstallIntent(e.target.value)}
+                placeholder={t('market.install.intentPlaceholder')}
+                rows={3}
+                className="w-full px-3 py-2 text-[13px] rounded-sm border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-300 resize-none"
+              />
+              <button
+                type="button"
+                onClick={onApplyAiPreview}
+                disabled={aiPreviewLoading || isInstalling || !canInstall}
+                className="mt-2 w-full inline-flex items-center justify-center gap-1.5 h-8 px-4 text-[13px] rounded-sm bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {aiPreviewLoading ? (
+                  <CircleNotch className="w-3.5 h-3.5 animate-spin" />
+                ) : null}
+                {aiPreviewLoading
+                  ? t('market.install.applying')
+                  : t('market.install.apply')}
+              </button>
+              {aiPreviewError && (
+                <div className="mt-2 text-[12px] text-red-600 dark:text-red-300 font-mono break-all">
+                  {aiPreviewError}
+                </div>
+              )}
+              <BindingCodeEditor
+                binding={
+                  bindingOverride ??
+                  ((aiPreview?.binding as PanelBinding | undefined) ?? null)
+                }
+                panelType={aiPreview?.panel_type ?? entry.category ?? ''}
+                teamId={teamId}
+                onChange={setBindingOverride}
+                onPreview={setPreviewDataOverride}
+              />
+            </div>
+          )}
 
           <div className="px-5 py-4">
             <div className="block text-[12px] font-medium text-neutral-500 dark:text-neutral-400 mb-1.5">
@@ -1419,9 +1424,24 @@ function renderPreview(p: PanelPreview, compact = false): React.ReactElement {
 }
 
 function MemoPreview({ text }: { text: string }) {
+  // Mirror the live MemoView shape: a stack of bordered note cards on a
+  // plain panel background. Splits the sample text on blank lines so a
+  // multi-paragraph preview reads as multiple cards (matching the real
+  // multi-note panel UX).
+  const cards = text
+    .split(/\n\s*\n/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
   return (
-    <div className="h-full w-full p-2 bg-yellow-50 dark:bg-yellow-950/20 text-[11px] text-neutral-700 dark:text-neutral-200 whitespace-pre-wrap overflow-hidden">
-      {text}
+    <div className="h-full w-full p-1.5 bg-white dark:bg-neutral-900 flex flex-col gap-1.5 overflow-hidden">
+      {cards.map((c, i) => (
+        <div
+          key={i}
+          className="rounded-sm border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-1.5 text-[10px] leading-snug text-neutral-700 dark:text-neutral-200 whitespace-pre-wrap"
+        >
+          {c}
+        </div>
+      ))}
     </div>
   )
 }

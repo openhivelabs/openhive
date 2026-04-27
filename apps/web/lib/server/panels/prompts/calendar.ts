@@ -26,6 +26,12 @@ Rules for calendar panels:
 - SELECT must include \`id\` so update/delete can target the row.
 - All three actions must reference the same table.
 - update/delete SQL MUST filter on \`id = :id AND team_id = :team_id\`.
+- For mcp \`execute_sql\` sources (Supabase / Postgres-style servers): the
+  same shape applies — INSERT must list \`team_id\` and pass \`:team_id\`,
+  UPDATE/DELETE WHERE must include \`team_id = :team_id\`. The runtime
+  auto-binds \`:team_id\` to the OpenHive team id for both team_data and
+  mcp action targets, so external tables with a tenant column write
+  correctly without extra form fields.
 - Form fields for create+update should match (same set).
 - \`map.kind\` is OPTIONAL — set it to a category/status column when one exists
   (status, type, priority, label, etc). The renderer auto-colors event chips

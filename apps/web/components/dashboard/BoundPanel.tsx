@@ -72,21 +72,50 @@ function BoundPanelInner({ spec, teamId }: { spec: PanelSpec; teamId?: string })
   // same id — the binding wins so a manual edit isn't silently swapped
   // out for a synthesized fallback on the next data refresh.
   const persistedIds = new Set(persistedActions.map((a) => a.id))
+  // Table panels treat the synthesizer as authoritative for CRUD: small
+  // binder models routinely produce broken INSERT/UPDATE for external
+  // (mcp execute_sql) sources — wrong tenant column, mismatched quoting,
+  // missing team_id. Drop persisted actions whose kind the synthesizer
+  // already covers so the working synthesized version wins. Other panel
+  // types (kanban) keep the legacy "persisted wins" behaviour.
+  // Kanban + table panels treat the synthesizer as authoritative for CRUD
+  // when the source is mcp execute_sql — small binder models routinely
+  // produce broken INSERT/UPDATE for external sources (wrong placeholder
+  // syntax, missing tenant column, mismatched quoting). The synthesizer
+  // takes over so users get working drag/edit/delete without needing to
+  // hand-edit SQL. team_data bindings keep persisted-wins behaviour.
+  const isMcp = (spec.binding?.source as { kind?: unknown } | undefined)?.kind === 'mcp'
+  const synthOverrides =
+    spec.type === 'table' || (spec.type === 'kanban' && isMcp)
+  const synthKinds = synthOverrides
+    ? new Set(synthesizedActions.map((a) => a.kind))
+    : new Set<string>()
   const actions: PanelAction[] = [
-    ...persistedActions,
+    ...persistedActions.filter((a) => !synthKinds.has(a.kind)),
     ...synthesizedActions.filter((a) => !persistedIds.has(a.id)),
   ]
-  const explicitToolbar = actions.filter((a) => a.placement === 'toolbar')
-  // A panel with a `create` action but no explicit toolbar placement has
-  // no way to surface the action — promote it so users always have at
-  // least an "Add" button. Keeps older bindings (pre-toolbar prompt)
-  // working without a re-bind. Calendar carries its own + FAB inside the
-  // body so the header Add would just duplicate it.
+  // Calendar / kanban / table all expose Add via a bottom-right "+" FAB
+  // anchored to the body. Strip create-kind actions from the header
+  // toolbar so the FAB doesn't duplicate as a "+ Add" button.
+  const PANEL_TYPES_WITH_FAB = new Set(['calendar', 'table', 'kanban'])
+  const explicitToolbar = actions.filter(
+    (a) =>
+      a.placement === 'toolbar' &&
+      !(PANEL_TYPES_WITH_FAB.has(spec.type) && a.kind === 'create'),
+  )
   const fallbackCreate =
-    explicitToolbar.length === 0 && spec.type !== 'calendar'
+    explicitToolbar.length === 0 && !PANEL_TYPES_WITH_FAB.has(spec.type)
       ? actions.find((a) => a.kind === 'create')
       : undefined
   const toolbarActions = fallbackCreate ? [fallbackCreate] : explicitToolbar
+  // Table + kanban panels render a calendar-style "+" FAB. Surface the
+  // create action separately so the body wrapper can render the FAB
+  // without re-walking actions. (Calendar carries its own FAB inside
+  // CalendarView, so we don't double up there.)
+  const fabCreateAction =
+    spec.type === 'table' || spec.type === 'kanban'
+      ? actions.find((a) => a.kind === 'create')
+      : undefined
   const rowActions = actions.filter((a) => a.placement === 'row')
   const inlineActions = actions.filter((a) => a.placement === 'inline')
   const [openAction, setOpenAction] = useState<PanelAction | null>(null)
@@ -181,7 +210,32 @@ function BoundPanelInner({ spec, teamId }: { spec: PanelSpec; teamId?: string })
           </button>
         </div>
       )}
-      <div className="flex-1 min-h-0 overflow-hidden">{body}</div>
+      <div className="flex-1 min-h-0 overflow-hidden relative">
+        {body}
+        {fabCreateAction && teamId && (
+          <button
+            type="button"
+            onClick={() => {
+              if (fabCreateAction.form?.fields?.length) setOpenAction(fabCreateAction)
+              else
+                runConfirmAction({
+                  panelId: spec.id,
+                  teamId,
+                  action: fabCreateAction,
+                  values: {},
+                  t,
+                  onSuccess: handleRefresh,
+                  onError: setActionError,
+                })
+            }}
+            title={actionLabel(fabCreateAction, t)}
+            aria-label={actionLabel(fabCreateAction, t)}
+            className="absolute bottom-3 right-3 w-9 h-9 rounded-full bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 shadow-md hover:bg-neutral-700 dark:hover:bg-neutral-300 flex items-center justify-center cursor-pointer z-10"
+          >
+            <Plus className="w-4 h-4" weight="bold" />
+          </button>
+        )}
+      </div>
       {openAction && teamId && (
         <ActionFormModal
           panelId={spec.id}
@@ -401,7 +455,7 @@ export function PanelShape({
       {detail != null && (
         <DetailModal
           raw={detail}
-          actions={rowActs}
+          actions={allActions}
           panelId={panelId}
           teamId={teamId}
           onDone={() => {
@@ -1890,8 +1944,12 @@ function CalendarEventForm({
   const endStr = String(values[endField?.name ?? ''] ?? '')
   const dateMatch = /^(\d{4}-\d{2}-\d{2})/.exec(startStr) ?? /^(\d{4}-\d{2}-\d{2})/.exec(endStr)
   const date = dateMatch?.[1] ?? ''
-  const fromTime = /T(\d{2}:\d{2})/.exec(startStr)?.[1] ?? ''
-  const toTime = /T(\d{2}:\d{2})/.exec(endStr)?.[1] ?? ''
+  // Datetime values arrive in two flavours: HTML `datetime-local` writes
+  // `YYYY-MM-DDTHH:MM`, but SQLite/Postgres-stored values often serialise
+  // with a space separator (`YYYY-MM-DD HH:MM`). Accept either so the
+  // form pre-fills correctly when editing existing rows.
+  const fromTime = /[T ](\d{2}:\d{2})/.exec(startStr)?.[1] ?? ''
+  const toTime = /[T ](\d{2}:\d{2})/.exec(endStr)?.[1] ?? ''
 
   const writeStart = (newDate: string, newFrom: string) => {
     if (!startField) return
@@ -2358,13 +2416,14 @@ function TableView({
   const acts = rowActions ?? []
   const hasActions = acts.length > 0 && !!onRowAction
   return (
-    <table className="w-full text-[13px]">
+    <div className="h-full w-full overflow-auto">
+    <table className="min-w-full w-max text-[13px]">
       <thead className="bg-neutral-50 dark:bg-neutral-900 sticky top-0">
         <tr>
           {data.columns.map((c) => (
             <th
               key={c}
-              className="text-left font-medium text-neutral-500 px-3 py-1.5 border-b border-neutral-200 dark:border-neutral-800"
+              className="text-left font-medium text-neutral-500 px-3 py-1.5 border-b border-neutral-200 dark:border-neutral-800 whitespace-nowrap"
             >
               {c}
             </th>
@@ -2402,7 +2461,7 @@ function TableView({
                     setEditing({ rowIdx: i, col: c })
                   }}
                   className={clsx(
-                    'px-3 py-1.5 border-b border-neutral-100 dark:border-neutral-800 text-neutral-800 dark:text-neutral-100 truncate',
+                    'px-3 py-1.5 border-b border-neutral-100 dark:border-neutral-800 text-neutral-800 dark:text-neutral-100 whitespace-nowrap',
                     editable && !isEditing && 'cursor-text hover:outline-1 hover:outline-dashed hover:outline-amber-300',
                   )}
                 >
@@ -2455,6 +2514,7 @@ function TableView({
         ))}
       </tbody>
     </table>
+    </div>
   )
 }
 
@@ -2565,6 +2625,10 @@ function KanbanView({
   const clickable = !!onCellClick
   const [dragCard, setDragCard] = useState<{ raw: Record<string, unknown>; from: string } | null>(null)
   const [hoverKey, setHoverKey] = useState<string | null>(null)
+  // Insertion index within the hover column. null = "no specific slot,
+  // drop at end". Used to compute sort_order on within-column reorders
+  // and cross-column drops onto a specific card position.
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null)
 
   // Move action resolution chain:
   //   1. `placement: 'drag'` action in the binding (preferred — emitted
@@ -2589,11 +2653,18 @@ function KanbanView({
   })()
   const canDrag = !!(moveAction && panelId && teamId && groupBy)
 
-  const handleDrop = async (toKey: string) => {
+  const supportsSortOrder = (moveAction?.fields ?? []).includes('sort_order')
+
+  const handleDrop = async (toKey: string, dropIndex: number | null) => {
     if (!dragCard || !moveAction || !canDrag) return
-    if (dragCard.from === toKey) {
+    const sameColumn = dragCard.from === toKey
+    if (sameColumn && !supportsSortOrder) {
+      // Without a sort_order column we have no way to persist within-column
+      // reorders — bail rather than firing a no-op UPDATE that just rewrites
+      // the same status. Cross-column drops still work.
       setDragCard(null)
       setHoverKey(null)
+      setHoverIndex(null)
       return
     }
     const row = dragCard.raw
@@ -2604,6 +2675,30 @@ function KanbanView({
       }
     }
     values[groupBy!] = toKey
+    if (supportsSortOrder) {
+      // Recompute the dropped card's sort_order from neighbours in the
+      // target column. Excluding the dragged card from the index list
+      // means dragging within the same column doesn't sandwich the card
+      // between itself.
+      const target = renderGroups.find((g) => g.key === toKey)
+      const items = (target?.items ?? []).filter(
+        (it) => (it.raw as Record<string, unknown>) !== row,
+      )
+      const orders = items.map((it) => {
+        const so = (it.raw as Record<string, unknown>).sort_order
+        return typeof so === 'number' ? so : Number(so) || 0
+      })
+      const idx =
+        dropIndex == null
+          ? items.length
+          : Math.max(0, Math.min(items.length, dropIndex))
+      let newSortOrder: number
+      if (items.length === 0) newSortOrder = 1
+      else if (idx === 0) newSortOrder = orders[0]! - 1
+      else if (idx === items.length) newSortOrder = orders[items.length - 1]! + 1
+      else newSortOrder = (orders[idx - 1]! + orders[idx]!) / 2
+      values.sort_order = newSortOrder
+    }
     try {
       const { executePanelAction } = await import('@/lib/api/panels')
       await executePanelAction(panelId!, moveAction.id, teamId!, values)
@@ -2613,6 +2708,7 @@ function KanbanView({
     } finally {
       setDragCard(null)
       setHoverKey(null)
+      setHoverIndex(null)
     }
   }
 
@@ -2661,7 +2757,7 @@ function KanbanView({
   return (
     <div className="h-full flex gap-2 p-3 overflow-x-auto">
       {renderGroups.map((g) => {
-        const isHover = hoverKey === g.key && dragCard && dragCard.from !== g.key
+        const isHover = hoverKey === g.key && !!dragCard
         return (
           <div
             key={g.key}
@@ -2672,13 +2768,16 @@ function KanbanView({
               // treat a card drag as a panel-reorder drag-over.
               e.stopPropagation()
               e.dataTransfer.dropEffect = 'move'
-              if (hoverKey !== g.key) setHoverKey(g.key)
+              if (hoverKey !== g.key) {
+                setHoverKey(g.key)
+                setHoverIndex(null)
+              }
             }}
             onDragLeave={() => setHoverKey((v) => (v === g.key ? null : v))}
             onDrop={(e) => {
               e.preventDefault()
               e.stopPropagation()
-              void handleDrop(g.key)
+              void handleDrop(g.key, hoverIndex)
             }}
             className={clsx(
               'w-[200px] shrink-0 rounded-sm bg-neutral-50 dark:bg-neutral-900 border flex flex-col',
@@ -2697,40 +2796,66 @@ function KanbanView({
               ) : (
                 g.items.map((it, i) => {
                   const raw = it.raw as Record<string, unknown>
+                  const showInsertLine =
+                    canDrag &&
+                    supportsSortOrder &&
+                    hoverKey === g.key &&
+                    hoverIndex === i &&
+                    dragCard?.raw !== raw
                   return (
-                    <div
-                      key={i}
-                      draggable={canDrag}
-                      onDragStart={(e) => {
-                        if (!canDrag) return
-                        // Card drag must not propagate to the panel
-                        // <section>, which would otherwise pick the
-                        // card-drag start as a panel-reorder grab.
-                        e.stopPropagation()
-                        e.dataTransfer.effectAllowed = 'move'
-                        setDragCard({ raw, from: g.key })
-                      }}
-                      onDragEnd={(e) => {
-                        e.stopPropagation()
-                        setDragCard(null)
-                        setHoverKey(null)
-                      }}
-                      onClick={clickable ? () => onCellClick!(it.raw) : undefined}
-                      className={clsx(
-                        'rounded-sm bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 p-2 hover:border-amber-300',
-                        clickable && 'cursor-pointer',
-                        canDrag && 'active:cursor-grabbing',
-                        dragCard?.raw === raw && 'opacity-40',
+                    <div key={i}>
+                      {showInsertLine && (
+                        <div className="h-0.5 -my-0.5 bg-amber-400 rounded-full" />
                       )}
-                    >
-                      <div className="text-[13px] font-medium text-neutral-800 dark:text-neutral-100 truncate">
-                        {fmt(it.title)}
-                      </div>
-                      {it.value != null && (
-                        <div className="text-[12px] text-neutral-500 font-mono mt-0.5">
-                          {fmt(it.value)}
+                      <div
+                        draggable={canDrag}
+                        onDragStart={(e) => {
+                          if (!canDrag) return
+                          // Card drag must not propagate to the panel
+                          // <section>, which would otherwise pick the
+                          // card-drag start as a panel-reorder grab.
+                          e.stopPropagation()
+                          e.dataTransfer.effectAllowed = 'move'
+                          setDragCard({ raw, from: g.key })
+                        }}
+                        onDragOver={(e) => {
+                          if (!canDrag || !supportsSortOrder) return
+                          e.preventDefault()
+                          e.stopPropagation()
+                          // Decide whether the drop target lands ABOVE or
+                          // BELOW this card based on the cursor's vertical
+                          // position relative to the card's midpoint.
+                          const rect = (
+                            e.currentTarget as HTMLElement
+                          ).getBoundingClientRect()
+                          const above = e.clientY < rect.top + rect.height / 2
+                          const idx = above ? i : i + 1
+                          if (hoverKey !== g.key) setHoverKey(g.key)
+                          if (hoverIndex !== idx) setHoverIndex(idx)
+                        }}
+                        onDragEnd={(e) => {
+                          e.stopPropagation()
+                          setDragCard(null)
+                          setHoverKey(null)
+                          setHoverIndex(null)
+                        }}
+                        onClick={clickable ? () => onCellClick!(it.raw) : undefined}
+                        className={clsx(
+                          'rounded-sm bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 p-2 hover:border-amber-300',
+                          clickable && 'cursor-pointer',
+                          canDrag && 'active:cursor-grabbing',
+                          dragCard?.raw === raw && 'opacity-40',
+                        )}
+                      >
+                        <div className="text-[13px] font-medium text-neutral-800 dark:text-neutral-100 truncate">
+                          {fmt(it.title)}
                         </div>
-                      )}
+                        {it.value != null && (
+                          <div className="text-[12px] text-neutral-500 font-mono mt-0.5">
+                            {fmt(it.value)}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )
                 })

@@ -238,6 +238,25 @@ USER GOAL: ${goal}`
     }
   }
 
+  // Backstop: small binder models routinely skip the `update` action even
+  // when the chapter prompt asks for full CRUD. Without it, the row detail
+  // modal can't show an Edit button. Synthesize update from create's SQL +
+  // form fields when create exists but update doesn't, so non-developers
+  // never see "Edit not available" just because the model's pattern-match
+  // landed on "Add + Delete only". Same backstop for delete.
+  if (String(panel.type ?? '') === 'table') {
+    synthesizeMissingTableActions(rest)
+  }
+
+  // Self-heal: AI sometimes hallucinates columns ("created_at", "updated_at")
+  // that don't exist in an MCP execute_sql target. The binding then renders
+  // empty silently because Postgres errors get swallowed by the mapper. Fix
+  // it before persisting: query information_schema for the target table and
+  // strip any column the real table doesn't have, from BOTH the SELECT
+  // clause and map.columns. Non-developers can't be expected to know which
+  // column the AI invented — the system has to repair this autonomously.
+  await healMcpExecuteSqlColumns(rest)
+
   // Backstop: keep the kanban binding self-describing even when the AI
   // emits a create/move action whose group_by select is missing options.
   // Source of truth is the CHECK constraint in setup_sql; we mirror it
@@ -281,6 +300,254 @@ export function looksLikeMoneySql(sql: string): boolean {
   const pat =
     /\b(price|amount|revenue|cost|costs|sales|salary|wage|fee|fees|payment|payments|spend|spent|earned|earnings|budget|balance|gmv|arpu|mrr|arr|ltv|cac|profit|loss|invoice|invoiced|net|gross|tax|tip|tips|refund|refunded|payout|payouts|deposit|withdraw|charge|charges|due|paid|owe|owed|krw|usd|eur|jpy|gbp|cny|btc|eth|won|dollar|dollars|euro|euros|yen|pound|pounds|cash|money|cents|cent|cash_|_krw|_usd|_eur|_jpy|_gbp|_cny|_btc|_eth)\b/
   return pat.test(s)
+}
+
+/** Mirror create → update / delete on table bindings when binder skipped
+ *  them. Reuses create's target.kind + project_id + table + form fields so
+ *  the synthesized actions match the user's actual schema. Mutates in
+ *  place. */
+function synthesizeMissingTableActions(binding: Record<string, unknown>): void {
+  const actions = Array.isArray(binding.actions)
+    ? (binding.actions as Record<string, unknown>[])
+    : null
+  if (!actions) return
+  const create = actions.find((a) => a.kind === 'create') as
+    | Record<string, unknown>
+    | undefined
+  if (!create) return
+  const createTarget = create.target as
+    | { kind?: string; config?: Record<string, unknown> }
+    | undefined
+  if (!createTarget) return
+  const createForm = create.form as { fields?: unknown[] } | undefined
+  const fields = Array.isArray(createForm?.fields)
+    ? (createForm!.fields as Record<string, unknown>[])
+    : []
+
+  const tableName = (() => {
+    const sql = String(createTarget.config?.sql ?? '')
+    const m1 = /insert\s+into\s+["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/i.exec(sql)
+    if (m1) return m1[1]!
+    const tmpl = (createTarget.config?.args_template ?? {}) as Record<string, unknown>
+    const q = String(tmpl.query ?? '')
+    const m2 = /insert\s+into\s+["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/i.exec(q)
+    return m2?.[1] ?? null
+  })()
+  if (!tableName) return
+
+  const hasUpdate = actions.some((a) => a.kind === 'update')
+  const hasDelete = actions.some((a) => a.kind === 'delete')
+
+  if (!hasUpdate && fields.length > 0) {
+    const setters = fields
+      .map((f) => String(f.name))
+      .filter((n) => n.length > 0)
+      .map((n) => `${n} = :${n}`)
+      .join(', ')
+    if (setters.length > 0) {
+      const updateAction: Record<string, unknown> =
+        createTarget.kind === 'team_data'
+          ? {
+              id: 'update',
+              kind: 'update',
+              label: 'Save',
+              target: {
+                kind: 'team_data',
+                config: {
+                  sql: `UPDATE ${tableName} SET ${setters} WHERE id = :id AND team_id = :team_id`,
+                },
+              },
+              form: { fields: cloneFields(fields) },
+            }
+          : createTarget.kind === 'mcp'
+            ? {
+                id: 'update',
+                kind: 'update',
+                label: 'Save',
+                target: {
+                  kind: 'mcp',
+                  config: {
+                    server: (createTarget.config as Record<string, unknown>).server,
+                    tool: 'execute_sql',
+                    args_template: {
+                      ...(typeof (createTarget.config as Record<string, unknown>)
+                        .args_template === 'object'
+                        ? (createTarget.config as { args_template: Record<string, unknown> })
+                            .args_template
+                        : {}),
+                      query: `UPDATE ${tableName} SET ${fields
+                        .map((f) => {
+                          const n = String(f.name)
+                          const t = String(f.type ?? 'text').toLowerCase()
+                          const numeric = t === 'number'
+                          return numeric ? `${n} = {{${n}}}` : `${n} = '{{${n}}}'`
+                        })
+                        .join(', ')} WHERE id = {{id}}`,
+                    },
+                  },
+                },
+                form: { fields: cloneFields(fields) },
+              }
+            : null
+      if (updateAction) actions.push(updateAction)
+    }
+  }
+
+  if (!hasDelete) {
+    const deleteAction: Record<string, unknown> =
+      createTarget.kind === 'team_data'
+        ? {
+            id: 'delete',
+            kind: 'delete',
+            label: 'Delete',
+            target: {
+              kind: 'team_data',
+              config: {
+                sql: `DELETE FROM ${tableName} WHERE id = :id AND team_id = :team_id`,
+              },
+            },
+          }
+        : createTarget.kind === 'mcp'
+          ? {
+              id: 'delete',
+              kind: 'delete',
+              label: 'Delete',
+              target: {
+                kind: 'mcp',
+                config: {
+                  server: (createTarget.config as Record<string, unknown>).server,
+                  tool: 'execute_sql',
+                  args_template: {
+                    ...(typeof (createTarget.config as Record<string, unknown>)
+                      .args_template === 'object'
+                      ? (createTarget.config as { args_template: Record<string, unknown> })
+                          .args_template
+                      : {}),
+                    query: `DELETE FROM ${tableName} WHERE id = {{id}}`,
+                  },
+                },
+              },
+            }
+          : null
+    if (deleteAction) actions.push(deleteAction)
+  }
+}
+
+function cloneFields(fields: Record<string, unknown>[]): Record<string, unknown>[] {
+  return fields.map((f) => ({ ...f }))
+}
+
+/** Strip AI-hallucinated columns from an mcp+execute_sql binding. Reads
+ *  information_schema for the table being SELECTed, removes any column the
+ *  real table doesn't have from both the SELECT projection and
+ *  map.columns. Mutates `binding` in place. Silent no-op when the source
+ *  isn't execute_sql, when we can't parse the SELECT, or when the schema
+ *  query fails — never throws (this is a best-effort repair). */
+async function healMcpExecuteSqlColumns(
+  binding: Record<string, unknown>,
+): Promise<void> {
+  const source = binding.source as
+    | { kind?: unknown; config?: { server?: unknown; tool?: unknown; args?: unknown } }
+    | undefined
+  if (!source || source.kind !== 'mcp') return
+  const tool = String(source.config?.tool ?? '')
+  if (tool !== 'execute_sql') return
+  const server = String(source.config?.server ?? '')
+  const args = (source.config?.args ?? {}) as Record<string, unknown>
+  const sql = String(args.query ?? '')
+  if (!server || !sql) return
+
+  const parsed = parseSelectColumns(sql)
+  if (!parsed) return
+  const { table, columns } = parsed
+  // SELECT * — nothing to strip.
+  if (columns.length === 1 && columns[0] === '*') return
+
+  let real: string[] = []
+  try {
+    const projectId = typeof args.project_id === 'string' ? args.project_id : null
+    const probeArgs: Record<string, unknown> = {
+      query:
+        "SELECT column_name FROM information_schema.columns " +
+        `WHERE table_name = '${table.replace(/'/g, "''")}' AND table_schema = 'public' ` +
+        'ORDER BY ordinal_position',
+    }
+    if (projectId) probeArgs.project_id = projectId
+    const text = await callTool(server, tool, probeArgs)
+    real = extractColumnNames(text)
+  } catch {
+    return
+  }
+  if (real.length === 0) return
+  const realSet = new Set(real)
+
+  // Filter SELECT projection — keep ordering, drop unknown.
+  const kept = columns.filter((c) => realSet.has(c.toLowerCase()))
+  if (kept.length === 0) return // nothing salvageable; leave as-is
+  if (kept.length === columns.length) return // all columns valid
+
+  const newSql = sql.replace(
+    /select\s+[\s\S]*?\s+from/i,
+    `SELECT ${kept.join(', ')} FROM`,
+  )
+  ;(source.config as Record<string, unknown>).args = { ...args, query: newSql }
+
+  const map = binding.map as Record<string, unknown> | undefined
+  if (map && Array.isArray(map.columns)) {
+    map.columns = (map.columns as unknown[]).filter(
+      (c) => typeof c === 'string' && realSet.has(c.toLowerCase()),
+    )
+  }
+}
+
+/** Parse a simple `SELECT <cols> FROM <table>` projection. Returns null when
+ *  the SELECT shape is too complex (subqueries, expressions with parens,
+ *  CTEs). Aliases `col AS x` collapse to the underlying column name so we
+ *  can compare against information_schema. */
+function parseSelectColumns(
+  sql: string,
+): { table: string; columns: string[] } | null {
+  const m = /^\s*select\s+([\s\S]+?)\s+from\s+["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/i.exec(sql)
+  if (!m) return null
+  const projection = m[1]!
+  const table = m[2]!.toLowerCase()
+  // Bail on anything we don't safely understand — function calls, expressions
+  // with commas inside parens, etc. Keep the heal conservative.
+  if (/[()]/.test(projection)) return null
+  const cols = projection
+    .split(',')
+    .map((p) => p.trim())
+    .map((p) => p.replace(/\s+as\s+[a-zA-Z_][a-zA-Z0-9_]*$/i, '').trim())
+    .filter((p) => p.length > 0)
+  return { table, columns: cols }
+}
+
+/** Extract `column_name` values from a Supabase information_schema response.
+ *  Handles both bare-array and object-wrapped JSON. */
+function extractColumnNames(text: string): string[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return []
+  }
+  let rows: unknown[] = []
+  if (Array.isArray(parsed)) rows = parsed
+  else if (parsed && typeof parsed === 'object') {
+    for (const v of Object.values(parsed as Record<string, unknown>)) {
+      if (Array.isArray(v)) {
+        rows = v
+        break
+      }
+    }
+  }
+  const out: string[] = []
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue
+    const v = (r as Record<string, unknown>).column_name
+    if (typeof v === 'string') out.push(v.toLowerCase())
+  }
+  return out
 }
 
 function extractFromTables(sql: string): string[] {

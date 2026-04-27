@@ -229,7 +229,9 @@ export async function callTool(
   name: string,
   toolName: string,
   args: Record<string, unknown>,
+  options: { cap?: boolean } = {},
 ): Promise<string> {
+  const cap = options.cap ?? true
   const server = mcpConfig.getServer(name)
   if (!server) throw new Error(`MCP server not configured: ${JSON.stringify(name)}`)
   const proc = await ensureStarted(name, server)
@@ -249,11 +251,15 @@ export async function callTool(
   }
   let body = pieces.join('\n')
   body = unwrapUntrustedData(body)
-  const capped = capMcpBody(body)
+  // Cap protects LLM contexts from blowing up on huge tool outputs. Skip
+  // when the caller is a structured consumer (panel data path) that needs
+  // the raw payload — the truncation marker turns valid JSON into a
+  // string the mapper can't read, silently producing empty results.
+  const out = cap ? capMcpBody(body) : body
   if ((result as { isError?: boolean }).isError) {
-    return `ERROR from ${name}__${toolName}: ${capped || 'unknown error'}`
+    return `ERROR from ${name}__${toolName}: ${out || 'unknown error'}`
   }
-  return capped
+  return out
 }
 
 /** Some MCP servers (Supabase, others) wrap SQL/tool output in nested

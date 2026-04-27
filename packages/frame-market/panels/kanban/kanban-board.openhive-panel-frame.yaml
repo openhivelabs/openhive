@@ -14,8 +14,9 @@ setup_sql: |
     team_id    TEXT NOT NULL,
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     title      TEXT,
-    status     TEXT DEFAULT 'todo',
+    status     TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','doing','done')),
     priority   TEXT DEFAULT 'normal',
+    sort_order REAL DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
   )
 
@@ -29,13 +30,50 @@ panel:
       kind: team_data
       config:
         sql: |
-          SELECT id, title, status, priority, created_at
+          SELECT id, title, status, priority, sort_order, created_at
           FROM task
           WHERE team_id = :team_id
-          ORDER BY created_at DESC
+          ORDER BY status, sort_order
     map:
       rows: "$.rows[*]"
       group_by: status
       title: title
       on_click: { kind: detail }
     refresh_seconds: 600
+    actions:
+      - id: create
+        kind: create
+        label: Add
+        target:
+          kind: team_data
+          config:
+            sql: |
+              INSERT INTO task (title, status, priority, team_id)
+              VALUES (:title, :status, :priority, :team_id)
+        form:
+          fields:
+            - { name: title,    label: Title,    type: text,   required: true }
+            - { name: status,   label: Status,   type: select, options: [todo, doing, done], default: todo, required: true }
+            - { name: priority, label: Priority, type: select, options: [low, normal, high], default: normal }
+      - id: move
+        kind: update
+        label: Move
+        placement: drag
+        fields: [status, sort_order]
+        target:
+          kind: team_data
+          config:
+            sql: |
+              UPDATE task SET status = :status, sort_order = :sort_order
+              WHERE id = :id AND team_id = :team_id
+        form:
+          fields:
+            - { name: status, label: Status, type: select, options: [todo, doing, done] }
+      - id: delete
+        kind: delete
+        label: Delete
+        target:
+          kind: team_data
+          config:
+            sql: |
+              DELETE FROM task WHERE id = :id AND team_id = :team_id
