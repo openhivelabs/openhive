@@ -14,60 +14,63 @@
 }
 ```
 
-## Report — table + KPI + two-column layout
+## Investor report — cover, charts, KPI tiles, callouts
 
 ```json
 {
-  "meta": {"title": "Q4 report", "author": "Research", "theme": "report"},
+  "meta": {"title": "Q1 report", "theme": "report",
+           "theme_overrides": {"palette": [[13,90,99],[217,119,6],[22,163,74],[220,38,38],[109,40,217],[37,99,235]]}},
   "blocks": [
-    {"type": "heading", "level": 1, "text": "Q4 2026 quarterly report"},
-    {"type": "toc", "levels": 2},
-    {"type": "page_break"},
+    {"type": "cover",
+     "eyebrow": "Investor brief",
+     "title": "Loomtide\nQ1 2026 분기 보고서",
+     "subtitle": "ARR $3.4M 돌파 — 엔터프라이즈 전환 가속",
+     "date": "2026-04-28", "author": "IR", "org": "Loomtide, Inc.",
+     "band_eyebrow": "이번 분기 한 줄",
+     "band_text": "NRR 112% 달성, 시리즈 B 클로징을 준비합니다."},
 
-    {"type": "heading", "level": 1, "text": "1. Summary"},
+    {"type": "heading", "level": 1, "text": "1. Executive summary"},
     {"type": "kpi_row", "stats": [
-      {"value": "$2.1M", "label": "ARR", "delta": "+22%"},
-      {"value": "312",   "label": "Customers", "delta": "+48"},
-      {"value": "97%",   "label": "GRR", "delta": "+1pp"}
-    ]},
-    {"type": "paragraph", "text": "This quarter's key wins were shipping Frame export/import and early adoption of the AI dashboard builder.", "align": "justify"},
-
-    {"type": "heading", "level": 1, "text": "2. Product"},
-    {"type": "heading", "level": 2, "text": "Shipped"},
-    {"type": "bullets", "items": [
-      "Frame export/import",
-      ["Template format standardization", "CLI + UI support"],
-      "AI dashboard builder",
-      "10+ panel templates"
+      {"value": "$3.4M", "label": "ARR",            "delta": "+23%"},
+      {"value": "112%",  "label": "NRR",            "delta": "+8pp"},
+      {"value": "186",   "label": "Enterprise logo","delta": "+34"},
+      {"value": "6.5",   "label": "CAC payback (mo)","delta": "-0.7"}
     ]},
 
-    {"type": "heading", "level": 2, "text": "Metric comparison"},
-    {"type": "table",
-     "headers": ["Metric", "Q3", "Q4", "Change"],
-     "rows": [
-       ["Monthly new users", "1,205", "1,840", "+53%"],
-       ["Active teams", "421", "623", "+48%"],
-       ["Daily avg queries", "12.4K", "31.2K", "+150%"]
+    {"type": "callout", "variant": "success",
+     "title": "Series B 트랙 진입",
+     "text": "선두 VC 두 곳과 텀시트 단계. 클로징 목표는 2026 Q3."},
+
+    {"type": "heading", "level": 1, "text": "2. Growth"},
+    {"type": "chart", "variant": "line",
+     "title": "ARR 추이",
+     "x": ["Q1 25", "Q2 25", "Q3 25", "Q4 25", "Q1 26"],
+     "series": [
+       {"name": "ARR ($M)", "values": [1.4, 1.7, 2.1, 2.6, 3.4]}
      ],
-     "style": "grid"
+     "width_in": 6.0, "height_in": 3.0
     },
 
-    {"type": "heading", "level": 1, "text": "3. Next quarter"},
-    {"type": "two_column",
-     "left": [
-       {"type": "heading", "level": 2, "text": "Product"},
-       {"type": "bullets", "items": ["Webhook triggers", "Skill library expansion", "OAuth MCP"]}
+    {"type": "chart", "variant": "donut",
+     "title": "TAM 구성",
+     "slices": [
+       {"label": "Mid-market", "value": 28},
+       {"label": "Enterprise", "value": 22},
+       {"label": "SMB",        "value": 10}
      ],
-     "right": [
-       {"type": "heading", "level": 2, "text": "Operations"},
-       {"type": "bullets", "items": ["Production build", "Install scripts", "Documentation"]}
+     "width_in": 4.0, "height_in": 3.0},
+
+    {"type": "table", "style": "zebra",
+     "headers": ["항목", "Q1 26", "Q4 25", "YoY"],
+     "rows": [
+       ["Revenue", "820", "732", "+41%"],
+       ["Gross Profit", "492", "436", "+34%"],
+       ["EBITDA", "132", "124", "+6%"]
      ]},
 
-    {"type": "horizontal_rule"},
-    {"type": "quote",
-     "text": "Software moats eventually dissolve.",
-     "attribution": "Internal memo"},
-    {"type": "paragraph", "text": "Contact: research@openhive.dev", "align": "center"}
+    {"type": "callout", "variant": "warning",
+     "title": "유의 사항",
+     "text": "수치는 비공인 잠정치입니다."}
   ]
 }
 ```
@@ -88,4 +91,29 @@
      "language": "python"}
   ]
 }
+```
+
+## Chart variants quick-reference
+
+```json
+[
+  {"type": "chart", "variant": "bar", "x": ["A","B","C"],
+   "series": [{"name":"x","values":[1,2,3]},{"name":"y","values":[2,1,4]}], "show_values": true},
+
+  {"type": "chart", "variant": "stacked_bar", "x": ["Q1","Q2","Q3","Q4"],
+   "series": [{"name":"new","values":[10,12,18,22]},{"name":"renewal","values":[40,45,48,52]}]},
+
+  {"type": "chart", "variant": "hbar", "x": ["seoul","tokyo","osaka","busan","kyoto"],
+   "series": [{"name":"users","values":[820,640,310,210,180]}], "show_values": true},
+
+  {"type": "chart", "variant": "area", "x": ["1","2","3","4","5","6"],
+   "series": [{"name":"north","values":[10,14,16,22,30,38]},
+              {"name":"south","values":[8,9,12,18,22,26]}]},
+
+  {"type": "chart", "variant": "scatter",
+   "series": [{"name":"sample","x":[1,2,3,4,5,6,7],"values":[1,1.4,1.7,2.6,2.4,3.1,3.6]}]},
+
+  {"type": "chart", "variant": "sparkline",
+   "values": [3,4,6,5,8,12,11,14], "width_in": 2.0, "height_in": 0.5}
+]
 ```

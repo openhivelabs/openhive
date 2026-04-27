@@ -14,20 +14,7 @@ A docx spec is a JSON object:
       "blocks": [ ... ]          // ordered list of blocks
     }
 
-Block types:
-    heading           { level: 1-6, text }
-    paragraph         { text, align?, style? }   align: left|center|right|justify
-    bullets           { items: [...nested...] }
-    numbered          { items: [...nested...] }
-    table             { headers: [...], rows: [[...], ...], style?: "grid"|"light"|"plain" }
-    image             { path, caption?, width_in?, align? }
-    page_break        { }
-    quote             { text, attribution? }
-    code              { text, language? }   // monospace block
-    horizontal_rule   { }
-    toc               { levels?: 1-3 }      // table of contents placeholder
-    kpi_row           { stats: [{value, label, delta?}] }
-    two_column        { left: block|[blocks], right: block|[blocks] }
+Block types: see BLOCK_TYPES below.
 """
 from __future__ import annotations
 
@@ -38,10 +25,15 @@ BLOCK_TYPES = {
     "heading", "paragraph", "bullets", "numbered", "table",
     "image", "page_break", "quote", "code", "horizontal_rule",
     "toc", "kpi_row", "two_column",
+    # new visual blocks
+    "cover", "chart", "callout", "sidebar", "spacer", "divider",
 }
 
 ALIGN_VALUES = {"left", "center", "right", "justify"}
-TABLE_STYLES = {"grid", "light", "plain"}
+TABLE_STYLES = {"grid", "light", "plain", "zebra", "minimal"}
+CALLOUT_VARIANTS = {"info", "success", "warning", "danger", "note", "tip"}
+CHART_VARIANTS = {"bar", "hbar", "line", "area", "donut", "pie",
+                  "scatter", "stacked_bar", "sparkline"}
 
 
 class SpecError(ValueError):
@@ -127,7 +119,41 @@ def _validate_block(i: int, block: Any, warnings: list[str]) -> None:
             col = block.get(side)
             if col is None:
                 raise SpecError(f"{here}.{side}: required")
-    # page_break, horizontal_rule: no extra fields required
+    elif t == "cover":
+        _req_str(block, "title", here)
+    elif t == "chart":
+        variant = block.get("variant", "bar")
+        if variant not in CHART_VARIANTS:
+            raise SpecError(f"{here}.variant: must be one of {sorted(CHART_VARIANTS)}")
+        if variant in ("bar", "line", "area", "scatter", "stacked_bar", "hbar"):
+            series = block.get("series")
+            if not isinstance(series, list) or not series:
+                raise SpecError(f"{here}.series: non-empty array required for {variant}")
+            for j, s in enumerate(series):
+                if not isinstance(s, dict) or not isinstance(s.get("values"), list):
+                    raise SpecError(f"{here}.series[{j}].values: array required")
+        elif variant in ("donut", "pie"):
+            slices = block.get("slices")
+            if not isinstance(slices, list) or not slices:
+                raise SpecError(f"{here}.slices: non-empty array required for {variant}")
+        elif variant == "sparkline":
+            values = block.get("values")
+            if not isinstance(values, list) or not values:
+                raise SpecError(f"{here}.values: non-empty array required for sparkline")
+    elif t == "callout":
+        variant = block.get("variant", "info")
+        if variant not in CALLOUT_VARIANTS:
+            raise SpecError(f"{here}.variant: must be one of {sorted(CALLOUT_VARIANTS)}")
+        if not (block.get("text") or block.get("title") or block.get("bullets")):
+            raise SpecError(f"{here}: needs text, title, or bullets")
+    elif t == "sidebar":
+        if not (block.get("text") or block.get("title") or block.get("bullets")):
+            raise SpecError(f"{here}: needs text, title, or bullets")
+    elif t == "spacer":
+        h = block.get("height", 12)
+        if not isinstance(h, (int, float)) or h < 0:
+            raise SpecError(f"{here}.height: must be a non-negative number (pt)")
+    # page_break, horizontal_rule, divider: no extra fields required
 
 
 def _req_str(obj: dict, key: str, here: str) -> None:

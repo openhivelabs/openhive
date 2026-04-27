@@ -19,7 +19,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from lxml import etree
 
-from .themes import Theme
+from .themes import Theme, palette_color
 
 
 # ---------------------------------------------------------------------------
@@ -27,7 +27,7 @@ from .themes import Theme
 # ---------------------------------------------------------------------------
 
 
-def _rgb(c: tuple[int, int, int]) -> RGBColor:
+def _rgb(c: tuple[int, int, int]):
     from docx.shared import RGBColor
 
     return RGBColor(c[0], c[1], c[2])
@@ -178,18 +178,25 @@ def render_table(doc, block: dict, theme: Theme) -> None:
     headers = block["headers"]
     rows = block["rows"]
     n_cols = len(headers)
+    style_choice = block.get("style", "grid")
     table = doc.add_table(rows=1 + len(rows), cols=n_cols)
     table.alignment = WD_TABLE_ALIGNMENT.LEFT
 
-    style_name = {
+    base_style = {
         "grid": "Table Grid",
         "light": "Light Shading",
         "plain": "Normal Table",
-    }.get(block.get("style", "grid"), "Table Grid")
+        "zebra": "Table Grid",
+        "minimal": "Normal Table",
+    }.get(style_choice, "Table Grid")
     try:
-        table.style = doc.styles[style_name]
+        table.style = doc.styles[base_style]
     except KeyError:
         pass
+
+    # minimal style: no internal borders, just header underline
+    if style_choice == "minimal":
+        _set_table_borders(table, size=0)
 
     # header row
     hdr_row = table.rows[0]
@@ -198,11 +205,17 @@ def render_table(doc, block: dict, theme: Theme) -> None:
         cell.text = ""
         p = cell.paragraphs[0]
         run = p.add_run(str(h))
-        _style_run(run, font=theme.heading_font, size=theme.size_body,
-                   color=(255, 255, 255), bold=True)
-        _shade_cell(cell, theme.accent)
+        if style_choice == "minimal":
+            _style_run(run, font=theme.heading_font, size=theme.size_body,
+                       color=theme.heading, bold=True)
+            _set_cell_bottom_border(cell, theme.accent, size=8)
+        else:
+            _style_run(run, font=theme.heading_font, size=theme.size_body,
+                       color=(255, 255, 255), bold=True)
+            _shade_cell(cell, theme.accent)
         cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
+    zebra_fill = _mix(theme.surface, (255, 255, 255), 0.55)
     # body rows
     for ri, row in enumerate(rows):
         tr = table.rows[ri + 1]
@@ -214,6 +227,10 @@ def render_table(doc, block: dict, theme: Theme) -> None:
             run = p.add_run(_fmt_cell(val))
             _style_run(run, font=theme.body_font, size=theme.size_body, color=theme.fg)
             cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+            if style_choice == "zebra" and ri % 2 == 1:
+                _shade_cell(cell, zebra_fill)
+            if style_choice == "minimal" and ri < len(rows) - 1:
+                _set_cell_bottom_border(cell, _mix(theme.muted, (255, 255, 255), 0.7), size=4)
 
 
 def _shade_cell(cell, fill_rgb) -> None:
@@ -352,39 +369,70 @@ def render_toc(doc, block: dict, theme: Theme) -> None:
 
 
 def render_kpi_row(doc, block: dict, theme: Theme) -> None:
-    """A single-row table with N stat cells (big number + label)."""
+    """A single-row of N stat tiles (big number + label + delta).
+
+    Each tile is its own 1-cell table — gives independent shading + borders
+    per tile, with consistent gutters. Tiles sit inside an outer 1-row table
+    that handles equal column widths.
+    """
     stats = block["stats"]
     n = len(stats)
-    table = doc.add_table(rows=2, cols=n)
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    for j, s in enumerate(stats):
-        # row 0: value (big)
-        c0 = table.rows[0].cells[j]
-        c0.text = ""
-        p0 = c0.paragraphs[0]
-        p0.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r0 = p0.add_run(str(s["value"]))
-        _style_run(r0, font=theme.heading_font, size=theme.size_kpi,
-                   color=theme.accent, bold=True)
-        c0.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+    use_palette = bool(block.get("colored", True))
+    surface = block.get("variant", "tile")  # "tile" | "plain"
 
-        # row 1: label + optional delta
-        c1 = table.rows[1].cells[j]
-        c1.text = ""
-        p1 = c1.paragraphs[0]
-        p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        rl = p1.add_run(str(s["label"]))
-        _style_run(rl, font=theme.body_font, size=theme.size_small, color=theme.muted)
+    outer = doc.add_table(rows=1, cols=n)
+    outer.alignment = WD_TABLE_ALIGNMENT.CENTER
+    outer.autofit = False
+    _set_table_borders(outer, size=0)
+    outer_row = outer.rows[0]
+
+    for j, s in enumerate(stats):
+        outer_cell = outer_row.cells[j]
+        outer_cell.text = ""
+        # remove the empty default paragraph the cell ships with
+        for pg in list(outer_cell.paragraphs):
+            outer_cell._tc.remove(pg._p)
+        # gutter via cell margins
+        _set_cell_margins(outer_cell, left=80, right=80, top=0, bottom=0)
+
+        tile_color = palette_color(theme, j) if use_palette else theme.accent
+        bg = _mix(tile_color, (255, 255, 255), 0.88)
+
+        # value paragraph
+        p_val = outer_cell.add_paragraph()
+        p_val.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_val.paragraph_format.space_before = Pt(8)
+        p_val.paragraph_format.space_after = Pt(2)
+        r_val = p_val.add_run(str(s["value"]))
+        _style_run(r_val, font=theme.heading_font, size=theme.size_kpi,
+                   color=tile_color, bold=True)
+
+        # label
+        p_lab = outer_cell.add_paragraph()
+        p_lab.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_lab.paragraph_format.space_before = Pt(0)
+        p_lab.paragraph_format.space_after = Pt(2)
+        r_lab = p_lab.add_run(str(s["label"]))
+        _style_run(r_lab, font=theme.body_font, size=theme.size_kpi_label,
+                   color=theme.fg, bold=False)
+
+        # delta
         if s.get("delta"):
             d_str = str(s["delta"])
             d_color = theme.muted
-            if d_str.startswith("+"): d_color = (34, 139, 34)
-            elif d_str.startswith("-"): d_color = (178, 34, 34)
-            pd = c1.add_paragraph()
-            pd.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            rd = pd.add_run(d_str)
-            _style_run(rd, font=theme.body_font, size=theme.size_small,
+            if d_str.startswith("+"): d_color = theme.success
+            elif d_str.startswith("-"): d_color = theme.danger
+            p_d = outer_cell.add_paragraph()
+            p_d.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_d.paragraph_format.space_before = Pt(0)
+            p_d.paragraph_format.space_after = Pt(8)
+            r_d = p_d.add_run(d_str)
+            _style_run(r_d, font=theme.body_font, size=theme.size_small,
                        color=d_color, bold=True)
+
+        if surface == "tile":
+            _shade_cell(outer_cell, bg)
+            _set_cell_top_border(outer_cell, tile_color, size=18)
 
 
 def render_two_column(doc, block: dict, theme: Theme) -> None:
@@ -455,6 +503,331 @@ def _set_table_borders(table, size: int = 0, color: str = "FFFFFF") -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# new visual blocks
+# ---------------------------------------------------------------------------
+
+
+def render_cover(doc, block: dict, theme: Theme) -> None:
+    """Full-page cover. title + subtitle + meta row + colored band.
+
+    The cover is one paragraph stack followed by an automatic page break
+    so the next block starts on page 2 — callers don't need a manual break.
+    """
+    from docx.enum.text import WD_BREAK
+
+    # top spacer (push title down ~25% of page)
+    for _ in range(4):
+        sp = doc.add_paragraph()
+        sp.paragraph_format.space_after = Pt(0)
+
+    eyebrow = block.get("eyebrow")
+    if eyebrow:
+        ep = doc.add_paragraph()
+        ep.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        er = ep.add_run(str(eyebrow).upper())
+        _style_run(er, font=theme.heading_font, size=theme.size_small,
+                   color=theme.accent, bold=True)
+        ep.paragraph_format.space_after = Pt(6)
+
+    # title
+    tp = doc.add_paragraph()
+    tp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    tp.paragraph_format.space_after = Pt(8)
+    tr = tp.add_run(block["title"])
+    _style_run(tr, font=theme.heading_font, size=theme.size_title,
+               color=theme.heading, bold=True)
+
+    # accent rule
+    rp = doc.add_paragraph()
+    rp.paragraph_format.space_before = Pt(2)
+    rp.paragraph_format.space_after = Pt(14)
+    pPr = rp._p.get_or_add_pPr()
+    pBdr = etree.SubElement(pPr, qn("w:pBdr"))
+    btm = etree.SubElement(pBdr, qn("w:bottom"))
+    btm.set(qn("w:val"), "single")
+    btm.set(qn("w:sz"), "24")
+    btm.set(qn("w:space"), "1")
+    btm.set(qn("w:color"), "{:02X}{:02X}{:02X}".format(*theme.accent))
+
+    subtitle = block.get("subtitle")
+    if subtitle:
+        sp = doc.add_paragraph()
+        sp.paragraph_format.space_after = Pt(20)
+        sr = sp.add_run(subtitle)
+        _style_run(sr, font=theme.body_font, size=theme.size_subtitle,
+                   color=theme.fg)
+
+    # meta row (date / author / org) — light gray
+    meta_bits: list[str] = []
+    if block.get("date"): meta_bits.append(str(block["date"]))
+    if block.get("author"): meta_bits.append(str(block["author"]))
+    if block.get("org"): meta_bits.append(str(block["org"]))
+    if meta_bits:
+        mp = doc.add_paragraph()
+        mp.paragraph_format.space_after = Pt(0)
+        mr = mp.add_run("  ·  ".join(meta_bits))
+        _style_run(mr, font=theme.body_font, size=theme.size_small, color=theme.muted)
+
+    # bottom band — colored panel filling the lower section
+    band_color = block.get("band_color")
+    if band_color and isinstance(band_color, list) and len(band_color) == 3:
+        band_rgb = tuple(band_color)
+    else:
+        band_rgb = theme.band
+
+    # spacer to push band toward bottom
+    for _ in range(8):
+        sp = doc.add_paragraph()
+        sp.paragraph_format.space_after = Pt(0)
+
+    # band as a 1-cell table with shading
+    band_table = doc.add_table(rows=1, cols=1)
+    band_table.alignment = WD_TABLE_ALIGNMENT.LEFT
+    band_cell = band_table.rows[0].cells[0]
+    _shade_cell(band_cell, band_rgb)
+    _set_cell_margins(band_cell, left=200, right=200, top=180, bottom=180)
+    _set_table_borders(band_table, size=0, color="{:02X}{:02X}{:02X}".format(*band_rgb))
+    # full width
+    _set_table_width_pct(band_table, 100)
+
+    band_text = block.get("band_text")
+    band_eyebrow = block.get("band_eyebrow")
+    band_paras = list(band_cell.paragraphs)
+    for pg in band_paras:
+        band_cell._tc.remove(pg._p)
+    if band_eyebrow:
+        ep = band_cell.add_paragraph()
+        er = ep.add_run(str(band_eyebrow).upper())
+        _style_run(er, font=theme.heading_font, size=theme.size_small,
+                   color=(255, 255, 255), bold=True)
+    if band_text:
+        bp = band_cell.add_paragraph()
+        br = bp.add_run(band_text)
+        _style_run(br, font=theme.heading_font,
+                   size=theme.size_subtitle, color=(255, 255, 255), bold=True)
+    if not band_eyebrow and not band_text:
+        bp = band_cell.add_paragraph()
+        br = bp.add_run(" ")
+        _style_run(br, font=theme.body_font, size=theme.size_subtitle,
+                   color=(255, 255, 255))
+
+    # automatic page break after cover
+    pb = doc.add_paragraph()
+    pb.add_run().add_break(WD_BREAK.PAGE)
+
+
+def render_chart(doc, block: dict, theme: Theme) -> None:
+    """Render chart via matplotlib → PNG → embed as image."""
+    from .charts import render_chart_png
+
+    path, w_in, _ = render_chart_png(block, theme)
+    align = block.get("align", "center")
+    p = doc.add_paragraph()
+    a = _align(align)
+    if a is not None:
+        p.alignment = a
+    run = p.add_run()
+    run.add_picture(path, width=Inches(w_in))
+    caption = block.get("caption")
+    if caption:
+        cap_p = doc.add_paragraph()
+        cap_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cap_run = cap_p.add_run(caption)
+        _style_run(cap_run, font=theme.body_font, size=theme.size_small,
+                   color=theme.muted, italic=True)
+
+
+def render_callout(doc, block: dict, theme: Theme) -> None:
+    """Colored callout box. Variants: info / success / warning / danger / note / tip."""
+    variant = block.get("variant", "info")
+    palette_map = {
+        "info":    theme.info,
+        "success": theme.success,
+        "warning": theme.warning,
+        "danger":  theme.danger,
+        "note":    theme.muted,
+        "tip":     theme.accent,
+    }
+    accent = palette_map.get(variant, theme.info)
+    bg = _mix(accent, (255, 255, 255), 0.90)
+
+    table = doc.add_table(rows=1, cols=1)
+    table.alignment = WD_TABLE_ALIGNMENT.LEFT
+    cell = table.rows[0].cells[0]
+    _shade_cell(cell, bg)
+    _set_cell_margins(cell, left=180, right=180, top=120, bottom=120)
+    _set_cell_left_border(cell, accent, size=24)
+    # remove other borders
+    _clear_cell_borders_except_left(cell)
+    _set_table_width_pct(table, 100)
+
+    # clear default paragraph
+    for pg in list(cell.paragraphs):
+        cell._tc.remove(pg._p)
+
+    title = block.get("title")
+    if title:
+        tp = cell.add_paragraph()
+        tp.paragraph_format.space_after = Pt(2)
+        prefix = {"warning": "⚠ ", "danger": "✕ ", "success": "✓ ",
+                  "info": "ⓘ ", "note": "● ", "tip": "★ "}.get(variant, "")
+        tr = tp.add_run(prefix + str(title))
+        _style_run(tr, font=theme.heading_font, size=theme.size_body,
+                   color=accent, bold=True)
+
+    text = block.get("text")
+    if text:
+        bp = cell.add_paragraph()
+        bp.paragraph_format.space_after = Pt(2)
+        br = bp.add_run(text)
+        _style_run(br, font=theme.body_font, size=theme.size_body, color=theme.fg)
+
+    bullets = block.get("bullets")
+    if isinstance(bullets, list):
+        for item in bullets:
+            bp = cell.add_paragraph()
+            bp.paragraph_format.left_indent = Inches(0.15)
+            bp.paragraph_format.space_after = Pt(0)
+            br = bp.add_run("• " + str(item))
+            _style_run(br, font=theme.body_font, size=theme.size_body, color=theme.fg)
+
+
+def render_sidebar(doc, block: dict, theme: Theme) -> None:
+    """Subtle gray surface box for tangential context."""
+    table = doc.add_table(rows=1, cols=1)
+    table.alignment = WD_TABLE_ALIGNMENT.LEFT
+    cell = table.rows[0].cells[0]
+    _shade_cell(cell, theme.surface)
+    _set_cell_margins(cell, left=200, right=200, top=160, bottom=160)
+    _set_table_borders(table, size=0)
+    _set_table_width_pct(table, 100)
+    for pg in list(cell.paragraphs):
+        cell._tc.remove(pg._p)
+    title = block.get("title")
+    if title:
+        tp = cell.add_paragraph()
+        tp.paragraph_format.space_after = Pt(4)
+        tr = tp.add_run(title)
+        _style_run(tr, font=theme.heading_font, size=theme.size_body + 1,
+                   color=theme.heading, bold=True)
+    text = block.get("text")
+    if text:
+        bp = cell.add_paragraph()
+        bp.paragraph_format.space_after = Pt(0)
+        br = bp.add_run(text)
+        _style_run(br, font=theme.body_font, size=theme.size_body, color=theme.fg)
+    bullets = block.get("bullets")
+    if isinstance(bullets, list):
+        for item in bullets:
+            bp = cell.add_paragraph()
+            bp.paragraph_format.left_indent = Inches(0.15)
+            bp.paragraph_format.space_after = Pt(0)
+            br = bp.add_run("• " + str(item))
+            _style_run(br, font=theme.body_font, size=theme.size_body, color=theme.fg)
+
+
+def render_spacer(doc, block: dict, theme: Theme) -> None:
+    h_pt = float(block.get("height", 12))
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(h_pt)
+
+
+def render_divider(doc, block: dict, theme: Theme) -> None:
+    """Thicker divider with theme accent color (richer than horizontal_rule)."""
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(8)
+    p.paragraph_format.space_after = Pt(8)
+    pPr = p._p.get_or_add_pPr()
+    pBdr = etree.SubElement(pPr, qn("w:pBdr"))
+    bottom = etree.SubElement(pBdr, qn("w:bottom"))
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), str(int(block.get("thickness", 12))))
+    bottom.set(qn("w:space"), "1")
+    color_rgb = block.get("color") or theme.accent
+    if isinstance(color_rgb, list):
+        color_rgb = tuple(color_rgb)
+    bottom.set(qn("w:color"), "{:02X}{:02X}{:02X}".format(*color_rgb))
+
+
+# ---------------------------------------------------------------------------
+# extra helpers
+# ---------------------------------------------------------------------------
+
+
+def _mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+    """Blend a→b by t∈[0,1]. t=0 returns a, t=1 returns b."""
+    return (
+        int(a[0] * (1 - t) + b[0] * t),
+        int(a[1] * (1 - t) + b[1] * t),
+        int(a[2] * (1 - t) + b[2] * t),
+    )
+
+
+def _set_cell_margins(cell, *, left: int = 100, right: int = 100,
+                      top: int = 0, bottom: int = 0) -> None:
+    tcPr = cell._tc.get_or_add_tcPr()
+    tcMar = tcPr.find(qn("w:tcMar"))
+    if tcMar is None:
+        tcMar = etree.SubElement(tcPr, qn("w:tcMar"))
+    for side, val in (("top", top), ("left", left), ("bottom", bottom), ("right", right)):
+        el = tcMar.find(qn(f"w:{side}"))
+        if el is None:
+            el = etree.SubElement(tcMar, qn(f"w:{side}"))
+        el.set(qn("w:w"), str(val))
+        el.set(qn("w:type"), "dxa")
+
+
+def _set_cell_top_border(cell, color, size: int = 12) -> None:
+    _set_cell_side_border(cell, "top", color, size)
+
+
+def _set_cell_bottom_border(cell, color, size: int = 4) -> None:
+    _set_cell_side_border(cell, "bottom", color, size)
+
+
+def _set_cell_left_border(cell, color, size: int = 24) -> None:
+    _set_cell_side_border(cell, "left", color, size)
+
+
+def _set_cell_side_border(cell, side: str, color, size: int) -> None:
+    tcPr = cell._tc.get_or_add_tcPr()
+    tcBorders = tcPr.find(qn("w:tcBorders"))
+    if tcBorders is None:
+        tcBorders = etree.SubElement(tcPr, qn("w:tcBorders"))
+    el = tcBorders.find(qn(f"w:{side}"))
+    if el is None:
+        el = etree.SubElement(tcBorders, qn(f"w:{side}"))
+    el.set(qn("w:val"), "single")
+    el.set(qn("w:sz"), str(size))
+    el.set(qn("w:color"), "{:02X}{:02X}{:02X}".format(*color))
+
+
+def _clear_cell_borders_except_left(cell) -> None:
+    tcPr = cell._tc.get_or_add_tcPr()
+    tcBorders = tcPr.find(qn("w:tcBorders"))
+    if tcBorders is None:
+        tcBorders = etree.SubElement(tcPr, qn("w:tcBorders"))
+    for side in ("top", "bottom", "right"):
+        el = tcBorders.find(qn(f"w:{side}"))
+        if el is None:
+            el = etree.SubElement(tcBorders, qn(f"w:{side}"))
+        el.set(qn("w:val"), "nil")
+
+
+def _set_table_width_pct(table, pct: int) -> None:
+    tbl = table._tbl
+    tblPr = tbl.find(qn("w:tblPr"))
+    if tblPr is None:
+        tblPr = etree.SubElement(tbl, qn("w:tblPr"))
+    tblW = tblPr.find(qn("w:tblW"))
+    if tblW is None:
+        tblW = etree.SubElement(tblPr, qn("w:tblW"))
+    tblW.set(qn("w:w"), str(pct * 50))  # 50ths of a percent
+    tblW.set(qn("w:type"), "pct")
+
+
 RENDERERS = {
     "heading": render_heading,
     "paragraph": render_paragraph,
@@ -469,4 +842,11 @@ RENDERERS = {
     "toc": render_toc,
     "kpi_row": render_kpi_row,
     "two_column": render_two_column,
+    # new
+    "cover": render_cover,
+    "chart": render_chart,
+    "callout": render_callout,
+    "sidebar": render_sidebar,
+    "spacer": render_spacer,
+    "divider": render_divider,
 }
