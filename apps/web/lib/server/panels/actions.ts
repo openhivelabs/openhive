@@ -23,13 +23,13 @@ import { getCredentialValue } from '../credentials'
 import { logPanelAction } from './audit'
 import { deleteCache } from './cache'
 
-export interface ActionContext {
+interface ActionContext {
   companySlug: string
   teamSlug: string
   teamId: string
 }
 
-export interface FormFieldSpec {
+interface FormFieldSpec {
   name: string
   label?: string
   type?: string
@@ -40,11 +40,11 @@ export interface FormFieldSpec {
   default?: unknown
 }
 
-export interface FormSchemaSpec {
+interface FormSchemaSpec {
   fields?: FormFieldSpec[]
 }
 
-export interface ActionTargetSpec {
+interface ActionTargetSpec {
   kind: string
   config?: Record<string, unknown>
   auth_ref?: string
@@ -69,7 +69,7 @@ export class ActionError extends Error {}
 const SQL_WRITE_RE = /^\s*(INSERT|UPDATE|DELETE)\b/i
 const SQL_DENY_RE = /\b(PRAGMA|ATTACH|DETACH|VACUUM|DROP|ALTER|CREATE|TRUNCATE)\b/i
 
-export function validateValues(
+function validateValues(
   form: FormSchemaSpec | undefined,
   values: Record<string, unknown>,
 ): Record<string, unknown> {

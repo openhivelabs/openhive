@@ -5,13 +5,13 @@ export interface ColumnInfo {
   pk: boolean
 }
 
-export interface TableInfo {
+interface TableInfo {
   name: string
   columns: ColumnInfo[]
   row_count: number
 }
 
-export interface MigrationRow {
+interface MigrationRow {
   id: number
   applied_at: number
   source: string
@@ -55,7 +55,7 @@ export async function fetchTableRows(
   return (await res.json()) as PagedQueryResult
 }
 
-export async function installTemplate(teamId: string, template: string): Promise<void> {
+async function installTemplate(teamId: string, template: string): Promise<void> {
   const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}/templates/install`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -67,7 +67,7 @@ export async function installTemplate(teamId: string, template: string): Promise
   }
 }
 
-export async function runExec(teamId: string, sql: string): Promise<void> {
+async function runExec(teamId: string, sql: string): Promise<void> {
   const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}/exec`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

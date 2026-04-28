@@ -62,7 +62,7 @@ interface SessionUsage {
   n: number
 }
 
-export interface ChatSource {
+interface ChatSource {
   title: string
   url: string
   domain: string

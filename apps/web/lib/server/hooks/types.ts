@@ -45,7 +45,7 @@ export interface HookOutcome {
   events: Event[]
 }
 
-export interface CommonHookPayload {
+interface CommonHookPayload {
   hook_event_name: HookEventName
   session_id: string
   transcript_path: string

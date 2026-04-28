@@ -7,7 +7,7 @@
  * channels.
  */
 
-export type EventKind =
+type EventKind =
   | 'run_queued'
   | 'run_started'
   | 'run_finished'
@@ -68,7 +68,7 @@ export interface Event {
   data: Record<string, unknown>
 }
 
-export interface MakeEventOpts {
+interface MakeEventOpts {
   depth?: number
   node_id?: string | null
   tool_call_id?: string | null

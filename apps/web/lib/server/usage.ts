@@ -28,7 +28,7 @@ export type UsagePeriod = '24h' | '7d' | '30d' | 'all'
  * in `engine/providers.ts` so every call site sees the Anthropic-style
  * disjoint convention.
  */
-export function estimateCostCents(
+function estimateCostCents(
   model: string,
   inputTokens: number,
   outputTokens: number,
@@ -50,11 +50,11 @@ export function estimateCostCents(
   }).total_cents
 }
 
-export { getPricingForModel }
+
 
 export type ThresholdTrigger = 'none' | 'warning' | 'autocompact' | 'blocking'
 
-export interface RecordUsageInput {
+interface RecordUsageInput {
   sessionId: string | null
   companyId: string | null
   teamId: string | null
@@ -174,7 +174,7 @@ function sinceMs(period: UsagePeriod): number {
   return 0
 }
 
-export interface UsageGroupRow {
+interface UsageGroupRow {
   key: string
   input_tokens: number
   output_tokens: number
@@ -184,7 +184,7 @@ export interface UsageGroupRow {
   n: number
 }
 
-export interface UsageTotals {
+interface UsageTotals {
   input_tokens: number
   output_tokens: number
   cache_read: number
@@ -193,7 +193,7 @@ export interface UsageTotals {
   n: number
 }
 
-export interface UsageSummary {
+interface UsageSummary {
   period: UsagePeriod
   totals: UsageTotals
   by_company: UsageGroupRow[]
@@ -240,7 +240,7 @@ function groupRows(rows: UsageRow[], keyFn: (r: UsageRow) => string | null): Usa
   )
 }
 
-export interface SessionUsage {
+interface SessionUsage {
   input_tokens: number
   output_tokens: number
   cache_read: number

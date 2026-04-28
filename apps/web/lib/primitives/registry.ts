@@ -91,6 +91,6 @@ export const REGISTRY: Record<string, PrimitiveDef> = {
 }
 
 /** Flat array of catalog entries — what AI sees when composing. */
-export function primitiveCatalog() {
+function primitiveCatalog() {
   return Object.values(REGISTRY).map((p) => p.catalog)
 }

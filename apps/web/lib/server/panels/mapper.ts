@@ -9,7 +9,7 @@
 
 import { JSONPath } from 'jsonpath-plus'
 
-export interface MapSpec {
+interface MapSpec {
   rows?: string
   group_by?: string
   /** Second grouping axis. When set on a chart binding, the mapper builds
@@ -38,7 +38,7 @@ export interface MapSpec {
   cells?: MetricCellSpec[]
 }
 
-export interface MetricCellSpec {
+interface MetricCellSpec {
   label: string
   aggregate?: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'first'
   field?: string

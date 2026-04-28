@@ -32,7 +32,7 @@ function defaultModelFor(providerId: string): string {
   return ''
 }
 
-export const FRAME_VERSION = 1
+const FRAME_VERSION = 1
 
 const SLUG_RE = /[^a-z0-9-]+/g
 
@@ -153,7 +153,7 @@ function extractSchema(companySlug: string, teamId: string): string[] {
   })
 }
 
-export interface Frame {
+interface Frame {
   openhive_frame: 1
   name: string
   description: string
@@ -295,12 +295,12 @@ export function buildFrame(companySlug: string, teamSlug: string): Frame {
 
 // -------- install --------
 
-export interface InstallOpts {
+interface InstallOpts {
   connectedProviders?: Set<string>
   installedSkills?: Set<string>
 }
 
-export interface InstalledTeam extends Record<string, unknown> {
+interface InstalledTeam extends Record<string, unknown> {
   id: string
   slug: string
   name: string
@@ -310,7 +310,7 @@ export interface InstalledTeam extends Record<string, unknown> {
   allowed_skills: string[]
 }
 
-export interface InstallResult {
+interface InstallResult {
   team: InstalledTeam
   warnings: string[]
 }
@@ -561,7 +561,7 @@ export function installFrame(
 
 // -------- gallery --------
 
-export interface GalleryEntry {
+interface GalleryEntry {
   id: string
   name: string
   description: string

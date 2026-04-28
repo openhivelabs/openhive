@@ -10,7 +10,7 @@
  * gracefully — the Lead LLM receives the error and adapts.
  */
 
-export type Locale = 'en' | 'ko'
+type Locale = 'en' | 'ko'
 
 // Per-run locale — set by the run entrypoint, read by the error formatter.
 // Uses AsyncLocalStorage so concurrent runs don't clobber each other.
@@ -27,7 +27,7 @@ export function currentLocale(): Locale {
   return localeStore.getStore() ?? 'en'
 }
 
-export type ErrorClass =
+type ErrorClass =
   | 'provider_auth'
   | 'provider_rate_limit'
   | 'provider_model_not_found'
@@ -37,7 +37,7 @@ export type ErrorClass =
   | 'tool_runtime'
   | 'unknown'
 
-export interface ClassifiedError {
+interface ClassifiedError {
   kind: ErrorClass
   statusCode: number | null
   detail: string
@@ -172,7 +172,7 @@ function short(s: string, limit = 200): string {
   return t.length <= limit ? t : `${t.slice(0, limit - 1)}…`
 }
 
-export interface RenderOpts {
+interface RenderOpts {
   role: string
   agentId: string
   provider: string
@@ -193,7 +193,7 @@ export function renderError(err: ClassifiedError, opts: RenderOpts): string {
 // ─── Per-run agent failure counter ─────────────────────────────────────────
 
 /** Hard cap: this many failures in one run and the agent is excluded. */
-export const AGENT_FAILURE_CAP = 3
+const AGENT_FAILURE_CAP = 3
 
 interface FailureState {
   bySession: Map<string, Map<string, number>>

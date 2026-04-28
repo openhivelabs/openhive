@@ -25,20 +25,20 @@ export const USER_PRESET_ID = '__user_generated__'
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,30}[a-z0-9]$/
 
-export interface UserMcpCredentialSpec {
+interface UserMcpCredentialSpec {
   ref_id: string       // credential vault ref
   env_name: string     // env var name the user code reads
   purpose: string      // human-readable reason (shown in approval UI)
 }
 
-export interface UserMcpToolSpec {
+interface UserMcpToolSpec {
   name: string
   description: string
   input_schema: Record<string, unknown>
   side_effects: 'read' | 'write'
 }
 
-export interface UserMcpManifest {
+interface UserMcpManifest {
   name: string
   description: string
   allowed_hosts: string[]
@@ -46,7 +46,7 @@ export interface UserMcpManifest {
   tools: UserMcpToolSpec[]
 }
 
-export interface UserMcpRecord {
+interface UserMcpRecord {
   name: string
   manifest: UserMcpManifest
   code: string
@@ -61,7 +61,7 @@ const ENV_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/
 const CRED_REF_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const HOST_RE = /^[a-z0-9][a-z0-9.-]{0,253}[a-z0-9]$/
 
-export function validateManifest(m: unknown): UserMcpManifest {
+function validateManifest(m: unknown): UserMcpManifest {
   if (!m || typeof m !== 'object' || Array.isArray(m)) {
     throw new Error('manifest must be an object')
   }
@@ -133,7 +133,7 @@ export function validateManifest(m: unknown): UserMcpManifest {
 
 /** Refuse obvious hardcoded-secret patterns and dangerous constructs so AI
  *  can't ship a "plain text API key in source" server even by mistake. */
-export function scanCodeForIssues(code: string): string[] {
+function scanCodeForIssues(code: string): string[] {
   const issues: string[] = []
   const patterns: Array<{ re: RegExp; msg: string }> = [
     { re: /sk-[A-Za-z0-9]{20,}/, msg: 'likely hardcoded OpenAI-style secret' },

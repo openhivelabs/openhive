@@ -90,11 +90,11 @@ import { stripFakeArtifactLinks, stripMetaLabels } from './post-process'
 // Guard defaults + hard ceilings. The per-turn caps below are fallbacks for
 // sessions that predate `team.limits` (serialized snapshots from older runs)
 // — new sessions always pull the resolved value from the team snapshot.
-export const MAX_TOOL_ROUNDS = 8
-export const MAX_DEPTH = 4
-export const MAX_ASK_USER_PER_TURN_FALLBACK = 4
-export const HARD_MAX_TOOL_ROUNDS = 30
-export const HARD_MAX_DEPTH = 8
+const MAX_TOOL_ROUNDS = 8
+const MAX_DEPTH = 4
+const MAX_ASK_USER_PER_TURN_FALLBACK = 4
+const HARD_MAX_TOOL_ROUNDS = 30
+const HARD_MAX_DEPTH = 8
 
 /** Tool names that mutate run-scoped state (delegation tree, ask_user
  *  counter, todos) — these must execute serially. Every other tool (MCP,
@@ -202,13 +202,13 @@ interface RunState {
 // delegating the same sub-agent 5+ times in one burst almost always means
 // "REVISED TASK" spam. Fallback only — resolved value comes from
 // team.limits.max_delegations_per_pair_per_turn.
-export const MAX_DELEGATIONS_PER_PAIR_FALLBACK = 4
+const MAX_DELEGATIONS_PER_PAIR_FALLBACK = 4
 
 // Phase C3: Cap read_skill_file. Once a skill is activated the LLM tends to
 // spelunk its entire tree looking for answers it already has. Same-file reads
 // are always redundant; total cap stops fan-out sprees mid-turn. Fallback
 // only — resolved from team.limits.max_read_skill_file_per_turn.
-export const MAX_READ_SKILL_FILE_PER_TURN_FALLBACK = 8
+const MAX_READ_SKILL_FILE_PER_TURN_FALLBACK = 8
 
 // Phase C4: Cap `web-search` calls per turn. Claude Code hardcaps at 8;
 // we hold at 3 because (a) codex's native `web_search` builtin already
@@ -217,7 +217,7 @@ export const MAX_READ_SKILL_FILE_PER_TURN_FALLBACK = 8
 // research tasks (4-bank comparison lost 2 entities to "unverified"
 // gaps that cap=3 covered). 3 is the sweet spot between latency and
 // breadth. Teams can lift via team.limits for sweep-heavy work.
-export const MAX_WEB_SEARCH_PER_TURN_FALLBACK = 3
+const MAX_WEB_SEARCH_PER_TURN_FALLBACK = 3
 
 const globalForRun = globalThis as unknown as {
   __openhive_engine_run?: RunState
@@ -526,7 +526,7 @@ function getRunSemaphore(): Semaphore {
   return s.semaphore
 }
 
-export function activeRunCapacity(): { inUse: number; total: number } {
+function activeRunCapacity(): { inUse: number; total: number } {
   const sem = getRunSemaphore()
   return { inUse: sem.inUse(), total: sem.total() }
 }
@@ -548,7 +548,7 @@ function mcpManager() {
 
 // -------- top-level run_team generator --------
 
-export interface SessionTeamOpts {
+interface SessionTeamOpts {
   teamSlugs?: [string, string] | null
   locale?: string
   /** When set, runTeam reuses the given sessionId instead of minting a new
@@ -569,7 +569,7 @@ export interface SessionTeamOpts {
  *  `user_message` event yielded by the engine on pop. The frontend uses
  *  the id to dedupe the pending bubble (queued) against its confirmed twin
  *  (user_message). */
-export interface InboxItem {
+interface InboxItem {
   text: string
   queuedId: string
 }
@@ -3452,7 +3452,7 @@ async function* runAskUser(opts: AskUserOpts): AsyncGenerator<Event> {
 
 // -------- skill invocation sub-generator --------
 
-export interface SkillInvocationOpts {
+interface SkillInvocationOpts {
   sessionId: string
   tool: Tool
   args: Record<string, unknown>

@@ -15,7 +15,7 @@ interface AiBindInput {
   userIntent: string | null
 }
 
-export interface AiBindResult {
+interface AiBindResult {
   binding: PanelBinding
   /** Optional CREATE TABLE statement the binder produced when the user
    *  explicitly asked for a new table. Install path runs this idempotently

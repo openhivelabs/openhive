@@ -15,7 +15,7 @@ import { saveTeam, type TeamDict } from './companies'
 import { companyDir, packagesRoot, teamYamlPath } from './paths'
 import { CLAUDE_CODE_MODELS, CODEX_MODELS } from './providers/models'
 
-export const AGENT_FRAME_VERSION = 1
+const AGENT_FRAME_VERSION = 1
 
 const SLUG_RE = /[^a-z0-9-]+/g
 
@@ -122,7 +122,7 @@ function bundlePersonaFiles(pathRef: string): Record<string, string> {
 
 // -------- export --------
 
-export interface AgentFrame {
+interface AgentFrame {
   openhive_agent_frame: 1
   name: string
   description: string
@@ -214,12 +214,12 @@ export function buildAgentFrame(
 
 // -------- install --------
 
-export interface InstallAgentOpts {
+interface InstallAgentOpts {
   connectedProviders?: Set<string>
   installedSkills?: Set<string>
 }
 
-export interface InstallAgentResult {
+interface InstallAgentResult {
   agent: Record<string, unknown>
   warnings: string[]
 }
@@ -360,7 +360,7 @@ export function installAgentFrame(
 
 // -------- gallery --------
 
-export interface AgentGalleryEntry {
+interface AgentGalleryEntry {
   id: string
   name: string
   description: string

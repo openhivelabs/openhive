@@ -24,7 +24,7 @@ function catalogDir(): string {
 
 export type MarketType = 'company' | 'team' | 'agent' | 'panel'
 
-export interface MarketEntry {
+interface MarketEntry {
   id: string
   type: MarketType
   name: string
@@ -50,12 +50,12 @@ export interface MarketEntry {
   preview?: PanelPreview
 }
 
-export interface PanelSize {
+interface PanelSize {
   colSpan: 1 | 2 | 3 | 4
   rowSpan: 1 | 2 | 3 | 4
 }
 
-export type PanelPreview =
+type PanelPreview =
   | {
       kind: 'line'
       data: number[]
@@ -88,7 +88,7 @@ export type PanelPreview =
       subtitle?: string
     }
 
-export interface MarketIndex {
+interface MarketIndex {
   companies: MarketEntry[]
   teams: MarketEntry[]
   agents: MarketEntry[]

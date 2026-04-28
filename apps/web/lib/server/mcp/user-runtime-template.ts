@@ -13,7 +13,7 @@
  * "// ---- user code below ----" marker.
  */
 
-export interface RuntimeManifestData {
+interface RuntimeManifestData {
   allowed_hosts: string[]
   credential_env_names: string[]
 }

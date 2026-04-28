@@ -13,7 +13,7 @@ export function downloadFrame(companySlug: string, teamSlug: string): void {
   a.remove()
 }
 
-export interface FrameRequires {
+interface FrameRequires {
   skills: string[]
   providers: string[]
 }
@@ -83,7 +83,7 @@ export async function listGallery(): Promise<GalleryEntry[]> {
   return (await res.json()) as GalleryEntry[]
 }
 
-export interface InstallFrameResult {
+interface InstallFrameResult {
   team: Record<string, unknown>
   warnings: string[]
 }

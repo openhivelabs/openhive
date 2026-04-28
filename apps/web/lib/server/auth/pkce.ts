@@ -4,7 +4,7 @@
 
 import crypto from 'node:crypto'
 
-export interface PKCEChallenge {
+interface PKCEChallenge {
   code_verifier: string
   code_challenge: string
   state: string

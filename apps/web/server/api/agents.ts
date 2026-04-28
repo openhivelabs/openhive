@@ -22,7 +22,7 @@ interface GenerateBody {
   client_job_id?: string
 }
 
-export interface LibraryPersona {
+interface LibraryPersona {
   name: string
   description: string
   kind: 'file' | 'dir'

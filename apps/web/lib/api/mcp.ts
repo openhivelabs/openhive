@@ -1,4 +1,4 @@
-export interface PresetInput {
+interface PresetInput {
   key: string
   label: string
   type: 'secret' | 'text' | 'path'
@@ -37,7 +37,7 @@ export interface DiscoveredTool {
   description: string
 }
 
-export interface TestResult {
+interface TestResult {
   ok: boolean
   error?: string
   tools?: DiscoveredTool[]
@@ -111,20 +111,20 @@ export async function testDraft(args: {
 
 // -------- AI-generated user MCP servers --------
 
-export interface UserMcpCredentialSpec {
+interface UserMcpCredentialSpec {
   ref_id: string
   env_name: string
   purpose: string
 }
 
-export interface UserMcpToolSpec {
+interface UserMcpToolSpec {
   name: string
   description: string
   input_schema: Record<string, unknown>
   side_effects: 'read' | 'write'
 }
 
-export interface UserMcpManifest {
+interface UserMcpManifest {
   name: string
   description: string
   allowed_hosts: string[]
@@ -166,7 +166,7 @@ export async function deleteUserServer(name: string): Promise<void> {
   )
 }
 
-export async function generateUserServer(args: {
+async function generateUserServer(args: {
   manifest: UserMcpManifest
   code: string
 }): Promise<{ name: string }> {

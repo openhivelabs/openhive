@@ -1,7 +1,7 @@
 import yaml from 'js-yaml'
 import type { Agent } from '@/lib/types'
 
-export interface AgentFrameRequires {
+interface AgentFrameRequires {
   skills: string[]
   providers: string[]
 }
@@ -75,7 +75,7 @@ export async function listAgentGallery(): Promise<AgentGalleryEntry[]> {
   return (await res.json()) as AgentGalleryEntry[]
 }
 
-export interface InstallAgentFrameResult {
+interface InstallAgentFrameResult {
   agent: Record<string, unknown>
   warnings: string[]
 }

@@ -1,12 +1,7 @@
 import { useAppStore } from './stores/useAppStore'
 
-export const locales = ['en', 'ko'] as const
+const locales = ['en', 'ko'] as const
 export type Locale = (typeof locales)[number]
-
-export const LOCALE_LABELS: Record<Locale, string> = {
-  en: 'English',
-  ko: '한국어',
-}
 
 type Dict = Record<string, string>
 

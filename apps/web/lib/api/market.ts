@@ -81,7 +81,7 @@ export async function fetchMarketIndex(): Promise<MarketIndex> {
   return (await res.json()) as MarketIndex
 }
 
-export interface InstallMarketResult {
+interface InstallMarketResult {
   type: MarketType
   id: string
   team?: Record<string, unknown>
@@ -112,9 +112,9 @@ export async function installMarketEntry(input: {
 
 // ─── Panel two-phase install ──────────────────────────────────────────
 
-export type InstallDecision = 'reuse' | 'extend' | 'standalone'
+type InstallDecision = 'reuse' | 'extend' | 'standalone'
 
-export interface InstallPlan {
+interface InstallPlan {
   decision: InstallDecision
   brief: string
   target_table: string | null
@@ -125,14 +125,14 @@ export interface InstallPlan {
   ai_called: boolean
 }
 
-export interface PanelInstallPreview {
+interface PanelInstallPreview {
   plan: InstallPlan
   panel_title: string | null
   setup_sql: string | null
   panel_sql: string | null
 }
 
-export async function previewPanelInstall(input: {
+async function previewPanelInstall(input: {
   id: string
   category: string
   target_company_slug: string

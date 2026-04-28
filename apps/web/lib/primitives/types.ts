@@ -17,7 +17,7 @@ export interface PrimitiveSpec {
   on?: Record<string, ActionSpec>
 }
 
-export interface ActionSpec {
+interface ActionSpec {
   /** Action name, e.g. 'delegate_to', 'sql_exec', 'open_block'. */
   action: string
   /** Action parameters (resolved at invocation). */

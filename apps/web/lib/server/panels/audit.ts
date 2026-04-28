@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { teamDir } from '../paths'
 
-export interface PanelActionAuditEntry {
+interface PanelActionAuditEntry {
   ts: number
   panel_id: string
   action_id: string

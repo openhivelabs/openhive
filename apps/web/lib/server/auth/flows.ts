@@ -9,8 +9,8 @@
 
 import crypto from 'node:crypto'
 
-export type FlowKind = 'auth_code' | 'device_code'
-export type FlowStatus = 'pending' | 'connected' | 'error' | 'expired'
+type FlowKind = 'auth_code' | 'device_code'
+type FlowStatus = 'pending' | 'connected' | 'error' | 'expired'
 
 export interface FlowState {
   flow_id: string
@@ -97,6 +97,6 @@ export function updateFlow(
   return state
 }
 
-export function removeFlow(flowId: string): void {
+function removeFlow(flowId: string): void {
   store().delete(flowId)
 }

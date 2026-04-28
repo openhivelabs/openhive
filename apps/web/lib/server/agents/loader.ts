@@ -20,10 +20,10 @@ import path from 'node:path'
 import yaml from 'js-yaml'
 import { dataDir, packagesRoot } from '../paths'
 
-export const MAX_LISTED_FILES = 60
+const MAX_LISTED_FILES = 60
 export const MAX_READABLE_FILE_BYTES = 256 * 1024
 
-export type PersonaKind = 'file' | 'dir'
+type PersonaKind = 'file' | 'dir'
 
 export type WritePolicy = boolean | 'ask'
 

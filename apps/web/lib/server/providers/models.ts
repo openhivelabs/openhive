@@ -9,7 +9,7 @@
 
 import { EDITOR_HEADERS, getCopilotSession } from './copilot-session'
 
-export interface ModelCatalogEntry {
+interface ModelCatalogEntry {
   id: string
   label: string
   default?: boolean

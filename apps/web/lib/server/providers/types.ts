@@ -3,7 +3,7 @@
  * tool format. Per-provider modules translate to/from their native shape.
  */
 
-export interface FunctionCall {
+interface FunctionCall {
   name: string
   arguments: string
 }
@@ -14,7 +14,7 @@ export interface ToolCall {
   function: FunctionCall
 }
 
-export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
+type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
 export interface ChatMessage {
   role: ChatRole
@@ -57,7 +57,7 @@ export interface ToolSpec {
  * The strategy is intentionally typed loosely — the shape of the
  * returned payload is provider-specific and validated by the caller.
  */
-export interface CachingRequest<M = ChatMessage, T = ToolSpec> {
+interface CachingRequest<M = ChatMessage, T = ToolSpec> {
   system: string | null
   messages: M[]
   tools: T[] | null

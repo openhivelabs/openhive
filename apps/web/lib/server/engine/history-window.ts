@@ -12,7 +12,7 @@ import type { ChatMessage } from '../providers/types'
 export const DEFAULT_HISTORY_WINDOW_TURNS = 40
 export const HISTORY_SUMMARY_LABEL = '<session-earlier-summary>'
 
-export type Summarise = (msgs: ChatMessage[]) => Promise<string>
+type Summarise = (msgs: ChatMessage[]) => Promise<string>
 
 /** Count assistant messages — that's how we measure "turns" here. One
  *  assistant message plus its follow-up tool results counts as one turn. */

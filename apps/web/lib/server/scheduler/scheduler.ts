@@ -29,7 +29,7 @@ import { type TeamSpec, toTeamSpec } from '../engine/team'
 import { refreshDuePanels } from '../panels/refresher'
 import { listTasks, saveTask } from '../tasks'
 
-export interface Routine {
+interface Routine {
   id: string
   cron?: string
   /** Optional; legacy tick scans tasks/panels from disk, so handler is unused. */
@@ -128,7 +128,7 @@ function buildTeamSpec(teamDict: Record<string, unknown>): TeamSpec {
   return toTeamSpec(normaliseTeamShape(teamDict))
 }
 
-export class Scheduler {
+class Scheduler {
   private data: SchedulerData = newData()
 
   constructor(opts: { autoStart?: boolean } = {}) {
@@ -309,12 +309,12 @@ export function __resetSchedulerForTests(): void {
 // ---- legacy module-level API (backwards compat) ----------------------------
 
 /** @deprecated Prefer `getScheduler().start()` with routines. */
-export function startScheduler(): void {
+function startScheduler(): void {
   getScheduler().start()
 }
 
 /** @deprecated Prefer `getScheduler().stop()`. */
-export function stopScheduler(): void {
+function stopScheduler(): void {
   const s = globalForScheduler[SCHEDULER_KEY]
   if (s) s.stop()
 }

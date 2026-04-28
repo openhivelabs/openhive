@@ -100,7 +100,7 @@ export async function ensureCodexCallbackListener(): Promise<void> {
 }
 
 /** Test / HMR cleanup hook. Safe to call when nothing is listening. */
-export function stopCodexCallbackListener(): void {
+function stopCodexCallbackListener(): void {
   if (activeServer) {
     activeServer.close()
     activeServer = null

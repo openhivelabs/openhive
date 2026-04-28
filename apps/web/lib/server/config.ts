@@ -9,7 +9,7 @@
 import { homedir } from 'node:os'
 import path from 'node:path'
 
-export interface ServerSettings {
+interface ServerSettings {
   host: string
   port: number
   dataDir: string

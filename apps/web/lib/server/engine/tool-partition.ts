@@ -27,7 +27,7 @@
  * split into consecutive parallel runs of <= cap each (still input order).
  */
 
-export type ToolClass =
+type ToolClass =
   | 'trajectory'
   | 'parallel_trajectory'
   | 'serial_write'
@@ -95,7 +95,7 @@ export interface ToolRun<T> {
   items: T[]
 }
 
-export interface PartitionStats {
+interface PartitionStats {
   total: number
   parallel_groups: number
   serial_count: number
@@ -105,7 +105,7 @@ export interface PartitionStats {
 /** Per-class cap resolver passed in by the dispatch site so tests / env
  *  overrides can tune each bucket independently without this module
  *  having to know about env vars. */
-export interface PartitionCaps {
+interface PartitionCaps {
   safe_parallel: number
   parallel_trajectory: number
 }

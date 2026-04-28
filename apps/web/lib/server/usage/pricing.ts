@@ -38,7 +38,7 @@
  * can slot in without changing the `ModelRates` shape.
  */
 
-export interface ModelRates {
+interface ModelRates {
   /** Fresh (uncached) input tokens. */
   input: number
   /** Output / completion tokens. */
@@ -57,7 +57,7 @@ export interface ModelRates {
 }
 
 /** Canonical model pricing — provider-agnostic exact-match table. */
-export const MODEL_PRICING: Record<string, ModelRates> = {
+const MODEL_PRICING: Record<string, ModelRates> = {
   // === Anthropic / Claude (platform.claude.com/docs/en/about-claude/pricing) ===
   // Cache write column = 5-minute TTL (1.25x input). 1-hour TTL is 2x input
   // — if that ever gets used, add it behind a flag; most traffic is 5-min.
@@ -120,14 +120,14 @@ export const MODEL_PRICING: Record<string, ModelRates> = {
  *
  * Keyed by OpenHive `provider_id` (`claude-code`, `codex`, `copilot`).
  */
-export const PROVIDER_PRICING: Record<string, Record<string, ModelRates>> = {}
+const PROVIDER_PRICING: Record<string, Record<string, ModelRates>> = {}
 
 /**
  * Glob pattern fallback, ordered most-specific → most-general. First match
  * wins. Covers only the model families the three OpenHive providers serve;
  * unknown IDs return null from `getPricingForModel` so the caller can log.
  */
-export const PATTERN_PRICING: { pattern: string; rates: ModelRates }[] = [
+const PATTERN_PRICING: { pattern: string; rates: ModelRates }[] = [
   // Claude family fallbacks — future variants within a tier inherit the tier rate.
   { pattern: 'claude-opus-*', rates: { input: 5.0, output: 25.0, cached: 0.5, reasoning: 25.0, cache_creation: 6.25 } },
   { pattern: 'claude-sonnet-*', rates: { input: 3.0, output: 15.0, cached: 0.3, reasoning: 15.0, cache_creation: 3.75 } },
@@ -196,7 +196,7 @@ export function getPricingForModel(provider: string, model: string): ModelRates 
   return null
 }
 
-export interface CostBreakdown {
+interface CostBreakdown {
   /** Fresh (non-cached) input tokens charged at `rates.input`. */
   fresh_input_cost_cents: number
   /** Cache-read tokens at `rates.cached`. */
@@ -211,7 +211,7 @@ export interface CostBreakdown {
   total_cents: number
 }
 
-export interface CostInput {
+interface CostInput {
   provider: string
   model: string
   /** Fresh input tokens only (cache-read already subtracted upstream). */

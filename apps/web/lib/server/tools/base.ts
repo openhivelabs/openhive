@@ -33,13 +33,13 @@ export interface Tool {
   } | null
 }
 
-export interface ToolCallSpec {
+interface ToolCallSpec {
   id: string
   name: string
   arguments: Record<string, unknown>
 }
 
-export interface ToolResult {
+interface ToolResult {
   call_id: string
   name: string
   content: string

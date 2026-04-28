@@ -9,14 +9,14 @@
  * for display, this one is for runtime math.
  */
 
-export interface ModelWindow {
+interface ModelWindow {
   /** Input token ceiling (system + tools + history + user turn). */
   input: number
   /** Max output tokens the model can produce. Reserved from window. */
   output: number
 }
 
-export const CONTEXT_WINDOW: Record<string, Record<string, ModelWindow>> = {
+const CONTEXT_WINDOW: Record<string, Record<string, ModelWindow>> = {
   // Anthropic — Claude Code OAuth path. [1m] beta variants are separate ids.
   'claude-code': {
     'claude-opus-4-7': { input: 200_000, output: 32_000 },
@@ -62,7 +62,7 @@ const BLOCKING_BUFFER = 3_000
 const WARNING_BUFFER = 20_000
 const MAX_OUTPUT_RESERVE = 20_000
 
-export interface EffectiveWindow {
+interface EffectiveWindow {
   /** input - reserveOutput. Upper bound of actual prompt payload. */
   window: number
   /** Above this → kick microcompact / auto-compact. */

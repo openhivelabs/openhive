@@ -23,13 +23,13 @@ import {
 
 /** Reserved IDs for synthesized actions. Stable so the client and server
  *  agree on which IDs are valid without round-tripping the binding. */
-export const SYNTH_KANBAN_MOVE_ID = 'kanban.move'
-export const SYNTH_KANBAN_CREATE_ID = 'kanban.create'
-export const SYNTH_KANBAN_UPDATE_ID = 'kanban.update'
-export const SYNTH_KANBAN_DELETE_ID = 'kanban.delete'
-export const SYNTH_TABLE_CREATE_ID = 'table.create'
-export const SYNTH_TABLE_UPDATE_ID = 'table.update'
-export const SYNTH_TABLE_DELETE_ID = 'table.delete'
+const SYNTH_KANBAN_MOVE_ID = 'kanban.move'
+const SYNTH_KANBAN_CREATE_ID = 'kanban.create'
+const SYNTH_KANBAN_UPDATE_ID = 'kanban.update'
+const SYNTH_KANBAN_DELETE_ID = 'kanban.delete'
+const SYNTH_TABLE_CREATE_ID = 'table.create'
+const SYNTH_TABLE_UPDATE_ID = 'table.update'
+const SYNTH_TABLE_DELETE_ID = 'table.delete'
 
 /** Columns the synthesizer never asks the user about — they're either
  *  auto-bound by the action runner, auto-incrementing keys, or row
@@ -755,7 +755,7 @@ export function synthesizeTableActions(
 /** Backward-compat single-action accessor — refresher used to call this
  *  before the full CRUD synthesis. Kept so older import sites compile
  *  cleanly; new callers should prefer `synthesizeKanbanActions`. */
-export function synthesizeKanbanMoveAction(
+function synthesizeKanbanMoveAction(
   panelType: string,
   binding: Record<string, unknown>,
   companySlug?: string,

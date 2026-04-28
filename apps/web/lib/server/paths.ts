@@ -110,7 +110,7 @@ export function webAppNodeModules(): string {
 }
 
 /** Walk up from `apps/web/` to the repo root so we can reach packages/. */
-export function repoRoot(): string {
+function repoRoot(): string {
   // This file ends up at apps/web/lib/server/paths.ts (src) or .next/.../paths.js (built).
   // In both cases, the process cwd at runtime is the web app's root in dev,
   // and for prod standalone it's the standalone dir. We anchor off

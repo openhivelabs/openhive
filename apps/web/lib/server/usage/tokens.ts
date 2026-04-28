@@ -75,7 +75,7 @@ export function estimateToolsTokens(tools: ToolSpec[] | undefined | null): numbe
   return estimateTextTokens(JSON.stringify(tools)) + tools.length * 4
 }
 
-export interface CountWithApiOpts {
+interface CountWithApiOpts {
   /** Authoritative value — direct from provider's last `usage.input_tokens`. */
   apiReportedInputTokens?: number | null
   /**

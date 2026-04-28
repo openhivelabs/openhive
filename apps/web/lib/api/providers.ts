@@ -7,13 +7,13 @@ export interface ProviderStatus {
   account_label: string | null
 }
 
-export interface StartAuthCode {
+interface StartAuthCode {
   kind: 'auth_code'
   flow_id: string
   auth_url: string
 }
 
-export interface StartDeviceCode {
+interface StartDeviceCode {
   kind: 'device_code'
   flow_id: string
   user_code: string

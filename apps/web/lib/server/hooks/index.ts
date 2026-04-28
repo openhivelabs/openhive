@@ -10,7 +10,6 @@
  */
 
 import { makeEvent } from '../events/schema'
-import type { Event } from '../events/schema'
 import { getHookConfig } from './config'
 import { matchHooks } from './matcher'
 import { type RunOneEnvExtras, runOne } from './runner'
@@ -19,7 +18,7 @@ import type { HookEventName, HookOutcome, HookPayload, HookStdoutPayload } from 
 const ADDITIONAL_CONTEXT_CAP = 8192
 const REASON_CAP = 2048
 
-export interface RunHooksOpts {
+interface RunHooksOpts {
   /**
    * When provided, used as the `session_id` for the synthesised `hook.invoked`
    * events appended to the outcome. Most callers pass the same id that's in
@@ -124,15 +123,3 @@ export async function runHooks(
   return outcome
 }
 
-export type { HookEventName, HookOutcome, HookPayload } from './types'
-export { getHookConfig, hooksDisabled } from './config'
-export { matchHooks, matchesGlob, globToRegex } from './matcher'
-
-// Re-export for tests.
-export { __resetHookConfigCacheForTests } from './config'
-
-// Helper: synthesise a bare `Event` for callers that want to emit their own
-// hook-related events (not used by runHooks itself).
-export function makeHookEvent(sessionId: string, data: Record<string, unknown>): Event {
-  return makeEvent('hook.invoked', sessionId, data)
-}

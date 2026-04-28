@@ -7,7 +7,7 @@
  */
 
 /** Hard ceiling on per-agent parallel instances. User-set value is clamped. */
-export const HARD_MAX_PARALLEL = 100
+const HARD_MAX_PARALLEL = 100
 
 export interface AgentSpec {
   id: string
@@ -38,12 +38,12 @@ export interface AgentSpec {
   }
 }
 
-export interface EdgeSpec {
+interface EdgeSpec {
   source: string
   target: string
 }
 
-export interface RunLimits {
+interface RunLimits {
   max_tool_rounds_per_turn: number
   max_delegation_depth: number
   /** Per-turn cap on `delegate_to(sameSubordinate)` calls from one parent.
@@ -93,7 +93,7 @@ function clampParallel(v: number): number {
 }
 
 /** Normalise a raw agent dict (wire shape) into an AgentSpec with defaults. */
-export function toAgentSpec(raw: Record<string, unknown>): AgentSpec {
+function toAgentSpec(raw: Record<string, unknown>): AgentSpec {
   return {
     id: String(raw.id ?? ''),
     role: String(raw.role ?? ''),
@@ -172,7 +172,7 @@ export function toTeamSpec(raw: Record<string, unknown>): TeamSpec {
 
 // -------- graph helpers --------
 
-export function findAgent(team: TeamSpec, agentId: string): AgentSpec | null {
+function findAgent(team: TeamSpec, agentId: string): AgentSpec | null {
   return team.agents.find((a) => a.id === agentId) ?? null
 }
 
@@ -184,7 +184,7 @@ export function subordinates(team: TeamSpec, agentId: string): AgentSpec[] {
 }
 
 /** Lead = root (no incoming edge). Prefer one that has subordinates. */
-export function leadAgent(team: TeamSpec): AgentSpec {
+function leadAgent(team: TeamSpec): AgentSpec {
   const incoming = new Set(team.edges.map((e) => e.target))
   const roots = team.agents.filter((a) => !incoming.has(a.id))
   if (roots.length === 0) {

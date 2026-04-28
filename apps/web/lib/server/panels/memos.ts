@@ -64,7 +64,7 @@ function ensureSchema(db: Database.Database): void {
   }
 }
 
-export interface MemoRow {
+interface MemoRow {
   note_id: string
   content: string
   sort_order: number

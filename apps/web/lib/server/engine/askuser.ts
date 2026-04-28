@@ -61,7 +61,7 @@ export function resolveAskUser(
   return true
 }
 
-export function cancelAskUser(toolCallId: string): void {
+function cancelAskUser(toolCallId: string): void {
   const entry = pending().byCallId.get(toolCallId)
   if (!entry) return
   if (!entry.done) {

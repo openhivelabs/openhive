@@ -1,4 +1,4 @@
-export type ProviderKind = 'oauth' | 'api_key' | 'local'
+type ProviderKind = 'oauth' | 'api_key' | 'local'
 
 export interface Provider {
   id: string
@@ -39,7 +39,7 @@ export interface ReportingEdge {
   isActive?: boolean
 }
 
-export interface RunLimits {
+interface RunLimits {
   max_tool_rounds_per_turn: number
   max_delegation_depth: number
 }
@@ -76,7 +76,7 @@ export interface Message {
   createdAt: string
 }
 
-export type TriggerKind = 'chat' | 'cron' | 'webhook' | 'file_watch' | 'manual'
+type TriggerKind = 'chat' | 'cron' | 'webhook' | 'file_watch' | 'manual'
 
 export interface Trigger {
   id: string
@@ -100,8 +100,8 @@ export interface Artifact {
 export type CanvasMode = 'design' | 'run'
 export type DrawerTab = 'chat' | 'data' | 'triggers' | 'artifacts'
 
-export type TaskMode = 'now' | 'scheduled'
-export type SessionStatus = 'running' | 'needs_input' | 'done' | 'failed'
+type TaskMode = 'now' | 'scheduled'
+type SessionStatus = 'running' | 'needs_input' | 'done' | 'failed'
 
 export interface PendingAsk {
   toolCallId: string

@@ -20,18 +20,18 @@ import type { AgentSpec } from './team'
 
 export const MAX_CHILD_RESULT_CHARS = 100_000
 export const SUMMARY_MAX_CHARS = 4_000
-export const HEAD_KEEP_CHARS = 500
-export const TAIL_KEEP_CHARS = 200
-export const ARTIFACT_PATH_LIMIT = 32
+const HEAD_KEEP_CHARS = 500
+const TAIL_KEEP_CHARS = 200
+const ARTIFACT_PATH_LIMIT = 32
 
 /** LLM summariser hard wall in ms. Exposed so tests can override. */
-export const LLM_SUMMARY_DEADLINE_MS = 30_000
+const LLM_SUMMARY_DEADLINE_MS = 30_000
 
 // -------- types --------
 
 export type SummaryStrategy = 'heuristic' | 'llm' | 'off'
 
-export interface CapInput {
+interface CapInput {
   raw: string
   node: AgentSpec
   sessionId: string
@@ -42,9 +42,9 @@ export interface CapInput {
   deadlineMs?: number
 }
 
-export type AppliedStrategy = SummaryStrategy | 'passthrough' | 'envelope'
+type AppliedStrategy = SummaryStrategy | 'passthrough' | 'envelope'
 
-export interface CapResult {
+interface CapResult {
   result: string
   truncated: boolean
   originalChars: number
@@ -52,7 +52,7 @@ export interface CapResult {
   artifactPaths: string[]
 }
 
-export interface StructuredEnvelope {
+interface StructuredEnvelope {
   ok?: boolean
   files?: unknown[]
   warnings?: unknown[]
@@ -223,7 +223,7 @@ export function pickSummaryModel(node: AgentSpec): {
   return { providerId: node.provider_id, model: node.model }
 }
 
-export async function llmSummary(
+async function llmSummary(
   input: CapInput,
   paths: string[],
   _envelope: StructuredEnvelope | null,

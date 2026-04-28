@@ -69,7 +69,7 @@ export function buildArtifactUri(sessionId: string, absPath: string): string {
   return `artifact://session/${sessionId}/artifacts/${rel}`
 }
 
-export interface ParsedArtifactUri {
+interface ParsedArtifactUri {
   sessionId: string
   relativePath: string
 }
@@ -84,25 +84,25 @@ export function parseArtifactUri(uri: string): ParsedArtifactUri | null {
 
 // ---------------- Path resolver (security-critical) ----------------
 
-export interface ResolvedArtifact {
+interface ResolvedArtifact {
   absPath: string
   sessionId: string
   relativePath: string
 }
 
-export type ResolveDenyReason =
+type ResolveDenyReason =
   | 'invalid_uri'
   | 'session_mismatch'
   | 'traversal'
   | 'outside_root'
   | 'not_found'
 
-export interface ResolveOpts {
+interface ResolveOpts {
   /** Caller's current session. URI session id must match. */
   callerSessionId: string
 }
 
-export type ResolveResult =
+type ResolveResult =
   | { ok: true; resolved: ResolvedArtifact }
   | { ok: false; reason: ResolveDenyReason }
 
@@ -215,7 +215,7 @@ export function resolveArtifactPath(input: string, opts: ResolveOpts): ResolveRe
 
 // ---------------- Event emitters ----------------
 
-export function emitArtifactRead(
+function emitArtifactRead(
   sessionId: string,
   relPath: string,
   mode: 'meta' | 'text',
@@ -230,7 +230,7 @@ export function emitArtifactRead(
   enqueueEvent(sessionId, `${JSON.stringify(ev)}\n`)
 }
 
-export function emitArtifactReadDenied(
+function emitArtifactReadDenied(
   sessionId: string,
   attemptedPath: string,
   reason: string,

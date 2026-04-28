@@ -16,11 +16,9 @@ import type {
   ToolSpec,
 } from '../providers/types'
 
-export type { StreamDelta, ChatMessage, ToolSpec } from '../providers/types'
-
 /** Extra knobs the engine threads through to provider adapters. Each
  *  provider picks up only the fields it cares about. */
-export interface StreamOpts {
+interface StreamOpts {
   /** Tell caching strategy not to reorder tools — fork children require
    *  byte-identical prefix for Anthropic prompt-cache hit. */
   useExactTools?: boolean

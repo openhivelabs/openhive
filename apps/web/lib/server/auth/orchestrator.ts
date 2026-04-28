@@ -23,13 +23,13 @@ function now(): number {
   return Math.floor(Date.now() / 1000)
 }
 
-export interface StartAuthCode {
+interface StartAuthCode {
   kind: 'auth_code'
   flow_id: string
   auth_url: string
 }
 
-export interface StartDeviceCode {
+interface StartDeviceCode {
   kind: 'device_code'
   flow_id: string
   user_code: string
@@ -39,7 +39,7 @@ export interface StartDeviceCode {
   expires_at: number
 }
 
-export type StartResponse = StartAuthCode | StartDeviceCode
+type StartResponse = StartAuthCode | StartDeviceCode
 
 /** Callback URI per provider. Must match a URI that the provider's
  *  OAuth server whitelists for the shared CLI client_id:
@@ -163,7 +163,7 @@ function decodeJwtClaims(token: string): Record<string, unknown> {
   }
 }
 
-export interface CallbackResult {
+interface CallbackResult {
   ok: boolean
   message: string
 }

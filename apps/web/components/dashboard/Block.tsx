@@ -8,7 +8,7 @@ import { clsx } from 'clsx'
 import { type DragEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { useT } from '@/lib/i18n'
 
-export interface BlockProps {
+interface BlockProps {
   id: string
   title: string
   subtitle?: string

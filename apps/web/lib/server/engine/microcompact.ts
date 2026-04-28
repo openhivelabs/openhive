@@ -36,9 +36,9 @@ export const STALE_AFTER_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 5 * 60_000
 })()
 
-export const MICROCOMPACT_DISABLED = process.env.OPENHIVE_MICROCOMPACT_DISABLED === '1'
+const MICROCOMPACT_DISABLED = process.env.OPENHIVE_MICROCOMPACT_DISABLED === '1'
 
-export const MICROCOMPACT_MIN_CHARS = (() => {
+const MICROCOMPACT_MIN_CHARS = (() => {
   const raw = process.env.OPENHIVE_MICROCOMPACT_MIN_CHARS
   const n = raw ? Number.parseInt(raw, 10) : Number.NaN
   return Number.isFinite(n) && n >= 0 ? n : 200
@@ -47,7 +47,7 @@ export const MICROCOMPACT_MIN_CHARS = (() => {
 /** Read-only built-in tools safe to clear. `read_artifact` is included
  *  (A3) — its output is a snapshot of a session-local file; if the LLM
  *  needs the content again it can just call the tool again. */
-export const COMPACTABLE_BUILTIN = new Set<string>([
+const COMPACTABLE_BUILTIN = new Set<string>([
   // Typed skills (kebab-case): read-only networked calls whose bodies bloat
   // history; safe to compact because the skill re-runs cheaply with cache.
   'web-fetch',
@@ -59,7 +59,7 @@ export const COMPACTABLE_BUILTIN = new Set<string>([
 ])
 
 /** Trajectory-encoding / audit-critical tools. Never compact. */
-export const NEVER_COMPACT = new Set<string>([
+const NEVER_COMPACT = new Set<string>([
   'delegate_to',
   'delegate_parallel',
   'ask_user',
@@ -83,13 +83,13 @@ export function isCompactable(name: string): boolean {
 
 const CLEARED_PREFIX = '[Old tool result cleared'
 
-export interface MicrocompactEntry {
+interface MicrocompactEntry {
   tool_name: string
   tool_call_id: string
   original_chars: number
 }
 
-export interface MicrocompactResult {
+interface MicrocompactResult {
   applied: number
   charsSaved: number
   entries: MicrocompactEntry[]

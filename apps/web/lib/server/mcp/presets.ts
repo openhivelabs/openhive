@@ -15,7 +15,7 @@ import type { ServerConfig } from './config'
 
 const PLACEHOLDER = /\{\{(\w+)\}\}/g
 
-export interface PresetInput {
+interface PresetInput {
   key: string
   label: string
   type: string
@@ -24,7 +24,7 @@ export interface PresetInput {
   required: boolean
 }
 
-export interface Preset {
+interface Preset {
   id: string
   name: string
   icon: string

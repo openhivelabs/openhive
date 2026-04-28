@@ -60,7 +60,7 @@ function state(): ManagerState {
  * the public surface. No subprocesses are spawned until `getTools()` /
  * `callTool()` is invoked on a configured server.
  */
-export interface McpManager {
+interface McpManager {
   getTools: typeof getTools
   callTool: typeof callTool
   restart: typeof restart
@@ -367,12 +367,12 @@ export async function restart(name: string): Promise<void> {
   state().procs.delete(name)
 }
 
-export async function shutdownAll(): Promise<void> {
+async function shutdownAll(): Promise<void> {
   const names = [...state().procs.keys()]
   await Promise.allSettled(names.map(restart))
 }
 
-export interface StatusSnapshot {
+interface StatusSnapshot {
   running: boolean
   last_error: string | null
   tool_count: number | null

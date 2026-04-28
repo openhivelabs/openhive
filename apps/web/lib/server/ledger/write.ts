@@ -15,7 +15,7 @@ import type { AgentSpec, TeamSpec } from '../engine/team'
 import { isLedgerDisabled, ledgerDir, withLedgerDb } from './db'
 import { ulid } from './ulid'
 
-export interface WriteLedgerOpts {
+interface WriteLedgerOpts {
   sessionId: string
   team: TeamSpec
   target: AgentSpec
@@ -155,7 +155,7 @@ export async function maybeWriteLedger(opts: WriteLedgerOpts): Promise<void> {
  * Interface preserved so future S4 follow-up can wire it without touching
  * the write path.
  */
-export async function llmSummary(_opts: {
+async function llmSummary(_opts: {
   output: string
   task: string
   team: TeamSpec

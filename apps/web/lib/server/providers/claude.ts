@@ -197,7 +197,7 @@ function splitSystem(
  * combine step ensures byte-identical prefix across siblings. For the non-fork
  * path this is a no-op (no adjacent user messages are produced).
  */
-export function mergeAdjacentUsers(out: AnthropicMessage[]): AnthropicMessage[] {
+function mergeAdjacentUsers(out: AnthropicMessage[]): AnthropicMessage[] {
   const merged: AnthropicMessage[] = []
   for (const m of out) {
     const prev = merged[merged.length - 1]
@@ -245,7 +245,7 @@ async function* sseEvents(
   }
 }
 
-export interface StreamOpts {
+interface StreamOpts {
   model: string
   messages: ChatMessage[]
   tools?: ToolSpec[]
@@ -346,4 +346,4 @@ export async function* streamMessages(
 }
 
 /** For engine typing — re-exports the OpenAI-shaped ToolCall type. */
-export type { ToolCall }
+

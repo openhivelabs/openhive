@@ -1,4 +1,4 @@
-export type PanelType =
+type PanelType =
   | 'kpi'
   | 'table'
   | 'kanban'
@@ -20,9 +20,9 @@ export type PanelType =
  *   - file:       { path }                      (relative to team data dir)
  *   - static:     { value }                     (literal data, useful for AI builder previews)
  */
-export type SourceKind = 'mcp' | 'team_data' | 'http' | 'file' | 'static'
+type SourceKind = 'mcp' | 'team_data' | 'http' | 'file' | 'static'
 
-export interface PanelSource {
+interface PanelSource {
   kind: SourceKind
   config: Record<string, unknown>
   /** Credential vault reference. Resolved server-side at fetch time to inject
@@ -34,7 +34,7 @@ export interface PanelSource {
 
 /** Inputs for an action form — typed palette kept small on purpose so that
  *  AI-generated forms stay predictable and the renderer is one file. */
-export type FormFieldType =
+type FormFieldType =
   | 'text'
   | 'textarea'
   | 'number'
@@ -59,18 +59,18 @@ export interface FormField {
   max?: number
 }
 
-export interface FormSchema {
+interface FormSchema {
   fields: FormField[]
 }
 
 /** Where an action lives on the panel UI. */
-export type ActionPlacement = 'toolbar' | 'row' | 'inline' | 'drag'
+type ActionPlacement = 'toolbar' | 'row' | 'inline' | 'drag'
 
 /** What an action does when executed. Matches the source kinds except `static`
  *  and adds `file` for note-style writes. */
-export type ActionTargetKind = 'team_data' | 'mcp' | 'http_recipe' | 'http_raw' | 'file'
+type ActionTargetKind = 'team_data' | 'mcp' | 'http_recipe' | 'http_raw' | 'file'
 
-export interface ActionTarget {
+interface ActionTarget {
   kind: ActionTargetKind
   /** Kind-specific fields:
    *   - team_data: { sql: string } — parameterized with :name bindings
@@ -104,7 +104,7 @@ export interface PanelAction {
  *  are dotted paths into each row. The mapper interprets these — no AI-generated
  *  code execution.
  */
-export interface PanelMap {
+interface PanelMap {
   rows?: string
   group_by?: string
   title?: string
@@ -131,7 +131,7 @@ export interface PanelMap {
   cells?: MetricGridCellSpec[]
 }
 
-export interface MetricGridCellSpec {
+interface MetricGridCellSpec {
   label: string
   aggregate?: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'first'
   field?: string
@@ -259,23 +259,3 @@ export async function deleteMemoNote(
   if (!res.ok) throw new Error(`DELETE memo ${res.status}`)
 }
 
-export interface DashboardBackup {
-  name: string
-  saved_at: number
-}
-
-export async function fetchDashboardBackups(teamId: string): Promise<DashboardBackup[]> {
-  const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}/dashboard/backups`)
-  if (!res.ok) throw new Error(`GET backups ${res.status}`)
-  const data = (await res.json()) as { backups: DashboardBackup[] }
-  return data.backups
-}
-
-export async function restoreDashboardBackup(teamId: string, name: string): Promise<void> {
-  const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}/dashboard/restore`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  })
-  if (!res.ok) throw new Error(`POST restore ${res.status}`)
-}

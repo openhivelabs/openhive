@@ -21,9 +21,9 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const HTTP_MAX_BYTES = 2 * 1024 * 1024
 const SELECT_RE = /^\s*(SELECT|WITH)\b/i
 
-export class SourceError extends Error {}
+class SourceError extends Error {}
 
-export interface SourceSpec {
+interface SourceSpec {
   kind: string
   config?: Record<string, unknown>
   /** Optional credentials vault reference. Resolved here server-side so the
@@ -459,7 +459,7 @@ function parseMarkdown(text: string): { frontmatter: Record<string, string>; bod
 }
 
 /** List files under this team's `files/` directory. Used by the catalog. */
-export function listTeamFiles(companySlug: string, teamSlug: string): string[] {
+function listTeamFiles(companySlug: string, teamSlug: string): string[] {
   const base = path.resolve(teamDir(companySlug, teamSlug), 'files')
   if (!fs.existsSync(base)) return []
   const out: string[] = []

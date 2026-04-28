@@ -5,4 +5,3 @@
  * still resolve through here.
  */
 export { buildSystemPrompt } from './prompts'
-export { COMMON_PROMPT as AI_BUILDER_SYSTEM_PROMPT } from './prompts/common'

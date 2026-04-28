@@ -23,7 +23,7 @@ export type SettingsSection =
   | 'data'
   | 'about'
 
-export const SETTINGS_SECTIONS: {
+const SETTINGS_SECTIONS: {
   id: SettingsSection
   icon: ComponentType<{ className?: string }>
 }[] = [

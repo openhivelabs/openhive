@@ -38,7 +38,7 @@ const ACCENTS: Accent[] = [
   'graphite',
 ]
 
-export interface DefaultModel {
+interface DefaultModel {
   providerId: string
   model: string
 }

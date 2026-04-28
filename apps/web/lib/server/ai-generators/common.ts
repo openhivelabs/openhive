@@ -17,7 +17,7 @@ export function rid(prefix: string): string {
   return `${prefix}-${crypto.randomBytes(3).toString('hex')}`
 }
 
-export function slugify(name: string): string {
+function slugify(name: string): string {
   const s = name
     .trim()
     .toLowerCase()

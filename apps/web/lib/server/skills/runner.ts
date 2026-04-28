@@ -20,17 +20,17 @@ import { type SkillSlotHooks, acquireSkillSlot } from './concurrency'
 import { MAX_READABLE_FILE_BYTES, type SkillDef, resolveWithinSkill } from './loader'
 import which from './which'
 
-export const DEFAULT_TIMEOUT_MS = 120_000
-export const STDOUT_CAP_BYTES = 8 * 1024
+const DEFAULT_TIMEOUT_MS = 120_000
+const STDOUT_CAP_BYTES = 8 * 1024
 
-export interface GeneratedFile {
+interface GeneratedFile {
   name: string
   path: string
   mime: string
   size: number
 }
 
-export interface SkillResult {
+interface SkillResult {
   ok: boolean
   stdout: string
   stderr: string
@@ -46,7 +46,7 @@ export interface SkillResult {
   structured?: StructuredEnvelope
 }
 
-export interface StructuredEnvelope {
+interface StructuredEnvelope {
   ok: boolean
   // success path
   files?: Array<{ name?: string; path?: string; mime?: string }>

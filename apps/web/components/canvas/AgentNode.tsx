@@ -4,7 +4,7 @@ import { Crown, User } from '@phosphor-icons/react'
 import type { ComponentType } from 'react'
 import { TEAM_ICONS } from '../shell/TeamIcon'
 
-export type AgentNodeData = {
+type AgentNodeData = {
   role: string
   label: string
   model?: string

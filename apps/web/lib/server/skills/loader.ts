@@ -18,12 +18,12 @@ import path from 'node:path'
 import yaml from 'js-yaml'
 import { packagesRoot, skillsRoot } from '../paths'
 
-export const MAX_LISTED_FILES = 60
+const MAX_LISTED_FILES = 60
 export const MAX_READABLE_FILE_BYTES = 256 * 1024
 
-export type SkillKind = 'agent' | 'typed'
+type SkillKind = 'agent' | 'typed'
 
-export interface SkillTriggers {
+interface SkillTriggers {
   /** Case-insensitive substring matches against the user's task text. */
   keywords?: string[]
   /** Regex sources; matched with `i` flag. Invalid patterns are ignored. */
@@ -273,7 +273,7 @@ const globalForCache = globalThis as unknown as {
 
 const LIST_CACHE_TTL_MS = 5_000
 
-export function listSkills(): Map<string, SkillDef> {
+function listSkills(): Map<string, SkillDef> {
   const now = Date.now()
   const hit = globalForCache.__openhive_skill_cache
   if (hit && hit.expiresAt > now) return hit.skills
@@ -288,7 +288,7 @@ export function listSkills(): Map<string, SkillDef> {
   return bundled
 }
 
-export function invalidateSkillCache(): void {
+function invalidateSkillCache(): void {
   globalForCache.__openhive_skill_cache = null
 }
 

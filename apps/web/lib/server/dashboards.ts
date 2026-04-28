@@ -125,7 +125,7 @@ export function saveDashboard(
   }
 }
 
-export interface DashboardBackup {
+interface DashboardBackup {
   name: string
   saved_at: number
 }

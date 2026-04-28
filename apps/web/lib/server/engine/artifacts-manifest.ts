@@ -76,7 +76,7 @@ export function toManifestEntry(
  * (sorted by record.created_at) so downstream consumers always see the
  * same shape regardless of how the sub-agent wrote the path.
  */
-export function filterRealArtifactPaths(
+function filterRealArtifactPaths(
   sessionId: string,
   candidates: string[] | undefined,
 ): string[] {

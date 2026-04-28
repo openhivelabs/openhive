@@ -93,7 +93,7 @@ function opGroupsForKind(kind: ColKind, t: (k: string) => string): OpGroup[] {
   return groups
 }
 
-export interface RecordsSearchBarProps {
+interface RecordsSearchBarProps {
   columns: string[]
   colKinds: Record<string, ColKind>
   filters: FilterRule[]

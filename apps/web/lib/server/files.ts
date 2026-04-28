@@ -8,7 +8,7 @@ import path from 'node:path'
 import { teamDir } from './paths'
 import { resolveTeamSlugs } from './companies'
 
-export interface FileEntry {
+interface FileEntry {
   name: string
   type: 'dir' | 'file'
   size: number
@@ -25,7 +25,7 @@ export class FilesError extends Error {
   }
 }
 
-export function teamRoot(teamId: string): string {
+function teamRoot(teamId: string): string {
   const resolved = resolveTeamSlugs(teamId)
   if (!resolved) throw new FilesError(404, `team not found: ${teamId}`)
   return teamDir(resolved.companySlug, resolved.teamSlug)
@@ -57,7 +57,7 @@ function toEntry(abs: string, root: string): FileEntry {
   }
 }
 
-export interface ListResult {
+interface ListResult {
   path: string
   entries: FileEntry[]
 }
@@ -87,7 +87,7 @@ export function listFiles(teamId: string, rel: string): ListResult {
   }
 }
 
-export interface ReadResult {
+interface ReadResult {
   path: string
   size: number
   content: string | null

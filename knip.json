@@ -1,0 +1,28 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/release.mjs", "scripts/hellish-install-test.mjs"],
+      "project": ["scripts/**/*.{mjs,ts}"]
+    },
+    "apps/web": {
+      "entry": [
+        "bin/openhiveai.mjs",
+        "server/index.ts",
+        "src/main.tsx",
+        "instrumentation-node.ts",
+        "scripts/ledger-backfill.ts",
+        "scripts/migrate-team-db-to-company.ts",
+        "scripts/seed-dev-data.ts",
+        "scripts/seed-supabase-kanban.ts",
+        "scripts/probe-native-events.ts",
+        "scripts/probe-native-via-provider.ts",
+        "scripts/probe-native-web-search.ts",
+        "vite.config.ts",
+        "postcss.config.mjs"
+      ],
+      "project": ["**/*.{ts,tsx,mjs,js}"],
+      "ignore": ["dist/**", "dist-server/**", "packages-dist/**", "public/**"]
+    }
+  }
+}

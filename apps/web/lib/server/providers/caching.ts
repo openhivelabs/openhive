@@ -30,12 +30,12 @@ type AnthropicBlock =
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; tool_use_id: string; content: string }
 
-export interface AnthropicMessage {
+interface AnthropicMessage {
   role: string
   content: string | AnthropicBlock[]
 }
 
-export interface AnthropicRequest {
+interface AnthropicRequest {
   system: string | null
   messages: AnthropicMessage[]
   tools: ToolSpec[] | null
@@ -46,7 +46,7 @@ export interface AnthropicRequest {
   useExactTools?: boolean
 }
 
-export interface AnthropicPayload {
+interface AnthropicPayload {
   model: string
   messages: AnthropicMessage[]
   max_tokens: number
@@ -120,14 +120,14 @@ export class AnthropicCachingStrategy
 
 // ---------- Codex ----------
 
-export interface CodexRequest {
+interface CodexRequest {
   instructions: string
   input: unknown[]
   tools: unknown[] | null
   model: string
 }
 
-export interface CodexPayload {
+interface CodexPayload {
   model: string
   input: unknown[]
   instructions: string
@@ -175,14 +175,14 @@ export class CodexCachingStrategy
 
 // ---------- Noop (Copilot) ----------
 
-export interface CopilotRequest {
+interface CopilotRequest {
   model: string
   messages: ChatMessage[]
   tools: ToolSpec[] | null
   temperature: number
 }
 
-export interface CopilotPayload {
+interface CopilotPayload {
   model: string
   messages: ChatMessage[]
   temperature: number

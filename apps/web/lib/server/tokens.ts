@@ -11,7 +11,7 @@ import path from 'node:path'
 import { dataDir } from './paths'
 import { decrypt, encrypt } from './crypto'
 
-export interface TokenRecord {
+interface TokenRecord {
   provider_id: string
   access_token: string
   refresh_token: string | null

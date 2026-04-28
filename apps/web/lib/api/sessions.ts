@@ -1,6 +1,6 @@
 import type { Team } from '@/lib/types'
 
-export type EventKind =
+type EventKind =
   | 'run_started'
   | 'run_finished'
   | 'run_error'
@@ -18,7 +18,7 @@ export type EventKind =
   | 'user_message'
   | 'user_message_queued'
 
-export interface AskUserOption {
+interface AskUserOption {
   label: string
   description: string
 }
@@ -132,8 +132,7 @@ export async function* attachSession(
   })
   yield* readSseStream(res)
 }
-
-export async function* streamSession(
+async function* streamSession(
   team: Team,
   goal: string,
   options?: { locale?: string; signal?: AbortSignal },

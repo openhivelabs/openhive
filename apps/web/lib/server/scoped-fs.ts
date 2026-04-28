@@ -28,7 +28,7 @@ export class ScopeViolationError extends Error {
   }
 }
 
-export interface WriteScope {
+interface WriteScope {
   /** Absolute directory. All writes must resolve inside this prefix. */
   readonly base: string
   /** Optional allowlist regex applied to the normalised relative path. */
@@ -49,7 +49,7 @@ function normalizeRel(rel: string): string {
 }
 
 /** Resolve `rel` inside `scope` or throw. Does not create anything. */
-export function scopedResolve(scope: WriteScope, rel: string): string {
+function scopedResolve(scope: WriteScope, rel: string): string {
   let unified: string
   try {
     unified = normalizeRel(rel)
@@ -69,7 +69,7 @@ export function scopedResolve(scope: WriteScope, rel: string): string {
 }
 
 /** Write `bytes` at `scope/rel`. Creates parent dirs. Throws on scope escape. */
-export function scopedWrite(scope: WriteScope, rel: string, bytes: string | Buffer): string {
+function scopedWrite(scope: WriteScope, rel: string, bytes: string | Buffer): string {
   const dst = scopedResolve(scope, rel)
   fs.mkdirSync(path.dirname(dst), { recursive: true })
   fs.writeFileSync(dst, bytes)

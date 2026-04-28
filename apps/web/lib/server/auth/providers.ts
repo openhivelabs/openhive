@@ -3,9 +3,9 @@
  * Static metadata — flow implementations live in ./claude, ./codex, ./copilot.
  */
 
-export type FlowKind = 'auth_code' | 'device_code' | 'api_key'
+type FlowKind = 'auth_code' | 'device_code' | 'api_key'
 
-export interface ProviderDef {
+interface ProviderDef {
   id: string
   label: string
   kind: FlowKind

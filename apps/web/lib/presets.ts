@@ -6,7 +6,7 @@ function slug(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
 
-export interface PresetDef {
+interface PresetDef {
   id: string
   name: string
   tagline: string
@@ -254,7 +254,7 @@ export const PRESETS: PresetDef[] = [
  * For now it returns the R&D template for anything mentioning research/r&d, and Report
  * Team otherwise.
  */
-export function buildTeamFromNaturalLanguage(prompt: string): Team {
+function buildTeamFromNaturalLanguage(prompt: string): Team {
   const p = prompt.toLowerCase()
   if (p.includes('r&d') || p.includes('research') || p.includes('semiconductor')) {
     const t = buildRndTeam()

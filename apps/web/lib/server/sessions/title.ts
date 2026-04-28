@@ -11,7 +11,7 @@
 
 import { chatCompletion } from '../providers/copilot'
 
-export type TitleLocale = 'en' | 'ko'
+type TitleLocale = 'en' | 'ko'
 
 const TIMEOUT_MS = 10_000
 const MAX_WORDS = 10
@@ -46,7 +46,7 @@ async function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T | nul
   ])
 }
 
-export interface GenerateTitleDeps {
+interface GenerateTitleDeps {
   /** Injectable for tests — defaults to the Copilot gpt-5-mini chat completion. */
   complete?: (goal: string, locale: TitleLocale) => Promise<string>
   timeoutMs?: number

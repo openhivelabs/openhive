@@ -40,7 +40,7 @@ async function* sseEvents(
   }
 }
 
-export interface StreamOpts {
+interface StreamOpts {
   model: string
   messages: ChatMessage[]
   tools?: ToolSpec[]

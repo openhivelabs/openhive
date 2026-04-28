@@ -394,6 +394,6 @@ function teamChatPathByTeamId(teamId: string): string | null {
 /** Generate a random-but-stable new session id. Engine uses this via
  *  session-registry at the top of runTeam; we export it here so the legacy
  *  migration can also mint ids for rows that somehow lacked one. */
-export function newSessionId(): string {
+function newSessionId(): string {
   return `session_${crypto.randomBytes(6).toString('hex')}`
 }

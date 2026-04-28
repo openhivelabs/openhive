@@ -8,14 +8,14 @@
  *   4. GET /user to resolve the account label
  */
 
-export const CLIENT_ID = 'Iv1.b507a08c87ecfe98'
+const CLIENT_ID = 'Iv1.b507a08c87ecfe98'
 const DEVICE_CODE_URL = 'https://github.com/login/device/code'
 const TOKEN_URL = 'https://github.com/login/oauth/access_token'
 const USER_URL = 'https://api.github.com/user'
 const SCOPES = 'read:user'
 const USER_AGENT = 'GitHubCopilotChat/0.26.7'
 
-export interface DeviceCodeResponse {
+interface DeviceCodeResponse {
   device_code: string
   user_code: string
   verification_uri: string

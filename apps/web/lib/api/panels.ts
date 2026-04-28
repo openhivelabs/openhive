@@ -25,7 +25,7 @@ export async function refreshPanel(blockId: string): Promise<PanelCacheRow> {
   )
 }
 
-export interface PreviewResult {
+interface PreviewResult {
   ok: boolean
   data?: unknown
   error?: string
@@ -45,7 +45,7 @@ export async function previewBinding(
   )
 }
 
-export interface RebindResult {
+interface RebindResult {
   binding: Record<string, unknown>
   panel_type: string
   data: unknown
@@ -66,7 +66,7 @@ export async function rebindPanel(input: {
   )
 }
 
-export interface ActionResult {
+interface ActionResult {
   ok: boolean
   result?: unknown
   rows_changed?: number
@@ -113,7 +113,7 @@ export async function executePanelAction(
 
 /** Open an EventSource on the SSE stream for live block updates.
  *  Returns a cleanup function. */
-export function streamPanel(
+function streamPanel(
   blockId: string,
   onRow: (row: PanelCacheRow) => void,
   onError?: (e: Event) => void,

@@ -11,7 +11,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { dataDir } from '../paths'
 
-export interface CacheRow {
+interface CacheRow {
   panel_id: string
   team_id: string
   data: unknown
@@ -112,7 +112,7 @@ export function deleteCache(panelId: string): void {
   if (fs.existsSync(p)) { try { fs.unlinkSync(p) } catch { /* ignore */ } }
 }
 
-export function deleteForTeam(teamId: string): void {
+function deleteForTeam(teamId: string): void {
   const root = cacheRoot()
   for (const entry of fs.readdirSync(root)) {
     if (!entry.endsWith('.json')) continue

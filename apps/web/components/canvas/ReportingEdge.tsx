@@ -11,7 +11,7 @@ import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { useCanvasStore } from '@/lib/stores/useCanvasStore'
 
-export type ReportingEdgeData = { isActive?: boolean }
+type ReportingEdgeData = { isActive?: boolean }
 export type ReportingFlowEdge = Edge<ReportingEdgeData, 'reporting'>
 
 export function ReportingEdge(props: EdgeProps<ReportingFlowEdge>) {

@@ -53,14 +53,14 @@ export interface TurnSnapshot {
 }
 
 /** Six-gate decision: one false → fresh path + `fork.skipped` event. */
-export type ForkSkipReason =
+type ForkSkipReason =
   | 'env_disabled'
   | 'non_claude'
   | 'provider_mismatch'
   | 'no_snapshot'
   | 'recursive'
 
-export interface ForkDecision {
+interface ForkDecision {
   fork: boolean
   reason?: ForkSkipReason
   snapshot?: TurnSnapshot

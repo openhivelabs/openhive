@@ -25,7 +25,7 @@ export interface TreeNode {
   children: TreeNode[]
 }
 
-export interface PersonaFileTreeLabels {
+interface PersonaFileTreeLabels {
   addFile: string
   addFolder: string
   delete: string

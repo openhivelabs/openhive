@@ -23,8 +23,7 @@ function make(): LimitFunction {
     Number.isFinite(parsed) && parsed > 0 ? parsed : Math.max(2, Math.min(os.cpus().length, 4))
   return pLimit(n)
 }
-
-export function skillLimiter(): LimitFunction {
+function skillLimiter(): LimitFunction {
   const g = globalThis as G
   if (!g[GLOBAL_KEY]) g[GLOBAL_KEY] = make()
   return g[GLOBAL_KEY] as LimitFunction

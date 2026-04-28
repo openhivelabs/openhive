@@ -45,7 +45,7 @@ export function companyDbPath(companySlug: string): string {
  * @deprecated Kept only for the one-shot team→company DB migration. Runtime
  * code must use {@link companyDbPath}.
  */
-export function teamDbPath(companySlug: string, teamSlug: string): string {
+function teamDbPath(companySlug: string, teamSlug: string): string {
   const envRoot = process.env.OPENHIVE_DATA_DIR
   const dir = envRoot
     ? path.join(envRoot, 'companies', companySlug, 'teams', teamSlug)
@@ -120,7 +120,7 @@ function openCompanyDb(companySlug: string): BetterSqliteDatabase {
 
 /** Test helper: drop the pool so OPENHIVE_DATA_DIR rotations between cases
  *  re-open against the new directory. */
-export function __resetCompanyDbPoolForTests(): void {
+function __resetCompanyDbPoolForTests(): void {
   const g = globalThis as unknown as { [COMPANY_DB_POOL_KEY]?: CompanyPool }
   for (const conn of g[COMPANY_DB_POOL_KEY]?.values() ?? []) {
     try {
@@ -177,7 +177,7 @@ export interface TableInfo {
   row_count: number
 }
 
-export interface MigrationRow {
+interface MigrationRow {
   id: number
   applied_at: number
   source: string
@@ -186,7 +186,7 @@ export interface MigrationRow {
   team_id: string | null
 }
 
-export interface SchemaDescription {
+interface SchemaDescription {
   tables: TableInfo[]
   recent_migrations: MigrationRow[]
 }
@@ -198,7 +198,7 @@ export interface SchemaDescription {
  * scoped to that team (so the AI doesn't leak rows from peer teams into
  * its few-shot examples). Without `teamId`, returns the company-wide view.
  */
-export function describeTable(
+function describeTable(
   companySlug: string,
   tableName: string,
   opts: { teamId?: string; sampleLimit?: number } = {},
@@ -382,7 +382,7 @@ const DDL_RE = /^\s*(CREATE|ALTER|DROP|TRUNCATE|RENAME)\b/i
  * literals).
  */
 /** Strip SQL line and block comments; return the remaining text. */
-export function stripSqlComments(sql: string): string {
+function stripSqlComments(sql: string): string {
   let out = ''
   let i = 0
   let inSingle = false
@@ -492,14 +492,14 @@ export function hasMultipleStatements(sql: string): boolean {
   return false
 }
 
-export interface QueryResult {
+interface QueryResult {
   columns: string[]
   rows: Record<string, unknown>[]
 }
 
 export type SqlParam = string | number | bigint | null | Uint8Array
 
-export interface RunQueryOptions {
+interface RunQueryOptions {
   /** Either a positional array (bound as `?1..?N`) or a named map (`:name`
    *  in SQL). When `teamId` is set alongside a named map, the map is
    *  augmented with `team_id`. Positional arrays don't get auto-binding —
@@ -643,13 +643,13 @@ export function runQuery(
   })
 }
 
-export interface ExecResult {
+interface ExecResult {
   ok: true
   rows_changed: number
   ddl: boolean
 }
 
-export interface RunExecOptions {
+interface RunExecOptions {
   source?: string
   note?: string | null
   params?: Record<string, SqlParam> | SqlParam[]
@@ -702,7 +702,7 @@ function templatesRoot(): string {
   return process.env.OPENHIVE_TEMPLATES_DIR ?? path.join(packagesRoot(), 'templates')
 }
 
-export interface InstallTemplateResult {
+interface InstallTemplateResult {
   ok: true
   template: string
   tables_created: string[]

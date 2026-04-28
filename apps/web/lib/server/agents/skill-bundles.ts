@@ -23,16 +23,16 @@
  */
 
 /** A research worker should always be able to search AND fetch. Coupled below. */
-export const RESEARCH_BUNDLE = ['web-search', 'web-fetch'] as const
+const RESEARCH_BUNDLE = ['web-search', 'web-fetch'] as const
 
 /** Document-authoring fileformats. */
-export const DOC_AUTHORING_BUNDLE = ['pdf', 'docx', 'pptx', 'text-file'] as const
+const DOC_AUTHORING_BUNDLE = ['pdf', 'docx', 'pptx', 'text-file'] as const
 
 /** Visual asset generation. */
-export const MEDIA_BUNDLE = ['image-gen'] as const
+const MEDIA_BUNDLE = ['image-gen'] as const
 
 /** Plain text only — for agents that just need to drop a note on disk. */
-export const BASIC_FILES_BUNDLE = ['text-file'] as const
+const BASIC_FILES_BUNDLE = ['text-file'] as const
 
 /**
  * Coupled-skill groups. If ANY skill in a group is present after union, ALL
@@ -115,7 +115,7 @@ function applyCoupling(skills: string[]): string[] {
   return out
 }
 
-export interface ResolveSkillsOpts {
+interface ResolveSkillsOpts {
   role: string
   /** Skills declared on the team-yaml node (`AgentSpec.skills`). */
   nodeSkills?: readonly string[] | null

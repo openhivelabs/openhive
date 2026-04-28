@@ -51,7 +51,7 @@ import { dropQueueAfterDrain, enqueueEvent, flushSession } from './sessions/even
  *                   "your previous run was interrupted — continue?" instead
  *                   of silently pretending nothing happened.
  *    error        = errored out in a way we don't auto-recover from. */
-export type SessionStatus = 'pending' | 'running' | 'needs_input' | 'idle' | 'abandoned' | 'error'
+type SessionStatus = 'pending' | 'running' | 'needs_input' | 'idle' | 'abandoned' | 'error'
 
 /** Structured reason an abandoned session was classified as such. Persisted
  *  alongside `meta.status='abandoned'` so the UI can surface a precise
@@ -68,7 +68,7 @@ export type SessionStatus = 'pending' | 'running' | 'needs_input' | 'idle' | 'ab
  *                              we have no heartbeat to confirm liveness.
  *                              Conservative fallback for legacy sessions
  *                              that predate the heartbeat field. */
-export interface AbandonedReason {
+interface AbandonedReason {
   kind:
     | 'process_killed_mid_run'
     | 'graceful_shutdown_during_turn'
@@ -91,7 +91,7 @@ export interface AbandonedReason {
 /** Structured error detail. `meta.error` (string) is kept for backward
  *  compatibility with existing readers; `error_detail` carries the richer
  *  classification. */
-export interface ErrorDetail {
+interface ErrorDetail {
   kind: string
   message: string
   ts: number
@@ -176,8 +176,8 @@ function normalizeStatus(raw: unknown): SessionStatus {
 
 /** Row shape returned by listing queries — same fields as meta plus any future
  *  columns. Kept as a separate alias for call-sites migrating off the SQL version. */
-export type SessionRow = SessionMeta
-export type SessionListRow = SessionMeta
+type SessionRow = SessionMeta
+type SessionListRow = SessionMeta
 
 export interface StoredEventRow {
   seq: number
@@ -190,7 +190,7 @@ export interface StoredEventRow {
   data: Record<string, unknown>
 }
 
-export interface AppendEventInput {
+interface AppendEventInput {
   sessionId: string
   seq: number
   ts: number
@@ -236,7 +236,7 @@ export function artifactDirForSession(sessionId: string): string {
  *  (not registered in artifacts.json, not included in the <session-artifacts>
  *  manifest, not returned by listForSession). Per-node subdirectory keeps
  *  sibling workers from trampling each other's scratch files. */
-export function sessionScratchDir(sessionId: string): string {
+function sessionScratchDir(sessionId: string): string {
   return path.join(sessionDir(sessionId), 'scratch')
 }
 export function scratchDirForNode(sessionId: string, nodeId: string): string {
@@ -571,7 +571,7 @@ export function listSessions(limit = 100): SessionMeta[] {
   return metas.slice(0, limit)
 }
 
-export function listForTeam(teamId: string, limit = 50): SessionRow[] {
+function listForTeam(teamId: string, limit = 50): SessionRow[] {
   return readAllMeta()
     .filter((m) => m.team_id === teamId)
     .sort((a, b) => b.started_at - a.started_at)
@@ -627,7 +627,7 @@ export function listSessionsFor(opts: {
 const TERMINAL_EVENT_KINDS = new Set(['run_finished', 'turn_finished', 'run_error'])
 
 /** Boot-time reconciliation result for one session. */
-export interface ReconcileResult {
+interface ReconcileResult {
   sessionId: string
   previousStatus: SessionStatus
   newStatus: SessionStatus
@@ -838,7 +838,7 @@ export async function reconcileSessionsOnBoot(
  *  shim for any in-tree caller that hasn't been updated yet — returns the
  *  count of reclassified sessions. New code MUST call
  *  `reconcileSessionsOnBoot()` directly to get structured results. */
-export async function markOrphanedSessionsIdle(): Promise<number> {
+async function markOrphanedSessionsIdle(): Promise<number> {
   const r = await reconcileSessionsOnBoot()
   return r.length
 }
@@ -920,7 +920,7 @@ export function backfillTranscripts(): number {
 
 /** Shape rendered by `SourceCard` in the chat UI. Kept flat + JSON-serialisable
  *  because it travels through the transcript → SessionSummary → client. */
-export interface TranscriptSource {
+interface TranscriptSource {
   title: string
   url: string
   domain: string

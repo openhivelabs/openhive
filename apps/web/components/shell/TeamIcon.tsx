@@ -48,7 +48,7 @@ export const TEAM_ICONS: Record<string, PhosphorIcon> = {
 
 export const DEFAULT_TEAM_ICON_KEY = 'users'
 
-export function resolveTeamIcon(name?: string): PhosphorIcon {
+function resolveTeamIcon(name?: string): PhosphorIcon {
   if (!name) return Users
   return TEAM_ICONS[name] ?? Users
 }

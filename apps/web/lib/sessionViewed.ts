@@ -2,7 +2,7 @@
  *  RunDetailPage (chat) agree on what's been read. Back-end has no viewed flag
  *  yet; this is UI-only. */
 
-export const LS_VIEWED_KEY = 'openhive.sessions.viewed'
+const LS_VIEWED_KEY = 'openhive.sessions.viewed'
 
 export function loadViewedIds(): Set<string> {
   try {

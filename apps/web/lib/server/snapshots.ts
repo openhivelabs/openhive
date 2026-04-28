@@ -35,7 +35,7 @@ export function createSnapshot(
   return result
 }
 
-export interface RestoreResult extends Record<string, boolean> {
+interface RestoreResult extends Record<string, boolean> {
   ok: boolean
 }
 

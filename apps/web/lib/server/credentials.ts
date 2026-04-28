@@ -32,9 +32,9 @@ import { decrypt, encrypt } from './crypto'
 import { dataDir } from './paths'
 import { loadToken } from './tokens'
 
-export type CredentialKind = 'api_key' | 'oauth'
+type CredentialKind = 'api_key' | 'oauth'
 
-export interface CredentialMeta {
+interface CredentialMeta {
   ref_id: string
   kind: CredentialKind
   provider?: string
@@ -127,7 +127,7 @@ export function getCredentialValue(refId: string): string | null {
   return null
 }
 
-export interface AddApiKeyInput {
+interface AddApiKeyInput {
   ref_id: string
   value: string
   label?: string
@@ -166,7 +166,7 @@ export function deleteCredential(refId: string): boolean {
  * it via `auth_ref`. No value is stored here — the actual tokens stay in
  * `oauth.enc.json`. This is just an index entry.
  */
-export function registerOauthRef(refId: string, provider: string, label?: string): CredentialMeta {
+function registerOauthRef(refId: string, provider: string, label?: string): CredentialMeta {
   const vault = readVault()
   const entry: StoredEntry = {
     ref_id: refId,

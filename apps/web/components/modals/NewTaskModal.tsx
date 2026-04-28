@@ -6,7 +6,7 @@ import { useT } from '@/lib/i18n'
 import type { TaskReference } from '@/lib/types'
 import { readAsReference } from './referenceUpload'
 
-export type CreateMode = 'draft' | 'scheduled'
+type CreateMode = 'draft' | 'scheduled'
 
 export interface CreateTaskInput {
   title: string

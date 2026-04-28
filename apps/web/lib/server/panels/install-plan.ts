@@ -15,9 +15,9 @@
 
 import { describeSchema, type TableInfo } from '../team-data'
 
-export type InstallDecision = 'reuse' | 'extend' | 'standalone'
+type InstallDecision = 'reuse' | 'extend' | 'standalone'
 
-export interface InstallPlan {
+interface InstallPlan {
   decision: InstallDecision
   brief: string
   target_table: string | null
@@ -28,7 +28,7 @@ export interface InstallPlan {
   ai_called: boolean
 }
 
-export interface PlanInput {
+interface PlanInput {
   companySlug: string
   teamId: string
   /** Raw DDL the incoming frame would run in its "blank" form. May be
@@ -185,7 +185,7 @@ interface ParsedColumn {
 /** Parse every `CREATE TABLE ... (...)` in the SQL blob. Best-effort —
  *  ignores non-CREATE statements, nested parens in column constraints,
  *  and comments. Good enough for the panel-frame seed-DDL shape. */
-export function parseSetupSql(sql: string): ParsedTable[] {
+function parseSetupSql(sql: string): ParsedTable[] {
   if (!sql.trim()) return []
   const stripped = stripComments(sql)
   const out: ParsedTable[] = []
@@ -263,7 +263,7 @@ function stripComments(sql: string): string {
 
 /** Extract table names referenced in a SELECT via FROM / JOIN. Best-effort;
  *  misses CTEs but that's fine for our seed SQL. */
-export function extractTablesFromSelect(sql: string): Set<string> {
+function extractTablesFromSelect(sql: string): Set<string> {
   const out = new Set<string>()
   if (!sql.trim()) return out
   const stripped = stripComments(sql)

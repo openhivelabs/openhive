@@ -1,4 +1,4 @@
-export type CredentialKind = 'api_key' | 'oauth'
+type CredentialKind = 'api_key' | 'oauth'
 
 export interface CredentialMeta {
   ref_id: string

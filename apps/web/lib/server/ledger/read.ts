@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { ledgerDir, withLedgerDb } from './db'
 
-export interface SearchArgs {
+interface SearchArgs {
   query: string
   domain?: string
   team_id?: string
@@ -21,7 +21,7 @@ export interface SearchArgs {
   limit?: number
 }
 
-export interface SearchHit {
+interface SearchHit {
   id: string
   ts: number
   agent_role: string
@@ -32,12 +32,12 @@ export interface SearchHit {
   artifact_paths: string[]
 }
 
-export interface SearchResult {
+interface SearchResult {
   results: SearchHit[]
   total_matched: number
 }
 
-export interface EntryMeta {
+interface EntryMeta {
   id: string
   ts: number
   session_id: string
@@ -50,7 +50,7 @@ export interface EntryMeta {
   status: string
 }
 
-export interface EntryRead {
+interface EntryRead {
   full_body: string
   artifact_paths: string[]
   meta: EntryMeta
