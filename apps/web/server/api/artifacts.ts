@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { getArtifact, listForSession, listForTeam } from '@/lib/server/artifacts'
-import { resolveArtifactUri } from '@/lib/server/sessions/artifacts'
+import { resolveArtifactPath, resolveArtifactUri } from '@/lib/server/sessions/artifacts'
 import { Hono } from 'hono'
 
 export const artifacts = new Hono()
@@ -83,6 +83,16 @@ artifacts.get('/by-uri', (c) => {
   })
 })
 
+// Verify that an ArtifactRecord's stored `path` is contained under its
+// session's artifact root. `path` originates from skill output via
+// recordArtifact() and is otherwise unvalidated — without this guard a
+// malicious or buggy skill could record `/etc/passwd` and have the server
+// stream it back. Reuses the same 8-stage guard as `read_artifact`.
+function containedArtifactPath(art: { session_id: string; path: string }): string | null {
+  const r = resolveArtifactPath(art.path, { callerSessionId: art.session_id })
+  return r.ok ? r.resolved.absPath : null
+}
+
 // GET /api/artifacts/:artifactId/download
 artifacts.get('/:artifactId/download', (c) => {
   const artifactId = c.req.param('artifactId')
@@ -90,14 +100,18 @@ artifacts.get('/:artifactId/download', (c) => {
   if (!art) {
     return c.json({ detail: 'Artifact not found' }, 404)
   }
-  if (!fs.existsSync(art.path) || !fs.statSync(art.path).isFile()) {
+  const abs = containedArtifactPath(art)
+  if (!abs) {
+    return c.json({ detail: 'Artifact path outside session root' }, 400)
+  }
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
     return c.json({ detail: 'Artifact file missing on disk' }, 410)
   }
-  const stream = fs.createReadStream(art.path) as unknown as ReadableStream
+  const stream = fs.createReadStream(abs) as unknown as ReadableStream
   return c.body(stream, 200, {
     'Content-Type': art.mime ?? 'application/octet-stream',
     'Content-Disposition': contentDisposition('attachment', path.basename(art.filename)),
-    'Content-Length': String(art.size ?? fs.statSync(art.path).size),
+    'Content-Length': String(art.size ?? fs.statSync(abs).size),
   })
 })
 

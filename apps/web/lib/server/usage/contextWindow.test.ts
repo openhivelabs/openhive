@@ -1,19 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { contextWindow, effectiveWindow } from './contextWindow'
 
-const ENV_KEYS = [
-  'OPENHIVE_AUTOCOMPACT_BUFFER',
-  'OPENHIVE_BLOCKING_BUFFER',
-  'OPENHIVE_WARNING_BUFFER',
-]
-
-function clearEnv() {
-  for (const k of ENV_KEYS) Reflect.deleteProperty(process.env, k)
-}
-
 describe('contextWindow', () => {
-  afterEach(clearEnv)
-
   it('returns table entry for known (provider, model)', () => {
     const cw = contextWindow('claude-code', 'claude-opus-4-7[1m]')
     expect(cw).toEqual({ input: 1_000_000, output: 32_000 })
@@ -31,8 +19,6 @@ describe('contextWindow', () => {
 })
 
 describe('effectiveWindow', () => {
-  afterEach(clearEnv)
-
   it('claude-opus-4-7[1m] → 980_000 window, 967K autocompact, 960K warn, 977K block', () => {
     const ew = effectiveWindow('claude-code', 'claude-opus-4-7[1m]')
     expect(ew.window).toBe(980_000)
@@ -61,20 +47,5 @@ describe('effectiveWindow', () => {
     expect(ew.meta.rawInput).toBe(128_000)
     expect(ew.meta.reserveOutput).toBe(8_000)
     expect(ew.window).toBe(120_000)
-  })
-
-  it('env override shifts autoCompactThreshold', () => {
-    process.env.OPENHIVE_AUTOCOMPACT_BUFFER = '5000'
-    const ew = effectiveWindow('claude-code', 'claude-opus-4-7[1m]')
-    expect(ew.window).toBe(980_000)
-    expect(ew.autoCompactThreshold).toBe(975_000)
-    expect(ew.meta.autoCompactBuffer).toBe(5_000)
-  })
-
-  it('invalid env falls back to default', () => {
-    process.env.OPENHIVE_BLOCKING_BUFFER = 'not-a-number'
-    const ew = effectiveWindow('claude-code', 'claude-opus-4-7[1m]')
-    expect(ew.blockingLimit).toBe(977_000)
-    expect(ew.meta.blockingBuffer).toBe(3_000)
   })
 })

@@ -9,10 +9,9 @@
  * servers are supported" and "which auth flow to run on connect".
  */
 
-import fs from 'node:fs'
 import path from 'node:path'
-import yaml from 'js-yaml'
 import { dataDir, packagesRoot } from './paths'
+import { readYamlCached } from './yaml-io'
 
 export type McpAuthKind =
   | 'oauth_google'
@@ -40,13 +39,9 @@ interface RegistryFile {
 }
 
 function readYaml(p: string): RegistryFile | null {
-  if (!fs.existsSync(p) || !fs.statSync(p).isFile()) return null
-  try {
-    const raw = yaml.load(fs.readFileSync(p, 'utf8')) as RegistryFile | null
-    return raw ?? null
-  } catch {
-    return null
-  }
+  // Hot path on the Settings page — readYamlCached avoids re-parsing the
+  // bundled + user registry yaml on every request via mtime check.
+  return (readYamlCached(p) as unknown as RegistryFile | null) ?? null
 }
 
 export function listMcpRegistry(): McpRegistryEntry[] {
@@ -60,9 +55,7 @@ export function listMcpRegistry(): McpRegistryEntry[] {
   for (const entry of user?.servers ?? []) {
     if (entry && typeof entry.id === 'string') out.set(entry.id, entry)
   }
-  return Array.from(out.values()).sort((a, b) =>
-    a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
-  )
+  return Array.from(out.values()).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 }
 
 export function getMcpRegistryEntry(id: string): McpRegistryEntry | null {

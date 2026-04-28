@@ -11,12 +11,7 @@ import {
   tokenCountWithEstimation,
 } from './tokens'
 
-const ENV_KEYS = [
-  'OPENHIVE_TOKEN_PAD_FACTOR',
-  'OPENHIVE_AUTOCOMPACT_BUFFER',
-  'OPENHIVE_BLOCKING_BUFFER',
-  'OPENHIVE_WARNING_BUFFER',
-] as const
+const ENV_KEYS = ['OPENHIVE_TOKEN_PAD_FACTOR'] as const
 
 afterEach(() => {
   for (const k of ENV_KEYS) Reflect.deleteProperty(process.env, k)

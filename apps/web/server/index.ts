@@ -1,14 +1,15 @@
+import { timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { migrateAllAgents } from '@/lib/server/agents/scaffold'
+import { callbackHtml, handleCallback } from '@/lib/server/auth/orchestrator'
+import { ensurePython } from '@/lib/server/python-bootstrap'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { logger } from 'hono/logger'
-import { migrateAllAgents } from '@/lib/server/agents/scaffold'
-import { callbackHtml, handleCallback } from '@/lib/server/auth/orchestrator'
-import { ensurePython } from '@/lib/server/python-bootstrap'
-import { migrateTeamDbsToCompany } from '../scripts/migrate-team-db-to-company'
 import { registerNode } from '../instrumentation-node'
+import { migrateTeamDbsToCompany } from '../scripts/migrate-team-db-to-company'
 import { api } from './api'
 
 const startTime = Date.now()
@@ -38,7 +39,9 @@ try {
     console.log(`[hono] agent migration: scaffolded ${migrated}/${scanned} agents`)
   }
   if (limits_bumped > 0) {
-    console.log(`[hono] team migration: bumped max_tool_rounds_per_turn on ${limits_bumped} team(s)`)
+    console.log(
+      `[hono] team migration: bumped max_tool_rounds_per_turn on ${limits_bumped} team(s)`,
+    )
   }
 } catch (exc) {
   console.error('[hono] agent migration failed', exc)
@@ -55,6 +58,51 @@ try {
 
 const app = new Hono()
 app.use('*', logger())
+
+const port = Number.parseInt(
+  process.env.PORT ?? (process.env.NODE_ENV === 'production' ? '4483' : '4484'),
+  10,
+)
+const host = process.env.HOST ?? '127.0.0.1'
+
+// Auth: localhost binding stays open (single-user local-first). Any non-loopback
+// bind requires OPENHIVE_PASSWORD — refuse to boot without it. Token is checked
+// via `Authorization: Bearer <pw>` header or `?token=` query (the latter is the
+// only way to authenticate an EventSource which can't set headers). Bypassed
+// for /health and OAuth callbacks (the redirect_uri must work without a token).
+const isLoopbackHost = (h: string): boolean => {
+  const v = h.toLowerCase()
+  return v === '127.0.0.1' || v === 'localhost' || v === '::1' || v === '[::1]'
+}
+const password = process.env.OPENHIVE_PASSWORD?.trim() || null
+if (!isLoopbackHost(host)) {
+  if (!password) {
+    console.error(
+      `[hono] refusing to bind ${host}: OPENHIVE_PASSWORD must be set when host != localhost`,
+    )
+    process.exit(1)
+  }
+  const AUTH_BYPASS = new Set(['/health', '/callback', '/auth/callback'])
+  app.use('*', async (c, next) => {
+    const u = new URL(c.req.url)
+    if (AUTH_BYPASS.has(u.pathname)) return next()
+    const header = c.req.header('authorization') ?? ''
+    const bearer = header.startsWith('Bearer ') ? header.slice(7).trim() : null
+    const supplied = bearer ?? u.searchParams.get('token')
+    if (!supplied || !timingSafeEq(supplied, password)) {
+      return c.json({ detail: 'unauthorized' }, 401)
+    }
+    return next()
+  })
+}
+
+// Constant-time compare to keep the password gate from leaking length/prefix.
+function timingSafeEq(a: string, b: string): boolean {
+  const ab = Buffer.from(a, 'utf8')
+  const bb = Buffer.from(b, 'utf8')
+  if (ab.length !== bb.length) return false
+  return timingSafeEqual(ab, bb)
+}
 
 // API routes MUST be registered BEFORE static + SPA fallback so SSE/long-poll
 // endpoints aren't intercepted by the static handler.
@@ -111,11 +159,6 @@ if (isProd) {
   })
 }
 
-const port = Number.parseInt(
-  process.env.PORT ?? (isProd ? '4483' : '4484'),
-  10,
-)
-const host = process.env.HOST ?? '127.0.0.1'
 serve({ fetch: app.fetch, port, hostname: host })
 console.log(
   `[hono] ready in ${Date.now() - startTime}ms (listening on ${host}:${port}, prod=${isProd})`,

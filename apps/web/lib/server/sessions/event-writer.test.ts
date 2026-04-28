@@ -11,9 +11,7 @@ import {
   dropIdleQueues,
   enqueueEvent,
   flushAll,
-  flushIntervalMs,
   flushSession,
-  flushThreshold,
   getEventWriterMetrics,
   hasQueueForTest,
 } from './event-writer'
@@ -45,38 +43,6 @@ afterEach(() => {
   } catch {
     /* ignore */
   }
-})
-
-describe('event-writer env config', () => {
-  it('reads flush interval from env', () => {
-    process.env.OPENHIVE_EVENT_FLUSH_INTERVAL_MS = '250'
-    try {
-      expect(flushIntervalMs()).toBe(250)
-    } finally {
-      process.env.OPENHIVE_EVENT_FLUSH_INTERVAL_MS = undefined
-    }
-  })
-
-  it('reads flush threshold from env', () => {
-    process.env.OPENHIVE_EVENT_FLUSH_THRESHOLD = '20'
-    try {
-      expect(flushThreshold()).toBe(20)
-    } finally {
-      process.env.OPENHIVE_EVENT_FLUSH_THRESHOLD = undefined
-    }
-  })
-
-  it('invalid env falls back to default', () => {
-    process.env.OPENHIVE_EVENT_FLUSH_INTERVAL_MS = 'abc'
-    process.env.OPENHIVE_EVENT_FLUSH_THRESHOLD = '0'
-    try {
-      expect(flushIntervalMs()).toBe(100)
-      expect(flushThreshold()).toBe(10)
-    } finally {
-      process.env.OPENHIVE_EVENT_FLUSH_INTERVAL_MS = undefined
-      process.env.OPENHIVE_EVENT_FLUSH_THRESHOLD = undefined
-    }
-  })
 })
 
 describe('event-writer', () => {

@@ -1444,11 +1444,22 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
   // cheap proxy that doesn't need a tokenizer.
   const systemChars = systemPrompt.length
   const toolsChars = openaiTools ? JSON.stringify(openaiTools).length : 0
+  // Cache per-message char count on the message object itself. Each turn the
+  // tail grows; the prefix is byte-identical, so re-stringifying every prior
+  // message wastes CPU proportional to history size × turns.
   let historyChars = 0
   for (const m of history) {
-    if (typeof m.content === 'string') historyChars += m.content.length
-    else if (Array.isArray(m.content)) historyChars += JSON.stringify(m.content).length
-    if (Array.isArray(m.tool_calls)) historyChars += JSON.stringify(m.tool_calls).length
+    const cached = (m as unknown as { __ohCharLen?: number }).__ohCharLen
+    if (typeof cached === 'number') {
+      historyChars += cached
+      continue
+    }
+    let len = 0
+    if (typeof m.content === 'string') len += m.content.length
+    else if (Array.isArray(m.content)) len += JSON.stringify(m.content).length
+    if (Array.isArray(m.tool_calls)) len += JSON.stringify(m.tool_calls).length
+    Object.defineProperty(m, '__ohCharLen', { value: len, enumerable: false })
+    historyChars += len
   }
 
   // A4: token estimates alongside char counts. char fields stay (drift

@@ -36,9 +36,7 @@ export function companyDbPath(companySlug: string): string {
   // Honor OPENHIVE_DATA_DIR env directly so tests that swap tmp dirs per-test
   // don't get pinned to the cached getSettings() value.
   const envRoot = process.env.OPENHIVE_DATA_DIR
-  const dir = envRoot
-    ? path.join(envRoot, 'companies', companySlug)
-    : companyDir(companySlug)
+  const dir = envRoot ? path.join(envRoot, 'companies', companySlug) : companyDir(companySlug)
   fs.mkdirSync(dir, { recursive: true })
   return path.join(dir, 'data.db')
 }
@@ -57,12 +55,48 @@ export function teamDbPath(companySlug: string, teamSlug: string): string {
 }
 
 /**
- * Open/close per call — company data DBs are long-lived but still cheap
- * enough that we don't bother pooling. Callers should use short-lived
- * handles and avoid crossing request boundaries.
+ * Per-process company DB connection pool. Keeping a single Database handle
+ * per file (a) skips the WAL header read + journal-mode pragma round trip
+ * on every panel request, (b) lets prepared statement caches inside
+ * better-sqlite3 stay warm, and (c) avoids repeated re-execution of the
+ * idempotent BOOTSTRAP_SCHEMA. Stored on globalThis so HMR / tsx watch
+ * don't multiply opened handles.
  */
+const COMPANY_DB_POOL_KEY = Symbol.for('openhive.company.db.pool')
+type CompanyPool = Map<string, BetterSqliteDatabase>
+function companyDbPool(): CompanyPool {
+  const g = globalThis as unknown as { [COMPANY_DB_POOL_KEY]?: CompanyPool }
+  if (!g[COMPANY_DB_POOL_KEY]) {
+    g[COMPANY_DB_POOL_KEY] = new Map()
+    // One-time process exit hook to flush WAL + close handles. `unref` keeps
+    // the listener from holding the loop open on its own.
+    const close = () => {
+      for (const conn of g[COMPANY_DB_POOL_KEY]?.values() ?? []) {
+        try {
+          conn.close()
+        } catch {
+          /* ignore */
+        }
+      }
+      g[COMPANY_DB_POOL_KEY]?.clear()
+    }
+    process.once('beforeExit', close)
+    process.once('SIGINT', close)
+    process.once('SIGTERM', close)
+  }
+  return g[COMPANY_DB_POOL_KEY] as CompanyPool
+}
+
 function openCompanyDb(companySlug: string): BetterSqliteDatabase {
   const file = companyDbPath(companySlug)
+  const pool = companyDbPool()
+  const cached = pool.get(file)
+  if (cached) {
+    // `Database#open` is true while the handle is usable. A handle could
+    // theoretically be closed externally (tests); fall through to re-open.
+    if ((cached as unknown as { open?: boolean }).open !== false) return cached
+    pool.delete(file)
+  }
   const conn = new Database(file)
   conn.pragma('journal_mode = WAL')
   conn.pragma('foreign_keys = ON')
@@ -73,27 +107,34 @@ function openCompanyDb(companySlug: string): BetterSqliteDatabase {
   // schema_migrations tables that were bootstrapped before this column was
   // added. SQLite ignores ADD COLUMN IF NOT EXISTS, so emulate.
   try {
-    const cols = conn
-      .prepare('PRAGMA table_info(schema_migrations)')
-      .all() as { name: string }[]
+    const cols = conn.prepare('PRAGMA table_info(schema_migrations)').all() as { name: string }[]
     if (!cols.some((c) => c.name === 'team_id')) {
       conn.exec('ALTER TABLE schema_migrations ADD COLUMN team_id TEXT')
     }
   } catch {
     /* ignore — migration will log if something is genuinely wrong */
   }
+  pool.set(file, conn)
   return conn
 }
 
-export function withCompanyDb<T>(
-  companySlug: string,
-  fn: (conn: BetterSqliteDatabase) => T,
-): T {
+/** Test helper: drop the pool so OPENHIVE_DATA_DIR rotations between cases
+ *  re-open against the new directory. */
+export function __resetCompanyDbPoolForTests(): void {
+  const g = globalThis as unknown as { [COMPANY_DB_POOL_KEY]?: CompanyPool }
+  for (const conn of g[COMPANY_DB_POOL_KEY]?.values() ?? []) {
+    try {
+      conn.close()
+    } catch {
+      /* ignore */
+    }
+  }
+  g[COMPANY_DB_POOL_KEY]?.clear()
+}
+
+export function withCompanyDb<T>(companySlug: string, fn: (conn: BetterSqliteDatabase) => T): T {
   const conn = openCompanyDb(companySlug)
-  const timeoutMs = Number.parseInt(
-    process.env.OPENHIVE_DB_QUERY_TIMEOUT_MS ?? '10000',
-    10,
-  )
+  const timeoutMs = Number.parseInt(process.env.OPENHIVE_DB_QUERY_TIMEOUT_MS ?? '10000', 10)
   const ms = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 10000
   let timedOut = false
   const timer = setTimeout(() => {
@@ -117,7 +158,7 @@ export function withCompanyDb<T>(
     throw exc
   } finally {
     clearTimeout(timer)
-    conn.close()
+    // Pooled connection — leave it open. `process.beforeExit` closes them.
   }
 }
 
@@ -190,15 +231,11 @@ export function describeTable(
     const where = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : ''
     const binds: Record<string, unknown> = {}
     if (hasTeamIdCol && opts.teamId) binds.team_id = opts.teamId
-    const countStmt = conn.prepare(
-      `SELECT COUNT(*) AS n FROM ${tableName} ${where}`,
-    )
-    const countRow = (Object.keys(binds).length > 0
-      ? countStmt.get(binds)
-      : countStmt.get()) as { n: number }
-    const sampleStmt = conn.prepare(
-      `SELECT * FROM ${tableName} ${where} LIMIT :__limit`,
-    )
+    const countStmt = conn.prepare(`SELECT COUNT(*) AS n FROM ${tableName} ${where}`)
+    const countRow = (Object.keys(binds).length > 0 ? countStmt.get(binds) : countStmt.get()) as {
+      n: number
+    }
+    const sampleStmt = conn.prepare(`SELECT * FROM ${tableName} ${where} LIMIT :__limit`)
     const samples = sampleStmt.all({
       ...binds,
       __limit: Math.max(1, Math.min(10, sampleLimit)),
@@ -227,9 +264,7 @@ export function describeSchema(
     const tables: TableInfo[] = []
     for (const r of tableRows) {
       if (r.name === 'schema_migrations') continue
-      const rawCols = conn
-        .prepare(`PRAGMA table_info(${r.name})`)
-        .all() as {
+      const rawCols = conn.prepare(`PRAGMA table_info(${r.name})`).all() as {
         name: string
         type: string
         notnull: number
@@ -244,31 +279,28 @@ export function describeSchema(
       const hasTeamIdCol = rawCols.some((c) => c.name === 'team_id')
       const countStmt =
         hasTeamIdCol && opts.teamId
-          ? conn.prepare(
-              `SELECT COUNT(*) AS n FROM ${r.name} WHERE team_id = :team_id`,
-            )
+          ? conn.prepare(`SELECT COUNT(*) AS n FROM ${r.name} WHERE team_id = :team_id`)
           : conn.prepare(`SELECT COUNT(*) AS n FROM ${r.name}`)
-      const countRow = (hasTeamIdCol && opts.teamId
-        ? countStmt.get({ team_id: opts.teamId })
-        : countStmt.get()) as { n: number }
+      const countRow = (
+        hasTeamIdCol && opts.teamId ? countStmt.get({ team_id: opts.teamId }) : countStmt.get()
+      ) as { n: number }
       tables.push({ name: r.name, columns, row_count: countRow.n })
     }
-    const migrationStmt =
-      opts.teamId
-        ? conn.prepare(
-            `SELECT id, applied_at, source, sql, note, team_id
+    const migrationStmt = opts.teamId
+      ? conn.prepare(
+          `SELECT id, applied_at, source, sql, note, team_id
                FROM schema_migrations
               WHERE team_id = :team_id OR team_id IS NULL
               ORDER BY id DESC LIMIT 10`,
-          )
-        : conn.prepare(
-            `SELECT id, applied_at, source, sql, note, team_id
+        )
+      : conn.prepare(
+          `SELECT id, applied_at, source, sql, note, team_id
                FROM schema_migrations
               ORDER BY id DESC LIMIT 10`,
-          )
-    const migrations = (opts.teamId
-      ? migrationStmt.all({ team_id: opts.teamId })
-      : migrationStmt.all()) as MigrationRow[]
+        )
+    const migrations = (
+      opts.teamId ? migrationStmt.all({ team_id: opts.teamId }) : migrationStmt.all()
+    ) as MigrationRow[]
     return { tables, recent_migrations: migrations }
   })
 }
@@ -277,16 +309,17 @@ export function describeSchema(
  *  synthesized-action layer to derive create/update form fields without
  *  re-running a full describeSchema across every table. Returns [] when
  *  the table is missing or the company DB can't be opened. */
-export function getTableColumns(
-  companySlug: string,
-  tableName: string,
-): ColumnInfo[] {
+export function getTableColumns(companySlug: string, tableName: string): ColumnInfo[] {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) return []
   try {
     return withCompanyDb(companySlug, (conn) => {
-      const rows = conn
-        .prepare(`PRAGMA table_info(${tableName})`)
-        .all() as { name: string; type: string; notnull: number; pk: number; dflt_value: unknown }[]
+      const rows = conn.prepare(`PRAGMA table_info(${tableName})`).all() as {
+        name: string
+        type: string
+        notnull: number
+        pk: number
+        dflt_value: unknown
+      }[]
       return rows.map((c) => ({
         name: c.name,
         type: c.type,
@@ -304,17 +337,12 @@ export function getTableColumns(
  *  only place the CHECK constraint survives untouched (PRAGMA collapses
  *  it). Returns null when the table doesn't exist or the company DB is
  *  missing — caller treats either as "no extra metadata available". */
-export function getTableCreateSql(
-  companySlug: string,
-  tableName: string,
-): string | null {
+export function getTableCreateSql(companySlug: string, tableName: string): string | null {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) return null
   try {
     return withCompanyDb(companySlug, (conn) => {
       const row = conn
-        .prepare(
-          `SELECT sql FROM sqlite_master WHERE type='table' AND name = :name`,
-        )
+        .prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name = :name`)
         .get({ name: tableName }) as { sql?: string } | undefined
       return typeof row?.sql === 'string' ? row.sql : null
     })
@@ -327,16 +355,10 @@ export function getTableCreateSql(
  *  The renderer uses this for kanban stage taxonomy: live DB schema is
  *  the source of truth, and bindings can omit the duplicate copy.
  *  Returns [] when no matching CHECK is present. */
-export function extractCheckOptions(
-  createSql: string,
-  columnName: string,
-): string[] {
+export function extractCheckOptions(createSql: string, columnName: string): string[] {
   if (!columnName) return []
   const escaped = columnName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const re = new RegExp(
-    `CHECK\\s*\\(\\s*["\`]?${escaped}["\`]?\\s+IN\\s*\\(([^)]+)\\)\\s*\\)`,
-    'i',
-  )
+  const re = new RegExp(`CHECK\\s*\\(\\s*["\`]?${escaped}["\`]?\\s+IN\\s*\\(([^)]+)\\)\\s*\\)`, 'i')
   const m = re.exec(createSql)
   if (!m || !m[1]) return []
   const out: string[] = []
@@ -493,19 +515,16 @@ type PreparedBinds =
   | { kind: 'named'; values: Record<string, SqlParam> }
   | null
 
-function mergeBinds(
-  opts: { params?: Record<string, SqlParam> | SqlParam[]; teamId?: string },
-): PreparedBinds {
+function mergeBinds(opts: {
+  params?: Record<string, SqlParam> | SqlParam[]
+  teamId?: string
+}): PreparedBinds {
   if (Array.isArray(opts.params)) {
-    return opts.params.length > 0
-      ? { kind: 'positional', values: opts.params }
-      : null
+    return opts.params.length > 0 ? { kind: 'positional', values: opts.params } : null
   }
   const out: Record<string, SqlParam> = { ...(opts.params ?? {}) }
   if (opts.teamId !== undefined) out.team_id = opts.teamId
-  return Object.keys(out).length > 0
-    ? { kind: 'named', values: out }
-    : null
+  return Object.keys(out).length > 0 ? { kind: 'named', values: out } : null
 }
 
 function applyBinds<T>(
@@ -639,11 +658,7 @@ export interface RunExecOptions {
   teamId?: string
 }
 
-export function runExec(
-  companySlug: string,
-  sql: string,
-  opts: RunExecOptions = {},
-): ExecResult {
+export function runExec(companySlug: string, sql: string, opts: RunExecOptions = {}): ExecResult {
   if (hasMultipleStatements(sql)) {
     const err = new Error('multi_statement: only one SQL statement per call')
     ;(err as Error & { code?: string }).code = 'multi_statement'

@@ -19,22 +19,8 @@ import path from 'node:path'
 
 import { sessionsRoot } from '../paths'
 
-/** @deprecated use flushIntervalMs() */
 export const FLUSH_INTERVAL_MS = 100
-/** @deprecated use flushThreshold() */
 export const FLUSH_THRESHOLD = 10
-
-/** Read flush interval (ms) from env each call. Invalid/≤0 → 100. */
-export function flushIntervalMs(): number {
-  const v = Number.parseInt(process.env.OPENHIVE_EVENT_FLUSH_INTERVAL_MS ?? '', 10)
-  return Number.isFinite(v) && v > 0 ? v : 100
-}
-
-/** Read flush threshold from env each call. Invalid/≤0 → 10. */
-export function flushThreshold(): number {
-  const v = Number.parseInt(process.env.OPENHIVE_EVENT_FLUSH_THRESHOLD ?? '', 10)
-  return Number.isFinite(v) && v > 0 ? v : 10
-}
 
 const metrics = {
   flushes: 0,
@@ -105,7 +91,7 @@ export function enqueueEvent(sessionId: string, rowJsonl: string): void {
   const q = ensureQueue(sessionId)
   q.buf.push(rowJsonl)
 
-  if (q.buf.length >= flushThreshold()) {
+  if (q.buf.length >= FLUSH_THRESHOLD) {
     if (q.timer) {
       clearTimeout(q.timer)
       q.timer = null
@@ -119,7 +105,7 @@ export function enqueueEvent(sessionId: string, rowJsonl: string): void {
       const cur = queues.get(sessionId)
       if (cur) cur.timer = null
       void triggerFlush(sessionId)
-    }, flushIntervalMs())
+    }, FLUSH_INTERVAL_MS)
     // Don't block process shutdown on the timer; flushAll() drains on SIGTERM.
     q.timer.unref?.()
   }
@@ -190,9 +176,7 @@ function markDisappeared(sessionId: string): void {
     }
     q.buf = []
   }
-  console.warn(
-    `event-writer: session dir disappeared mid-run, aborting (${sessionId})`,
-  )
+  console.warn(`event-writer: session dir disappeared mid-run, aborting (${sessionId})`)
   // Lazy dynamic import — session-registry imports back into engine
   // glue that imports this file, so a top-level import would create a
   // cycle. Errors swallowed: the queue is already dropped, so even if
@@ -211,6 +195,24 @@ export function dropIdleQueues(): void {
   for (const [id, q] of queues) {
     if (q.buf.length === 0 && !q.timer) queues.delete(id)
   }
+}
+
+/** Drain pending events for a finalized session, then remove its queue.
+ *  Called from `finalizeSession` so the per-session Queue object (buf,
+ *  timer, flushing Promise) does not leak after the session ends. */
+export async function dropQueueAfterDrain(sessionId: string): Promise<void> {
+  const q = queues.get(sessionId)
+  if (!q) return
+  if (q.timer) {
+    clearTimeout(q.timer)
+    q.timer = null
+  }
+  await triggerFlush(sessionId)
+  await q.flushing
+  // Re-check: another enqueue may have raced in. If so, leave it alone — the
+  // next finalize call (idempotent guard) or the SIGTERM drain will clean up.
+  const cur = queues.get(sessionId)
+  if (cur && cur.buf.length === 0 && !cur.timer) queues.delete(sessionId)
 }
 
 /** Test helper: presence check for a given session's queue. */

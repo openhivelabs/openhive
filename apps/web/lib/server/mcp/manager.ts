@@ -14,7 +14,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { getCredentialValue } from '../credentials'
 import * as mcpConfig from './config'
-import { assertApprovedAndCurrent, USER_PRESET_ID } from './user-servers'
+import { USER_PRESET_ID, assertApprovedAndCurrent } from './user-servers'
 
 const SPAWN_TIMEOUT_MS = 30_000
 const CALL_TIMEOUT_MS = 60_000
@@ -119,10 +119,7 @@ function ensureProc(name: string): Proc {
   return proc
 }
 
-function buildTransport(
-  server: mcpConfig.ServerConfig,
-  name?: string,
-): StdioClientTransport {
+function buildTransport(server: mcpConfig.ServerConfig, name?: string): StdioClientTransport {
   let env: Record<string, string> | undefined =
     Object.keys(server.env ?? {}).length > 0 ? { ...server.env } : undefined
 
@@ -310,23 +307,59 @@ export function capMcpBody(body: string): string {
   )
 }
 
+/** Cap how long we'll wait for a graceful close before SIGKILL. A hung child
+ *  (slow shutdown handler, blocked on syscall) used to keep its slot in
+ *  `state().procs` and the OS process table indefinitely. */
+const CLOSE_TIMEOUT_MS = 5_000
+
+async function closeWithTimeout(proc: Proc): Promise<void> {
+  const closer = (async () => {
+    if (proc.transport) {
+      try {
+        await proc.transport.close()
+      } catch {
+        /* ignore */
+      }
+    }
+    if (proc.client) {
+      try {
+        await proc.client.close()
+      } catch {
+        /* ignore */
+      }
+    }
+  })()
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      // The MCP SDK's StdioClientTransport exposes the spawned child via a
+      // private `_process` field. Reach in to send SIGKILL — without it the
+      // child stays orphaned and we leak a process table entry per restart.
+      const child = (
+        proc.transport as unknown as { _process?: { kill?: (s: string) => void } } | null
+      )?._process
+      try {
+        child?.kill?.('SIGKILL')
+      } catch {
+        /* best effort */
+      }
+      console.warn(
+        `mcp-manager: ${proc.name} close timed out after ${CLOSE_TIMEOUT_MS}ms; sent SIGKILL`,
+      )
+      resolve()
+    }, CLOSE_TIMEOUT_MS)
+  })
+  try {
+    await Promise.race([closer, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export async function restart(name: string): Promise<void> {
   const proc = state().procs.get(name)
   if (!proc) return
-  if (proc.transport) {
-    try {
-      await proc.transport.close()
-    } catch {
-      /* ignore */
-    }
-  }
-  if (proc.client) {
-    try {
-      await proc.client.close()
-    } catch {
-      /* ignore */
-    }
-  }
+  await closeWithTimeout(proc)
   proc.client = null
   proc.transport = null
   proc.toolsCache = null

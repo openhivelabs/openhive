@@ -77,6 +77,9 @@ importers:
       remark-gfm:
         specifier: ^4.0.1
         version: 4.0.1
+      semver:
+        specifier: ^7.7.4
+        version: 7.7.4
       tar:
         specifier: ^7.5.13
         version: 7.5.13
@@ -105,6 +108,9 @@ importers:
       '@types/react-dom':
         specifier: ^19.0.0
         version: 19.2.3(@types/react@19.2.14)
+      '@types/semver':
+        specifier: ^7.7.1
+        version: 7.7.1
       '@types/tar':
         specifier: ^7.0.87
         version: 7.0.87
@@ -898,6 +904,9 @@ packages:
 
   '@types/react@19.2.14':
     resolution: {integrity: sha512-ilcTH/UniCkMdtexkoCN0bI7pMcJDvmQFPvuPvmEaYA/NSfFTAgdUSLAoVjaRJm7+6PvcM+q1zYOwS4wTYMF9w==}
+
+  '@types/semver@7.7.1':
+    resolution: {integrity: sha512-FmgJfu+MOcQ370SD0ev7EI8TlCAfKYU+B4m5T3yXc1CiRN94g/SZPtsCkk506aUDtlMnFZvasDwHHUcZUEaYuA==}
 
   '@types/tar@7.0.87':
     resolution: {integrity: sha512-3IxNBV8LeY5oi2ZFpvAhOtW1+mHswkzM7BuisVrwJgPv67GBO2rkLPQlEKtzfHuLdhDDczhkCZeT+RuizMay4A==}
@@ -3409,6 +3418,8 @@ snapshots:
   '@types/react@19.2.14':
     dependencies:
       csstype: 3.2.3
+
+  '@types/semver@7.7.1': {}
 
   '@types/tar@7.0.87':
     dependencies:

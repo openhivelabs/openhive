@@ -472,10 +472,17 @@ sessions.delete('/:sessionId', async (c) => {
   return c.json({ ok: true })
 })
 
-// GET /api/sessions/:sessionId/events — raw events list
+// GET /api/sessions/:sessionId/events — raw events list.
+// Pass `?sinceSeq=N` to receive only events with seq > N (incremental refetch
+// after an SSE frame). Without it, the full list is returned.
 sessions.get('/:sessionId/events', (c) => {
   const sessionId = c.req.param('sessionId')
-  return c.json(eventsForSession(sessionId))
+  const sinceRaw = c.req.query('sinceSeq')
+  const all = eventsForSession(sessionId)
+  if (sinceRaw == null) return c.json(all)
+  const since = Number.parseInt(sinceRaw, 10)
+  if (!Number.isFinite(since)) return c.json(all)
+  return c.json(all.filter((e) => e.seq > since))
 })
 
 interface MessageBody {

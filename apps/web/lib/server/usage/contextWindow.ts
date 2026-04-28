@@ -57,9 +57,9 @@ export function contextWindow(providerId: string, model: string): ModelWindow {
   return SAFE_DEFAULT
 }
 
-const AUTOCOMPACT_BUFFER_DEFAULT = 13_000
-const BLOCKING_BUFFER_DEFAULT = 3_000
-const WARNING_BUFFER_DEFAULT = 20_000
+const AUTOCOMPACT_BUFFER = 13_000
+const BLOCKING_BUFFER = 3_000
+const WARNING_BUFFER = 20_000
 const MAX_OUTPUT_RESERVE = 20_000
 
 export interface EffectiveWindow {
@@ -84,33 +84,23 @@ export interface EffectiveWindow {
 
 export function effectiveWindow(providerId: string, model: string): EffectiveWindow {
   const cw = contextWindow(providerId, model)
-  const autoBuf = numEnv('OPENHIVE_AUTOCOMPACT_BUFFER', AUTOCOMPACT_BUFFER_DEFAULT)
-  const blockBuf = numEnv('OPENHIVE_BLOCKING_BUFFER', BLOCKING_BUFFER_DEFAULT)
-  const warnBuf = numEnv('OPENHIVE_WARNING_BUFFER', WARNING_BUFFER_DEFAULT)
   const reserveOutput = Math.min(cw.output, MAX_OUTPUT_RESERVE)
   const window = cw.input - reserveOutput
   return {
     window,
-    autoCompactThreshold: window - autoBuf,
-    warningThreshold: window - warnBuf,
-    blockingLimit: window - blockBuf,
+    autoCompactThreshold: window - AUTOCOMPACT_BUFFER,
+    warningThreshold: window - WARNING_BUFFER,
+    blockingLimit: window - BLOCKING_BUFFER,
     meta: {
       providerId,
       model,
       rawInput: cw.input,
       rawOutput: cw.output,
       reserveOutput,
-      autoCompactBuffer: autoBuf,
-      blockingBuffer: blockBuf,
+      autoCompactBuffer: AUTOCOMPACT_BUFFER,
+      blockingBuffer: BLOCKING_BUFFER,
     },
   }
-}
-
-function numEnv(key: string, fallback: number): number {
-  const raw = process.env[key]
-  if (!raw) return fallback
-  const n = Number(raw)
-  return Number.isFinite(n) && n > 0 ? n : fallback
 }
 
 // Verification examples (kept in sync with contextWindow.test.ts):

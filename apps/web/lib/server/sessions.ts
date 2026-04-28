@@ -20,7 +20,7 @@ import path from 'node:path'
 import type { TeamSpec } from './engine/team'
 
 import { artifactsRoot, sessionsRoot } from './paths'
-import { enqueueEvent, flushSession } from './sessions/event-writer'
+import { dropQueueAfterDrain, enqueueEvent, flushSession } from './sessions/event-writer'
 
 /** Session status — explicit state machine. Lives in meta.json so the UI and
  *  any future resume logic have ground truth without rescanning events on
@@ -51,13 +51,7 @@ import { enqueueEvent, flushSession } from './sessions/event-writer'
  *                   "your previous run was interrupted — continue?" instead
  *                   of silently pretending nothing happened.
  *    error        = errored out in a way we don't auto-recover from. */
-export type SessionStatus =
-  | 'pending'
-  | 'running'
-  | 'needs_input'
-  | 'idle'
-  | 'abandoned'
-  | 'error'
+export type SessionStatus = 'pending' | 'running' | 'needs_input' | 'idle' | 'abandoned' | 'error'
 
 /** Structured reason an abandoned session was classified as such. Persisted
  *  alongside `meta.status='abandoned'` so the UI can surface a precise
@@ -398,6 +392,9 @@ export async function finalizeSession(
     artifact_count: artifactCount,
     finalized_at: Date.now(),
   })
+  // Release the per-session writer queue (buf, timer, flushing Promise) so
+  // long-running processes don't accrete a Queue object per finished session.
+  await dropQueueAfterDrain(sessionId)
 }
 
 // ---------- events ----------
@@ -434,40 +431,118 @@ export function appendSessionEvent(input: AppendEventInput): void {
   }
 }
 
+// Per-session events.jsonl is append-only. Avoid re-reading the entire file on
+// every poll/SSE refetch by caching the parsed rows keyed by (mtime, size) and
+// reading only the new tail when the file grows. Stored on globalThis so HMR /
+// tsx watch don't multiply the cache.
+interface EventsCacheEntry {
+  mtimeMs: number
+  size: number
+  /** Byte offset of the last newline we parsed from. New tail starts here. */
+  parsedThrough: number
+  rows: StoredEventRow[]
+}
+const EVENTS_CACHE_KEY = Symbol.for('openhive.events.cache')
+type EventsCacheGlobal = { [EVENTS_CACHE_KEY]?: Map<string, EventsCacheEntry> }
+function eventsCache(): Map<string, EventsCacheEntry> {
+  const g = globalThis as unknown as EventsCacheGlobal
+  if (!g[EVENTS_CACHE_KEY]) g[EVENTS_CACHE_KEY] = new Map()
+  return g[EVENTS_CACHE_KEY] as Map<string, EventsCacheEntry>
+}
+
+function parseEventLine(line: string): StoredEventRow | null {
+  if (!line.trim()) return null
+  try {
+    const row = JSON.parse(line) as {
+      seq: number
+      ts: number
+      kind: string
+      depth: number
+      node_id: string | null
+      tool_call_id: string | null
+      tool_name: string | null
+      data_json?: string
+      data?: Record<string, unknown>
+    }
+    return {
+      seq: row.seq,
+      ts: row.ts,
+      kind: row.kind,
+      depth: row.depth,
+      node_id: row.node_id,
+      tool_call_id: row.tool_call_id,
+      tool_name: row.tool_name,
+      data:
+        row.data ?? (row.data_json ? (JSON.parse(row.data_json) as Record<string, unknown>) : {}),
+    }
+  } catch {
+    // Truncated last line after crash — skip it, don't fail the whole session.
+    return null
+  }
+}
+
 export function eventsForSession(sessionId: string): StoredEventRow[] {
   const p = sessionEventsPath(sessionId)
-  if (!fs.existsSync(p)) return []
-  const text = fs.readFileSync(p, 'utf8')
-  const out: StoredEventRow[] = []
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue
+  let stat: fs.Stats
+  try {
+    stat = fs.statSync(p)
+  } catch {
+    eventsCache().delete(sessionId)
+    return []
+  }
+  const cache = eventsCache()
+  const hit = cache.get(sessionId)
+  // Fast path: file unchanged since last read.
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) {
+    return hit.rows
+  }
+  // Tail-append path: same file, just grew. Read only the new bytes.
+  if (hit && hit.size < stat.size && hit.mtimeMs <= stat.mtimeMs) {
+    const fd = fs.openSync(p, 'r')
     try {
-      const row = JSON.parse(line) as {
-        seq: number
-        ts: number
-        kind: string
-        depth: number
-        node_id: string | null
-        tool_call_id: string | null
-        tool_name: string | null
-        data_json?: string
-        data?: Record<string, unknown>
+      const tailLen = stat.size - hit.parsedThrough
+      const buf = Buffer.alloc(tailLen)
+      fs.readSync(fd, buf, 0, tailLen, hit.parsedThrough)
+      const text = buf.toString('utf8')
+      const lastNl = text.lastIndexOf('\n')
+      const parseable = lastNl >= 0 ? text.slice(0, lastNl + 1) : ''
+      const rows = hit.rows.slice()
+      for (const line of parseable.split('\n')) {
+        const r = parseEventLine(line)
+        if (r) rows.push(r)
       }
-      out.push({
-        seq: row.seq,
-        ts: row.ts,
-        kind: row.kind,
-        depth: row.depth,
-        node_id: row.node_id,
-        tool_call_id: row.tool_call_id,
-        tool_name: row.tool_name,
-        data:
-          row.data ?? (row.data_json ? (JSON.parse(row.data_json) as Record<string, unknown>) : {}),
-      })
-    } catch {
-      // Truncated last line after crash — skip it, don't fail the whole session.
+      const next: EventsCacheEntry = {
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        parsedThrough: hit.parsedThrough + (lastNl >= 0 ? lastNl + 1 : 0),
+        rows,
+      }
+      cache.set(sessionId, next)
+      return rows
+    } finally {
+      fs.closeSync(fd)
     }
   }
+  // Cold / shrunk / mtime regressed: full re-parse.
+  const text = fs.readFileSync(p, 'utf8')
+  const out: StoredEventRow[] = []
+  let parsedThrough = 0
+  let cursor = 0
+  while (cursor < text.length) {
+    const nl = text.indexOf('\n', cursor)
+    if (nl < 0) break
+    const line = text.slice(cursor, nl)
+    const r = parseEventLine(line)
+    if (r) out.push(r)
+    parsedThrough = Buffer.byteLength(text.slice(0, nl + 1), 'utf8')
+    cursor = nl + 1
+  }
+  cache.set(sessionId, {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    parsedThrough,
+    rows: out,
+  })
   return out
 }
 
@@ -549,11 +624,7 @@ export function listSessionsFor(opts: {
 /** Terminal events the engine emits at the end of a turn. If any of these
  *  is the last event in events.jsonl, the previous process exited the run
  *  loop cleanly and the session is `idle`, not abandoned. */
-const TERMINAL_EVENT_KINDS = new Set([
-  'run_finished',
-  'turn_finished',
-  'run_error',
-])
+const TERMINAL_EVENT_KINDS = new Set(['run_finished', 'turn_finished', 'run_error'])
 
 /** Boot-time reconciliation result for one session. */
 export interface ReconcileResult {
@@ -574,7 +645,11 @@ export function classifyOnBoot(
 ): { status: SessionStatus; reason: AbandonedReason | null; errorDetail: ErrorDetail | null } {
   // Already-terminal statuses are respected as-is — nothing for us to do.
   if (meta.status === 'idle' || meta.status === 'abandoned' || meta.status === 'error') {
-    return { status: meta.status, reason: meta.abandoned_reason ?? null, errorDetail: meta.error_detail ?? null }
+    return {
+      status: meta.status,
+      reason: meta.abandoned_reason ?? null,
+      errorDetail: meta.error_detail ?? null,
+    }
   }
 
   // Note: `needs_input` (unanswered ask_user) is decided by the caller in
@@ -613,9 +688,7 @@ export function classifyOnBoot(
   // (this code only runs at boot). We use the freshness to pick a kinder
   // reason kind.
   const reason: AbandonedReason = {
-    kind: heartbeat == null
-      ? 'no_terminal_event'
-      : 'process_killed_mid_run',
+    kind: heartbeat == null ? 'no_terminal_event' : 'process_killed_mid_run',
     last_event_seq: lastSeq,
     last_event_kind: lastKind,
     last_event_ts: lastTs,
@@ -680,11 +753,7 @@ export async function reconcileSessionsOnBoot(
     // Only reconsider non-terminal statuses. `pending` is also reconsidered —
     // a session created mid-flight that never got its first event is just
     // garbage state from a process death.
-    if (
-      meta.status !== 'running' &&
-      meta.status !== 'needs_input' &&
-      meta.status !== 'pending'
-    ) {
+    if (meta.status !== 'running' && meta.status !== 'needs_input' && meta.status !== 'pending') {
       continue
     }
     const events = eventsForSession(id)
@@ -905,8 +974,7 @@ function extractSources(
   if (p.ok === false) {
     return {
       sources: [],
-      errorCode:
-        typeof p.error_code === 'string' ? p.error_code : 'search_failed',
+      errorCode: typeof p.error_code === 'string' ? p.error_code : 'search_failed',
       errorMessage: typeof p.error === 'string' ? p.error : undefined,
     }
   }
@@ -936,9 +1004,7 @@ function extractSources(
     const url = typeof p.url === 'string' ? p.url : ''
     if (!url) return null
     const title =
-      typeof p.title === 'string' && p.title.trim()
-        ? p.title
-        : domainFromUrl(url) || url
+      typeof p.title === 'string' && p.title.trim() ? p.title : domainFromUrl(url) || url
     const contentStr = typeof p.content === 'string' ? p.content : ''
     return {
       sources: [
@@ -1033,15 +1099,11 @@ export function buildTranscript(
       //     their own work; the FE's nesting pass needs every link in the
       //     chain to render the call tree, otherwise grandchildren escape
       //     to the root level (looks like the Lead did it directly).
-      const isWeb =
-        ev.tool_name === 'web-search' || ev.tool_name === 'web-fetch'
-      const isDelegate =
-        ev.tool_name === 'delegate_to' || ev.tool_name === 'delegate_parallel'
+      const isWeb = ev.tool_name === 'web-search' || ev.tool_name === 'web-fetch'
+      const isDelegate = ev.tool_name === 'delegate_to' || ev.tool_name === 'delegate_parallel'
       if (ev.depth !== 0 && !isWeb && !isDelegate) continue
-      const result =
-        isWeb && ev.tool_call_id ? resultByCallId.get(ev.tool_call_id) : null
-      const extracted =
-        isWeb && result ? extractSources(ev.tool_name ?? '', result) : null
+      const result = isWeb && ev.tool_call_id ? resultByCallId.get(ev.tool_call_id) : null
+      const extracted = isWeb && result ? extractSources(ev.tool_name ?? '', result) : null
       const sources = extracted?.sources ?? null
       // Surface delegate_parallel sibling metadata so the FE can disambiguate
       // children of N concurrent same-role instances (they all share a
@@ -1058,14 +1120,8 @@ export function buildTranscript(
           ? (ev.data.sibling_group_id as string)
           : undefined
       const siblingIndex =
-        typeof ev.data?.sibling_index === 'number'
-          ? (ev.data.sibling_index as number)
-          : undefined
-      if (
-        !siblingGroupId &&
-        ev.tool_name === 'delegate_parallel' &&
-        ev.tool_call_id
-      ) {
+        typeof ev.data?.sibling_index === 'number' ? (ev.data.sibling_index as number) : undefined
+      if (!siblingGroupId && ev.tool_name === 'delegate_parallel' && ev.tool_call_id) {
         const opened = openedByCallId.get(ev.tool_call_id)
         const v = opened?.data?.sibling_group_id
         if (typeof v === 'string') siblingGroupId = v
@@ -1112,19 +1168,19 @@ export function buildTranscript(
           ? (ev.data.sibling_group_id as string)
           : undefined
       const sidx =
-        typeof ev.data?.sibling_index === 'number'
-          ? (ev.data.sibling_index as number)
-          : undefined
+        typeof ev.data?.sibling_index === 'number' ? (ev.data.sibling_index as number) : undefined
       const cleanSources = (sourcesRaw as unknown[]).flatMap((s) => {
         if (!s || typeof s !== 'object') return []
         const o = s as Record<string, unknown>
         const url = typeof o.url === 'string' ? o.url : ''
         if (!url.startsWith('http')) return []
-        return [{
-          title: typeof o.title === 'string' ? o.title : url,
-          url,
-          domain: typeof o.domain === 'string' ? o.domain : '',
-        }]
+        return [
+          {
+            title: typeof o.title === 'string' ? o.title : url,
+            url,
+            domain: typeof o.domain === 'string' ? o.domain : '',
+          },
+        ]
       })
       if (cleanSources.length === 0) continue
       lines.push({
