@@ -1,6 +1,6 @@
 {
   "name": "openhiveai",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Local-first, self-hosted, single-user AI agent orchestration platform.",
   "license": "MIT",
   "homepage": "https://github.com/openhivelabs/openhive",
