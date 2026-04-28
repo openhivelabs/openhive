@@ -1,0 +1,15 @@
+id: session-status
+name: Session Status
+description: >-
+  Live counts of the current team's chat sessions by state — running,
+  awaiting input, unreviewed, failed. No data binding; reads directly
+  from the in-app session store.
+author: OpenHive
+category: session-status
+tags: [session, status, live, sessions, conversation, freeform]
+
+panel:
+  type: session_status
+  title: Session Status
+  colSpan: 2
+  rowSpan: 2

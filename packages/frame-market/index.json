@@ -214,6 +214,24 @@
       }
     },
     {
+      "id": "session-status",
+      "name": "Session Status",
+      "description": "Live counts of this team's chat sessions by state — running, awaiting input, unreviewed, failed. No data binding; reflects the in-app session store.",
+      "author": "OpenHive",
+      "category": "session-status",
+      "tags": ["session", "status", "live", "sessions", "conversation"],
+      "preview": {
+        "kind": "session_status",
+        "subtitle": "Live",
+        "stats": [
+          { "label": "RUNNING", "value": "2" },
+          { "label": "WAITING", "value": "1" },
+          { "label": "UNREVIEWED", "value": "3" },
+          { "label": "FAILED", "value": "0" }
+        ]
+      }
+    },
+    {
       "id": "sticky-note",
       "name": "Sticky Note",
       "description": "Free-form note panel. Click to edit, type Markdown, save. Content lives on the panel itself — no data binding, no SQL. Use for meeting notes, TODOs, links, or anything you want pinned to a dashboard.",

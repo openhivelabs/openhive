@@ -290,7 +290,13 @@ function PanelCell({
       row={spec.row}
       dragging={draggingId === spec.id}
       onRemove={() => removeBlock(spec.id)}
-      onEdit={spec.binding ? onEdit : undefined}
+      onEdit={
+        spec.binding ||
+        spec.type === 'memo' ||
+        spec.type === 'session_status'
+          ? onEdit
+          : undefined
+      }
       onDragStart={(id, e) => {
         e.dataTransfer.effectAllowed = 'move'
         e.dataTransfer.setData('text/plain', id)
@@ -300,10 +306,12 @@ function PanelCell({
         setDraggingId(null)
       }}
     >
-      {spec.binding || spec.type === 'memo' ? (
-        // Memo panels have no binding (content lives in panel_memos),
-        // but BoundPanel handles them specially — route there instead
-        // of falling through to BlockContent which has no memo case.
+      {spec.binding || spec.type === 'memo' || spec.type === 'session_status' ? (
+        // Binding-less panels (memo, session_status) have no binding —
+        // memo content lives in panel_memos, session_status reads the
+        // in-app session store. BoundPanel handles them specially —
+        // route there instead of falling through to BlockContent which
+        // has no case for them.
         <BoundPanel spec={spec} teamId={teamId} />
       ) : (
         <BlockContent

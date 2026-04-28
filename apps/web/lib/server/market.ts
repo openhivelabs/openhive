@@ -82,6 +82,11 @@ export type PanelPreview =
   | { kind: 'stat_row'; stats: { label: string; value: string }[]; subtitle?: string }
   | { kind: 'calendar'; month: string; days: { day: number; events?: number; today?: boolean; muted?: boolean }[]; subtitle?: string }
   | { kind: 'memo'; text: string; subtitle?: string }
+  | {
+      kind: 'session_status'
+      stats: { label: string; value: string }[]
+      subtitle?: string
+    }
 
 export interface MarketIndex {
   companies: MarketEntry[]
@@ -243,6 +248,23 @@ function coercePreview(raw: unknown): PanelPreview | undefined {
     case 'memo': {
       const text = typeof r.text === 'string' ? r.text : ''
       return { kind: 'memo', text, subtitle }
+    }
+    case 'session_status': {
+      if (!Array.isArray(r.stats)) return undefined
+      const stats: { label: string; value: string }[] = []
+      for (const s of r.stats as unknown[]) {
+        if (!s || typeof s !== 'object') continue
+        const o = s as Record<string, unknown>
+        const label = typeof o.label === 'string' ? o.label : null
+        const value =
+          typeof o.value === 'string'
+            ? o.value
+            : typeof o.value === 'number'
+              ? String(o.value)
+              : null
+        if (label && value !== null) stats.push({ label, value })
+      }
+      return stats.length > 0 ? { kind: 'session_status', stats, subtitle } : undefined
     }
     case 'stat_row': {
       if (!Array.isArray(r.stats)) return undefined

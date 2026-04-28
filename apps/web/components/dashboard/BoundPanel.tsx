@@ -27,6 +27,7 @@ import { useLocaleTag, useT } from '@/lib/i18n'
 import { actionLabel } from '@/lib/panels/actionLabel'
 import { ActionFormModal, runConfirmAction } from './ActionForm'
 import { MemoView } from './MemoView'
+import { SessionStatusView } from './SessionStatusView'
 
 /** Renders a panel whose `binding` is set — data comes from the server's
  *  block cache (refreshed by the scheduler). The frontend is dumb: it trusts
@@ -38,6 +39,15 @@ import { MemoView } from './MemoView'
 export function BoundPanel({ spec, teamId }: { spec: PanelSpec; teamId?: string }) {
   if (spec.type === 'memo') {
     return <MemoPanel panelId={spec.id} teamId={teamId} />
+  }
+  if (spec.type === 'session_status') {
+    return (
+      <div className="h-full flex flex-col">
+        <div className="flex-1 min-h-0 overflow-auto">
+          <SessionStatusView teamId={teamId} />
+        </div>
+      </div>
+    )
   }
   return <BoundPanelInner spec={spec} teamId={teamId} />
 }

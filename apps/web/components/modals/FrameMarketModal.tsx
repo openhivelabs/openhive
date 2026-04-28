@@ -96,6 +96,7 @@ const CATEGORY_BLURB: Record<string, string> = {
   memo: 'Free-form sticky notes you write directly on the dashboard.',
   calendar: 'Month grid + day timetable for events on dated rows.',
   'stat-row': 'Compact horizontal row of related counters.',
+  'session-status': 'Live counts of chat sessions by state.',
 }
 
 const CATEGORY_ICON: Record<string, typeof UsersIcon> = {
@@ -108,6 +109,7 @@ const CATEGORY_ICON: Record<string, typeof UsersIcon> = {
   memo: NotePencil,
   calendar: CalendarBlank,
   'stat-row': Rows,
+  'session-status': Pulse,
 }
 
 const TAB_DEFS: { type: MarketType; label: string; icon: typeof UsersIcon }[] = [
@@ -844,7 +846,7 @@ function EntryDetailView({
         </p>
       )}
 
-      {entry.type === 'panel' && entry.category !== 'memo' && (
+      {entry.type === 'panel' && entry.category !== 'memo' && entry.category !== 'session-status' && (
         <div className="flex flex-col gap-1.5">
           <label
             htmlFor="install-intent"
@@ -1011,10 +1013,10 @@ function PanelDetailView({
             )}
           </div>
 
-          {/* Memo panels are content-only (no SQL / data binding), so the
-              Data + Apply + Code controls don't apply — hide them so the
-              install flow is just a one-click affair. */}
-          {entry.category !== 'memo' && (
+          {/* Binding-less panels (memo, session_status) are content-only —
+              no SQL / data binding, so the Data + Apply + Code controls
+              don't apply. Hide them so the install flow is one-click. */}
+          {entry.category !== 'memo' && entry.category !== 'session-status' && (
             <div className="px-5 py-4 border-b border-neutral-100 dark:border-neutral-800">
               <label
                 htmlFor="install-intent"
@@ -1420,7 +1422,33 @@ function renderPreview(p: PanelPreview, compact = false): React.ReactElement {
       return <CalendarPreview month={p.month} days={p.days} />
     case 'memo':
       return <MemoPreview text={p.text} />
+    case 'session_status':
+      return <SessionStatusPreview stats={p.stats} />
   }
+}
+
+function SessionStatusPreview({
+  stats,
+}: {
+  stats: { label: string; value: string }[]
+}) {
+  return (
+    <div className="h-full w-full p-2 bg-white dark:bg-neutral-900 grid grid-cols-2 gap-1.5">
+      {stats.map((s, i) => (
+        <div
+          key={i}
+          className="rounded-sm border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-1.5 py-1 flex flex-col justify-center"
+        >
+          <div className="text-[8.5px] uppercase tracking-wide text-neutral-500 dark:text-neutral-400 truncate">
+            {s.label}
+          </div>
+          <div className="text-[14px] font-semibold tabular-nums text-neutral-900 dark:text-neutral-100">
+            {s.value}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function MemoPreview({ text }: { text: string }) {

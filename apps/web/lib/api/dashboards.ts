@@ -11,6 +11,7 @@ export type PanelType =
   | 'metric_grid'
   | 'calendar'
   | 'memo'
+  | 'session_status'
 
 /** Where a block's data comes from. The shape inside `config` varies by kind:
  *   - mcp:        { server, tool, args }
