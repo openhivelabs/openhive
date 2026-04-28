@@ -149,6 +149,71 @@ function setFlash(msg, ms = 2000) {
   }, ms)
 }
 
+function detectPm() {
+  const p = (process.argv[1] || '').replace(/\\/g, '/')
+  if (/\/pnpm\//.test(p) || /\.pnpm\//.test(p)) return 'pnpm'
+  if (/\/yarn\//.test(p) || /\.yarn\//.test(p)) return 'yarn'
+  return 'npm'
+}
+
+function installCommand(pm, version) {
+  if (pm === 'pnpm') return ['pnpm', ['add', '-g', `openhiveai@${version}`]]
+  if (pm === 'yarn') return ['yarn', ['global', 'add', `openhiveai@${version}`]]
+  return ['npm', ['i', '-g', `openhiveai@${version}`]]
+}
+
+let updating = false
+async function runUpdate(version) {
+  if (updating) return
+  updating = true
+
+  process.stdin.removeAllListeners('data')
+  if (process.stdin.isTTY) process.stdin.setRawMode(false)
+  process.stdin.pause()
+
+  if (child.exitCode === null) {
+    child.kill('SIGTERM')
+    await new Promise((resolve) => {
+      const t = setTimeout(() => {
+        try {
+          child.kill('SIGKILL')
+        } catch {}
+        resolve()
+      }, 5000)
+      child.once('exit', () => {
+        clearTimeout(t)
+        resolve()
+      })
+    })
+  }
+
+  showCursor()
+  altOff()
+
+  const pm = detectPm()
+  const [cmd, args] = installCommand(pm, version)
+  out(`\n   ⤓  updating to v${version} via ${pm}…\n\n`)
+
+  const proc = spawn(cmd, args, { stdio: 'inherit', shell: process.platform === 'win32' })
+  proc.on('exit', (code) => {
+    try {
+      fs.closeSync(logFd)
+    } catch {}
+    if (code === 0) {
+      out(`\n   ✓  updated to v${version}. run \x1b[1mopenhiveai\x1b[0m to start.\n`)
+      process.exit(0)
+    } else {
+      out(`\n   \x1b[31m✗  update failed (exit ${code}). try manually:\x1b[0m  ${cmd} ${args.join(' ')}\n`)
+      process.exit(code ?? 1)
+    }
+  })
+  proc.on('error', (err) => {
+    out(`\n   \x1b[31m✗  could not run ${cmd}:\x1b[0m ${err.message}\n`)
+    out(`   try manually:  ${cmd} ${args.join(' ')}\n`)
+    process.exit(1)
+  })
+}
+
 async function shutdown(code = 0) {
   process.stdin.removeAllListeners('data')
   if (process.stdin.isTTY) process.stdin.setRawMode(false)
@@ -196,7 +261,7 @@ function onKey(buf) {
     return
   }
   if (s === 'u' || s === 'U') {
-    if (latest) setFlash(`run:  npm i -g openhiveai@${latest}`, 4000)
+    if (latest) void runUpdate(latest)
     return
   }
   if (s === '\r' || s === '\n') {
