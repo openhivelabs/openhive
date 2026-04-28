@@ -3,9 +3,9 @@
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "dev": "pnpm --filter @openhive/web dev",
-    "build": "pnpm --filter @openhive/web build",
-    "start": "pnpm --filter @openhive/web start",
+    "dev": "pnpm --filter ./apps/web dev",
+    "build": "pnpm --filter ./apps/web build",
+    "start": "pnpm --filter ./apps/web start",
     "lint": "biome check .",
     "format": "biome format --write .",
     "fonts:fetch": "python3 packages/skills/_lib/fonts.py",

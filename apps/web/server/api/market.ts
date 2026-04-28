@@ -252,12 +252,14 @@ market.post('/install/apply', async (c) => {
         return { tables: [], recent_migrations: [] }
       }
     })()
-    // Memo panels carry no data binding (content lives in `panel_memos`),
-    // so the AI binder has nothing to do — skip it unconditionally even
+    // Binding-less panels (memo, session_status) carry no data binding —
+    // memo content lives in `panel_memos`, session_status reads the in-app
+    // session store on the client. Skip the AI binder unconditionally even
     // when the team already has tables.
     const panelType = String(panel.type ?? '')
     const useAi =
       panelType !== 'memo' &&
+      panelType !== 'session_status' &&
       (userIntent !== null || (schema.tables?.length ?? 0) > 0)
 
     if (useAi) {
@@ -415,10 +417,10 @@ market.post('/install/ai-bind-preview', async (c) => {
       }
     })()
     const panelType = String(panel.type ?? '')
-    // Memo panels carry no binding — short-circuit so the preview endpoint
-    // doesn't fire an LLM call (which the binder rejects with "did not
-    // return JSON" since memo panels have nothing to bind).
-    if (panelType === 'memo') {
+    // Binding-less panels (memo, session_status) — short-circuit so the
+    // preview endpoint doesn't fire an LLM call (which the binder rejects
+    // with "did not return JSON" since these panels have nothing to bind).
+    if (panelType === 'memo' || panelType === 'session_status') {
       return c.json({
         ok: true,
         binding: panel.binding ?? null,

@@ -177,9 +177,9 @@ export function AddPanelModal({
                 />
               </Section>
 
-              {/* Section: data — memo panels carry no binding, so the
-                  Data / Apply / Code controls are noise. Hide them. */}
-              {existingSpec.type !== 'memo' && (
+              {/* Section: data — binding-less panels (memo, session_status)
+                  carry no data field. Hide the Data / Apply / Code controls. */}
+              {existingSpec.type !== 'memo' && existingSpec.type !== 'session_status' && (
                 <Section>
                   <label
                     htmlFor="panel-edit-intent"
@@ -255,7 +255,12 @@ export function AddPanelModal({
               <button
                 type="button"
                 onClick={save}
-                disabled={!binding || busy !== null}
+                disabled={
+                  busy !== null ||
+                  (!binding &&
+                    existingSpec.type !== 'memo' &&
+                    existingSpec.type !== 'session_status')
+                }
                 className="h-8 px-4 rounded-sm bg-neutral-900 text-white text-[13px] font-medium hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
               >
                 {t('panel.edit.save')}

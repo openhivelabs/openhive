@@ -60,6 +60,11 @@ export type PanelPreview =
   | { kind: 'stat_row'; stats: { label: string; value: string }[]; subtitle?: string }
   | { kind: 'calendar'; month: string; days: { day: number; events?: number; today?: boolean; muted?: boolean }[]; subtitle?: string }
   | { kind: 'memo'; text: string; subtitle?: string }
+  | {
+      kind: 'session_status'
+      stats: { label: string; value: string }[]
+      subtitle?: string
+    }
 
 export interface MarketIndex {
   companies: MarketEntry[]

@@ -109,9 +109,10 @@ panels.post('/rebind', async (c) => {
   })()
   try {
     const panelType = String((body.spec as { type?: unknown }).type ?? '')
-    // Memo panels have no data binding — return the spec's binding
-    // unchanged instead of asking the LLM to "bind" a content-only panel.
-    if (panelType === 'memo') {
+    // Binding-less panels (memo, session_status) have no data binding —
+    // return the spec's binding unchanged instead of asking the LLM to
+    // "bind" a content-only panel.
+    if (panelType === 'memo' || panelType === 'session_status') {
       return c.json({
         ok: true,
         binding: (body.spec as { binding?: unknown }).binding ?? null,
