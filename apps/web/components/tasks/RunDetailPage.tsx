@@ -9,7 +9,6 @@ import {
   CircleNotch,
   Coins,
   Copy,
-  DownloadSimple,
   FileText,
   Globe,
   MagnifyingGlass,
@@ -1842,15 +1841,20 @@ export function RunDetailPage() {
                 <ul className="space-y-0.5">
                   {visibleArtifacts.map((a) => (
                     <li key={a.id}>
-                      <a
-                        href={`/api/artifacts/${encodeURIComponent(a.id)}/download`}
-                        download
-                        className="group flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800/60"
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void fetch(
+                            `/api/artifacts/${encodeURIComponent(a.id)}/open`,
+                            { method: 'POST' },
+                          )
+                        }}
+                        className="group flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800/60 w-full text-left"
                       >
                         <FileText className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
                         <span className="flex-1 truncate">{a.filename}</span>
-                        <DownloadSimple className="w-3.5 h-3.5 text-neutral-400 opacity-0 group-hover:opacity-100 shrink-0" />
-                      </a>
+                        <ArrowSquareOut className="w-3.5 h-3.5 text-neutral-400 opacity-0 group-hover:opacity-100 shrink-0" />
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -2037,12 +2041,26 @@ function AttachmentCard({ artifact }: { artifact: SessionArtifact }) {
       : t('attachment.type.file')
   const size = fmtBytes(artifact.size)
   const downloadUrl = `/api/artifacts/${artifact.id}/download`
+  const openLocal = async () => {
+    try {
+      await fetch(`/api/artifacts/${artifact.id}/open`, { method: 'POST' })
+    } catch {
+      window.location.href = downloadUrl
+    }
+  }
   return (
-    <a
-      href={downloadUrl}
-      download={artifact.filename}
-      className="group/card flex items-center gap-3 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-900/60 px-3.5 py-3 w-full hover:bg-neutral-100 dark:hover:bg-neutral-800/80 transition-colors no-underline"
-      title={`Download ${artifact.filename}`}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={openLocal}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          void openLocal()
+        }
+      }}
+      className="group/card flex items-center gap-3 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-900/60 px-3.5 py-3 w-full hover:bg-neutral-100 dark:hover:bg-neutral-800/80 transition-colors cursor-pointer"
+      title={`Open ${artifact.filename}`}
     >
       <span
         className="shrink-0 w-10 h-10 rounded-lg bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 flex items-center justify-center"
@@ -2060,12 +2078,12 @@ function AttachmentCard({ artifact }: { artifact: SessionArtifact }) {
         </span>
       </span>
       <span
-        className="shrink-0 p-1.5 rounded-md text-neutral-400 group-hover/card:text-neutral-700 group-hover/card:bg-neutral-200 dark:group-hover/card:text-neutral-200 dark:group-hover/card:bg-neutral-700"
+        className="shrink-0 p-1.5 rounded-md text-neutral-400 group-hover/card:text-neutral-700 dark:group-hover/card:text-neutral-200"
         aria-hidden
       >
-        <DownloadSimple className="w-4 h-4" />
+        <ArrowSquareOut className="w-4 h-4" />
       </span>
-    </a>
+    </div>
   )
 }
 

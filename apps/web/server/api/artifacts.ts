@@ -141,6 +141,50 @@ function revealInFinder(absPath: string): Promise<void> {
   })
 }
 
+function openWithDefaultApp(absPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const platform = process.platform
+    let cmd: string
+    let args: string[]
+    if (platform === 'darwin') {
+      cmd = 'open'
+      args = [absPath]
+    } else if (platform === 'win32') {
+      cmd = 'cmd'
+      args = ['/c', 'start', '', absPath]
+    } else {
+      cmd = 'xdg-open'
+      args = [absPath]
+    }
+    const child = spawn(cmd, args, { stdio: 'ignore', detached: true })
+    child.on('error', reject)
+    child.unref()
+    resolve()
+  })
+}
+
+// POST /api/artifacts/:artifactId/open
+artifacts.post('/:artifactId/open', async (c) => {
+  const artifactId = c.req.param('artifactId')
+  const art = getArtifact(artifactId)
+  if (!art) {
+    return c.json({ detail: 'Artifact not found' }, 404)
+  }
+  const abs = containedArtifactPath(art)
+  if (!abs) {
+    return c.json({ detail: 'Artifact path outside session root' }, 400)
+  }
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+    return c.json({ detail: 'Artifact file missing on disk' }, 410)
+  }
+  try {
+    await openWithDefaultApp(abs)
+    return c.json({ ok: true })
+  } catch (exc) {
+    return c.json({ detail: exc instanceof Error ? exc.message : String(exc) }, 500)
+  }
+})
+
 // POST /api/artifacts/:artifactId/reveal
 artifacts.post('/:artifactId/reveal', async (c) => {
   const artifactId = c.req.param('artifactId')
