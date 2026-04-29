@@ -445,8 +445,9 @@ function StepProvider({
                   key={p.id}
                   className="flex items-center justify-between gap-3 px-3 py-2.5 rounded border border-neutral-200 bg-white"
                 >
-                  <div className="min-w-0">
-                    <div className="text-[14px] font-medium text-neutral-800">{p.label}</div>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <ProviderIcon id={p.id} label={p.label} />
+                    <div className="text-[14px] font-medium text-neutral-800 truncate">{p.label}</div>
                   </div>
                   {p.connected ? (
                     <span className="text-[12px] text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-sm">
@@ -530,8 +531,9 @@ function ApiKeyRow({
   return (
     <div className="rounded border border-neutral-200 bg-white px-3 py-2.5">
       <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-[14px] font-medium text-neutral-800">{provider.label}</div>
+        <div className="flex items-center gap-2.5 min-w-0">
+          <ProviderIcon id={provider.id} label={provider.label} />
+          <div className="text-[14px] font-medium text-neutral-800 truncate">{provider.label}</div>
         </div>
         {provider.connected ? (
           <span className="text-[12px] text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-sm shrink-0">
@@ -582,6 +584,34 @@ function ApiKeyRow({
             {saving ? t('onboarding.provider.saving') : t('onboarding.provider.save')}
           </Button>
         </div>
+      )}
+    </div>
+  )
+}
+
+const PROVIDER_ICON_EXTS = ['svg', 'webp', 'png'] as const
+const PROVIDER_ICON_SCALE: Record<string, string> = {
+  codex: 'scale-[1.4]',
+  copilot: 'scale-[1.4]',
+}
+
+function ProviderIcon({ id, label }: { id: string; label: string }) {
+  const [extIdx, setExtIdx] = useState(0)
+  const [failed, setFailed] = useState(false)
+  return (
+    <div className="w-6 h-6 shrink-0 flex items-center justify-center overflow-hidden">
+      {failed ? (
+        <span className="text-[14px] font-semibold text-neutral-500">{label.slice(0, 1)}</span>
+      ) : (
+        <img
+          src={`/brands/${id}.${PROVIDER_ICON_EXTS[extIdx]}`}
+          alt=""
+          onError={() => {
+            if (extIdx + 1 < PROVIDER_ICON_EXTS.length) setExtIdx(extIdx + 1)
+            else setFailed(true)
+          }}
+          className={`max-w-full max-h-full object-contain ${PROVIDER_ICON_SCALE[id] ?? ''}`}
+        />
       )}
     </div>
   )
