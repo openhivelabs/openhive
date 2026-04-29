@@ -7,7 +7,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ToolsManifest, WritePolicy } from '../agents/loader'
-import { packagesRoot } from '../paths'
 import {
   type SqlParam,
   describeSchema,
@@ -124,6 +123,7 @@ export function teamDataTools(
       }
     },
     hint: 'Reading schema…',
+    category: 'db',
   })
 
   tools.push({
@@ -217,6 +217,7 @@ export function teamDataTools(
       }
     },
     hint: 'Querying…',
+    category: 'db',
   })
 
   tools.push({
@@ -310,6 +311,7 @@ export function teamDataTools(
       }
     },
     hint: 'Writing data…',
+    category: 'db',
   })
 
   tools.push({
@@ -363,6 +365,7 @@ export function teamDataTools(
       }
     },
     hint: 'Planning…',
+    category: 'db',
   })
 
   tools.push({
@@ -414,6 +417,7 @@ export function teamDataTools(
       }
     },
     hint: 'Installing template…',
+    category: 'db',
   })
 
   const GUIDE_TOPICS = ['hybrid-schema', 'json1', 'indexes', 'patterns', 'perf'] as const
@@ -442,7 +446,10 @@ export function teamDataTools(
           valid: GUIDE_TOPICS,
         })
       }
-      const file = path.join(packagesRoot(), 'skills', 'db', 'reference', `${topic}.md`)
+      // Guides live next to this tool's source. In dev, __dirname is the TS
+      // source dir; in prod (build:server), `cp -R lib/server/tools/db-guides
+      // dist-server/lib/server/tools/` keeps the same relative layout.
+      const file = path.join(__dirname, 'db-guides', `${topic}.md`)
       try {
         const content = fs.readFileSync(file, 'utf8')
         return JSON.stringify({ ok: true, topic, content })
@@ -457,6 +464,7 @@ export function teamDataTools(
       }
     },
     hint: 'Loading guide…',
+    category: 'db',
   })
 
   return tools

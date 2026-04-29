@@ -14,12 +14,15 @@
  *     roleDefaults(role)            ← essentials every agent of this role gets
  *     ∪ persona.tools.skills        ← what the persona file declared
  *     ∪ node.skills                 ← what the team yaml declared on the node
+ *     ∪ bundledSkills               ← filesystem scan of packages/skills/ +
+ *                                     ~/.openhive/skills/ (source of truth)
  *     | apply COUPLED_SKILLS rule   ← e.g. web-fetch always pulls in web-search
- *     ∩ team.allowed_skills         ← narrow IF the team specifies a non-empty
- *                                     allow-list, otherwise no narrowing
+ *     − team.disabled_skills        ← explicit team-level denylist
  *
- * No empty→all fallback. If a role's bundle is empty and nothing else is
- * declared, the agent gets zero skills and the LLM is told so explicitly.
+ * Filesystem-as-source-of-truth: a new SKILL.md directory is visible to every
+ * agent with zero hardcoded-array edits. Teams that need to forbid a skill
+ * use `disabled_skills`. The legacy `allowed_skills` whitelist field is no
+ * longer enforced (kept for round-trip compatibility, ignored at boot).
  */
 
 /** A research worker should always be able to search AND fetch. Coupled below. */
@@ -121,20 +124,31 @@ interface ResolveSkillsOpts {
   nodeSkills?: readonly string[] | null
   /** Skills declared in the persona file (`persona.tools.skills`). */
   personaSkills?: readonly string[] | null
-  /** Team-wide allow-list. Empty/missing = no narrowing. */
-  allowedSkills?: readonly string[] | null
+  /**
+   * Filesystem-discovered skill names (from `listAllSkillNames()`). When set,
+   * every bundled / user-installed skill is part of the candidate pool — this
+   * is how new SKILL.md directories become visible to the LLM with zero
+   * hardcoded list maintenance. Empty/missing falls back to declared-only.
+   */
+  bundledSkills?: readonly string[] | null
+  /**
+   * Team-level explicit denylist (TeamSpec.disabled_skills). Anything listed
+   * is removed from the final set. Empty/missing = nothing removed.
+   */
+  disabledSkills?: readonly string[] | null
 }
 
 /**
  * Compute an agent's effective skill set. Pure function — no I/O, no state.
  * Order of operations:
- *   1. Union: roleDefaults ∪ persona.skills ∪ node.skills (de-duplicated,
- *      first occurrence wins for ordering).
+ *   1. Union: roleDefaults ∪ persona.skills ∪ node.skills ∪ bundled
+ *      (de-duplicated, first occurrence wins for ordering).
  *   2. Coupling: any present member of a coupled group pulls in the rest.
- *   3. Allowlist narrowing: if team.allowed_skills is non-empty, intersect.
+ *   3. Denylist subtraction: drop anything in team.disabled_skills.
  *
- * No empty→all fallback. Callers that want the LLM to see every available
- * skill must say so explicitly via the team allow-list or persona declaration.
+ * Filesystem is the source of truth for what skills *exist*. Role bundles +
+ * coupling rules remain as semantic guarantees (essentials, safety pairs).
+ * Denial is the only narrowing mechanism — explicit opt-in by the team.
  */
 export function resolveEffectiveSkills(opts: ResolveSkillsOpts): string[] {
   const seen = new Set<string>()
@@ -147,11 +161,12 @@ export function resolveEffectiveSkills(opts: ResolveSkillsOpts): string[] {
   for (const s of roleDefaultSkills(opts.role)) push(s)
   for (const s of opts.personaSkills ?? []) push(s)
   for (const s of opts.nodeSkills ?? []) push(s)
+  for (const s of opts.bundledSkills ?? []) push(s)
 
   const coupled = applyCoupling(merged)
 
-  const allow = opts.allowedSkills ?? []
-  if (allow.length === 0) return coupled
-  const allowSet = new Set(allow)
-  return coupled.filter((s) => allowSet.has(s))
+  const disabled = opts.disabledSkills ?? []
+  if (disabled.length === 0) return coupled
+  const disabledSet = new Set(disabled)
+  return coupled.filter((s) => !disabledSet.has(s))
 }

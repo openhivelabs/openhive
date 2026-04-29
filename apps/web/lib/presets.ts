@@ -1,5 +1,4 @@
 import { DEFAULT_LEAD_SYSTEM_PROMPT } from './defaults/leadSystemPrompt'
-import { DEFAULT_AGENT_SKILLS } from './defaults/skills'
 import type { Team } from './types'
 
 function slug(s: string) {
@@ -210,7 +209,11 @@ function buildEmptyTeam(): Team {
         providerId: 'copilot',
         model: 'gpt-5-mini',
         systemPrompt: DEFAULT_LEAD_SYSTEM_PROMPT,
-        skills: [...DEFAULT_AGENT_SKILLS],
+        // Empty per-node skills array — the engine auto-includes every skill
+        // discovered in packages/skills/ + ~/.openhive/skills/ at session boot
+        // (filesystem is the source of truth). Override per-team via
+        // `disabledSkills` only when a skill must be explicitly forbidden.
+        skills: [],
         position: { x: 400, y: 120 },
       },
     ],

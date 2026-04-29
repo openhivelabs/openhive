@@ -26,7 +26,7 @@
     "dev:hono": "tsx watch --include 'lib/**/*.ts' --include 'server/**/*.ts' server/index.ts",
     "dev:web": "vite",
     "build:web": "vite build",
-    "build:server": "tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json",
+    "build:server": "tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json && cp -R lib/server/tools/db-guides dist-server/lib/server/tools/",
     "build": "pnpm build:web && pnpm build:server",
     "build:skills": "rm -rf packages-dist && mkdir -p packages-dist && cp -R ../../packages/skills ../../packages/frame-market ../../packages/mcp-presets packages-dist/ && find packages-dist -type d -name __pycache__ -prune -exec rm -rf {} + && find packages-dist -name '*.pyc' -delete && find packages-dist -name '.DS_Store' -delete",
     "prepublishOnly": "pnpm build && pnpm build:skills",

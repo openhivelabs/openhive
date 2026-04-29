@@ -40,12 +40,17 @@ export interface ToolsManifest {
 }
 
 function defaultToolsManifest(): ToolsManifest {
+  // DB read/write/DDL all default ON so chat agents can manage their team's
+  // SQLite without requiring every persona to ship a tools.yaml. Personas
+  // that need stricter policy declare `team_data: { write: false, ddl: false }`
+  // explicitly and the loader's named-value branch wins (parsePolicy below).
+  // db_exec still has its own `confirm_destructive` gate for DROP/TRUNCATE.
   return {
     skills: [],
     mcp_servers: [],
     team_data_read: true,
-    team_data_write: false,
-    team_data_ddl: false,
+    team_data_write: true,
+    team_data_ddl: true,
     team_data_allowed_tables: [],
     team_data_write_fields: [],
     team_data_templates: [],

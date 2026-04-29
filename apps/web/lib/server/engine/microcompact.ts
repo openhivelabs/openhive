@@ -52,10 +52,21 @@ const COMPACTABLE_BUILTIN = new Set<string>([
   // history; safe to compact because the skill re-runs cheaply with cache.
   'web-fetch',
   'web-search',
-  'sql_query',
+  // DB read tools: re-run cheaply against the per-team SQLite.
+  'db_describe',
+  'db_query',
+  'db_explain',
+  'db_read_guide',
   'read_skill_file',
   'run_skill_script', // special-cased below — files[] preserved
   'read_artifact',
+  // Panel/dashboard read tools — snapshots of dashboard.yaml or cache rows.
+  'panel_list',
+  'panel_get',
+  'panel_market_list',
+  'panel_get_data',
+  'panel_refresh',
+  'dashboard_list_backups',
 ])
 
 /** Trajectory-encoding / audit-critical tools. Never compact. */
@@ -66,8 +77,20 @@ const NEVER_COMPACT = new Set<string>([
   'set_todos',
   'add_todo',
   'complete_todo',
-  'sql_exec',
+  'db_exec',
+  'db_install_template',
   'activate_skill',
+  // Panel/dashboard mutations: install/update/delete/execute_action all
+  // change persistent state the LLM may need to reference later (e.g. the
+  // panel id returned by panel_install must survive into a follow-up
+  // panel_update_binding call).
+  'panel_install',
+  'panel_update_binding',
+  'panel_set_position',
+  'panel_set_props',
+  'panel_delete',
+  'panel_execute_action',
+  'dashboard_restore_backup',
 ])
 
 export function isCompactable(name: string): boolean {

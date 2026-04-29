@@ -19,7 +19,6 @@ import {
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
 import { DEFAULT_LEAD_SYSTEM_PROMPT } from '@/lib/defaults/leadSystemPrompt'
-import { DEFAULT_AGENT_SKILLS } from '@/lib/defaults/skills'
 import type { Agent, Company, ReportingEdge, Team } from '@/lib/types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -909,15 +908,17 @@ function buildCompanySpec(
       providerId,
       model: defaultModel,
       systemPrompt: DEFAULT_LEAD_SYSTEM_PROMPT,
-      skills: [...DEFAULT_AGENT_SKILLS],
+      // Empty — engine auto-includes every filesystem-discovered skill at
+      // session boot. See lib/server/agents/skill-bundles.ts.
+      skills: [],
       position: { x: 400, y: 120 },
       maxParallel: 1,
     },
   ]
   const edges: ReportingEdge[] = []
-  // Team-level allow-list mirrors the Lead's skills so new members added via
-  // canvas inherit the same set (see CreateAgentModal default).
-  const allowedSkills: string[] = [...DEFAULT_AGENT_SKILLS]
+  // No positive whitelist: filesystem scan is the source of truth. Use
+  // `disabledSkills` if a team needs to explicitly forbid a skill.
+  const allowedSkills: string[] = []
 
   const team: Team = {
     id: `t-${randomHex()}`,

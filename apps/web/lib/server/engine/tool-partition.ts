@@ -61,18 +61,39 @@ export const PARALLEL_TRAJECTORY_TOOLS = new Set<string>([
 ])
 
 export const SERIAL_WRITE_TOOLS = new Set<string>([
-  'sql_exec', // DDL/DML on per-team SQLite
+  'db_exec', // DDL/DML on per-team SQLite
+  'db_install_template', // applies a vetted CREATE TABLE
   'run_skill_script', // arbitrary Python; can write files / call APIs
+  // Panel/dashboard mutations — install-lock serialises per team, but at the
+  // tool layer they still need serial_write so coexistent calls in the same
+  // batch don't overlap reads of dashboard.yaml against pending writes.
+  'panel_install',
+  'panel_update_binding',
+  'panel_set_position',
+  'panel_set_props',
+  'panel_delete',
+  'panel_execute_action',
+  'dashboard_restore_backup',
 ])
 
 export const SAFE_PARALLEL_TOOLS = new Set<string>([
-  'sql_query',
+  'db_describe',
+  'db_query',
+  'db_explain',
+  'db_read_guide',
   'read_skill_file',
   // Typed skills that are read-only networked calls — exactly the safe-parallel
   // shape. Listed by skill name (kebab-case, matches SKILL.md `name` frontmatter
   // which becomes the tool's name in the LLM catalog).
   'web-fetch',
   'web-search',
+  // Panel/dashboard reads.
+  'panel_list',
+  'panel_get',
+  'panel_market_list',
+  'panel_refresh',
+  'panel_get_data',
+  'dashboard_list_backups',
 ])
 
 export function classifyTool(toolName: string): ToolClass {

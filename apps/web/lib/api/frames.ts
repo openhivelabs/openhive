@@ -116,6 +116,7 @@ export function teamFromInstallResult(t: Record<string, unknown>): Team {
     })),
     entryAgentId: (t.entry_agent_id as string | null) ?? null,
     allowedSkills: (t.allowed_skills as string[]) ?? [],
+    disabledSkills: (t.disabled_skills as string[]) ?? [],
     limits: { max_tool_rounds_per_turn: 8, max_delegation_depth: 4 },
   }
 }

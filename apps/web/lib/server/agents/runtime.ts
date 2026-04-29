@@ -18,6 +18,7 @@ import {
 import type { AgentSpec, TeamSpec } from '../engine/team'
 import type { Tool } from '../tools/base'
 import { resolveEffectiveSkills } from './skill-bundles'
+import { listAllSkillNames } from '../skills/loader'
 
 export function resolvePersona(
   node: AgentSpec,
@@ -42,13 +43,15 @@ export function resolvePersona(
 
 /**
  * Compute the effective skill set the LLM sees for a node. Wraps the pure
- * resolver in `./skill-bundles.ts` with the team allow-list pulled from the
- * caller's TeamSpec so the engine has one entry point.
+ * resolver in `./skill-bundles.ts`, injecting the filesystem-discovered skill
+ * catalog so any SKILL.md directory in `packages/skills/` or
+ * `~/.openhive/skills/` is automatically visible without hardcoded array
+ * maintenance. Team-level narrowing happens via `disabled_skills` (denylist).
  *
- * Resolution model (no empty→all fallback — that footgun is dead):
- *   roleDefaults(node.role) ∪ persona.tools.skills ∪ node.skills
+ * Resolution model:
+ *   roleDefaults(node.role) ∪ persona.tools.skills ∪ node.skills ∪ bundled
  *     | apply coupled-skill rules (e.g. web-fetch → +web-search)
- *     ∩ team.allowed_skills (only if non-empty)
+ *     − team.disabled_skills
  */
 export function effectiveSkills(
   node: AgentSpec,
@@ -59,7 +62,8 @@ export function effectiveSkills(
     role: node.role,
     nodeSkills: node.skills,
     personaSkills: persona.tools.skills,
-    allowedSkills: team?.allowed_skills ?? null,
+    bundledSkills: listAllSkillNames(),
+    disabledSkills: team?.disabled_skills ?? null,
   })
 }
 

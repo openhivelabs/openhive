@@ -38,9 +38,15 @@ import { resetReasoningForChain } from '../providers/codex'
 import type { ChatMessage, ToolSpec } from '../providers/types'
 import { readArtifactTool, buildArtifactUri } from '../sessions/artifacts'
 import * as sessionsStore from '../sessions'
-import { type SkillDef, getSkill, matchSkillHints } from '../skills/loader'
+import {
+  type SkillDef,
+  getSkill,
+  listAllSkillNames,
+  matchSkillHints,
+} from '../skills/loader'
 import { readSkillFile, runSkill, runSkillScript } from '../skills/runner'
 import { type Tool, toolsToOpenAI } from '../tools/base'
+import { panelTools } from '../tools/panel-tools'
 import { teamDataTools } from '../tools/team-data-tool'
 import { effectiveWindow as computeEffectiveWindow } from '../usage/contextWindow'
 import {
@@ -1003,6 +1009,7 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   }
   if (teamSlugs) {
     tools.push(...teamDataTools(teamSlugs[0], team.id, persona.tools))
+    tools.push(...panelTools(teamSlugs[0], teamSlugs[1], team.id))
   }
   // A3: artifact rehydration — Lead + sub-agent both need to re-read files
   // produced earlier in the session (microcompact may have cleared the
@@ -1012,12 +1019,13 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
   // Skills: typed get a structured tool; agent-format go through activate/read/run.
   //
   // Resolution lives in agents/skill-bundles.ts (`resolveEffectiveSkills`):
-  //   roleDefaults(node.role) ∪ persona.tools.skills ∪ node.skills,
+  //   roleDefaults(node.role) ∪ persona.tools.skills ∪ node.skills ∪ bundled,
   //   then coupled-skill rules (web-fetch always pulls in web-search, etc.),
-  //   then team.allowed_skills narrowing if it's non-empty.
-  // The pre-redesign "if declared empty, fall back to every bundled skill"
-  // hack is gone — it accidentally opted Members out of essentials whenever
-  // their persona listed a few file skills (see commit log / Track A brief).
+  //   minus team.disabled_skills.
+  // `bundled` comes from a filesystem scan (`listAllSkillNames()`), so any
+  // SKILL.md directory in packages/skills/ or ~/.openhive/skills/ is visible
+  // automatically — no hardcoded array maintenance. Legacy
+  // team.allowed_skills is kept for round-trip but no longer narrows.
   const candidates = effectiveSkills(node, persona, team)
   const typedSkills: SkillDef[] = []
   const agentSkills: SkillDef[] = []
@@ -1108,7 +1116,10 @@ async function* runNode(opts: SessionNodeOpts): AsyncGenerator<Event> {
       (showHints ? hintsBlock + '\n' : '') +
       (deliverablesPolicy ? deliverablesPolicy + '\n' : '')
     const teamBlock = prefix ? prefix + staticTeamBlock : staticTeamBlock
-    return composeSystemPrompt(personaBody, agentSkills, teamBlock)
+    // Surface only the categorised domain tools to the prompt narrative —
+    // trajectory tools (delegate_to, ask_user, todo_*) get raw schemas only.
+    const builtinForPrompt = tools.filter((t) => t.category != null)
+    return composeSystemPrompt(personaBody, agentSkills, teamBlock, builtinForPrompt)
   }
   tools.push(...makePersonaTools(persona))
 
@@ -2587,7 +2598,8 @@ export function preflightDelegation(
     role: assignee.role,
     nodeSkills: assignee.skills,
     personaSkills: persona.tools.skills,
-    allowedSkills: team.allowed_skills ?? null,
+    bundledSkills: listAllSkillNames(),
+    disabledSkills: team.disabled_skills ?? null,
   })
   const has = new Set(skills)
   if (has.has('web-search')) return null
@@ -3712,7 +3724,8 @@ function describeTeamForAgent(team: TeamSpec, agentId: string): string {
         role: sub.role,
         nodeSkills: sub.skills,
         personaSkills: subPersona.tools.skills,
-        allowedSkills: team.allowed_skills ?? null,
+        bundledSkills: listAllSkillNames(),
+        disabledSkills: team.disabled_skills ?? null,
       })
       const skillTag = skills.length > 0 ? ` [skills: ${skills.join(', ')}]` : ''
       lines.push(`${'  '.repeat(indent)}- ${sub.role}${label}${skillTag}`)
@@ -3742,16 +3755,112 @@ function describeTeamForAgent(team: TeamSpec, agentId: string): string {
   )
 }
 
-export function composeSystemPrompt(base: string, agentSkills: SkillDef[], teamSection: string): string {
+/** Static preamble that anchors the LLM to *this* app's domain so user
+ *  phrases like "DB" / "데이터베이스" / "패널" / "대시보드" map onto the
+ *  in-app SQLite + dashboard system instead of generic Excel / Postgres
+ *  priors. Always present (not gated on skills/tools count) — the cost is
+ *  ~280 tokens, the upside is the model not hallucinating that it has no
+ *  way to manage panels. */
+const ABOUT_THIS_APP_BLOCK = `\n\n# About this app
+You are running inside OpenHive, a multi-agent dashboard app. Each team owns
+a private SQLite database (use the \`db_*\` tools) where its rows live, and a
+dashboard composed of panels (use the \`panel_*\` tools). When the user
+mentions "database / DB / 데이터베이스" they mean THIS team's SQLite — query
+it directly with \`db_query\`/\`db_exec\`, don't write SQL into a text file.
+When they mention "dashboard / panel / 대시보드 / 패널" they mean the canvas
+widgets — manage them with \`panel_*\`, don't propose Excel/PowerPoint.\n`
+
+/** First-sentence hint extractor for built-in tools, mirroring
+ *  `formatSkillHint`. Falls back to the raw description when the first
+ *  sentence is too short. */
+function formatToolHint(tool: { description: string }): string {
+  const desc = (tool.description ?? '').trim()
+  if (!desc) return '(no description)'
+  // First sentence up to '. ' or 80 chars, whichever comes first.
+  const dot = desc.indexOf('. ')
+  const slice = dot > 12 ? desc.slice(0, dot + 1) : desc
+  return slice.length > 140 ? `${slice.slice(0, 137)}…` : slice
+}
+
+interface BuiltinToolForPrompt {
+  name: string
+  description: string
+  category?: 'db' | 'panel' | 'dashboard' | null
+}
+
+function renderBuiltinToolsSection(tools: BuiltinToolForPrompt[]): string {
+  const cats: Array<{
+    key: 'db' | 'panel' | 'dashboard'
+    heading: string
+    blurb: string
+  }> = [
+    {
+      key: 'db',
+      heading: "Database (this team's SQLite)",
+      blurb:
+        "Query and modify this team's per-team SQLite directly. INSERT/UPDATE/" +
+        "DELETE/CREATE all go through `db_exec` — don't write SQL into a text " +
+        'file and call it done.',
+    },
+    {
+      key: 'panel',
+      heading: 'Dashboard panels',
+      blurb:
+        'Manage the canvas widgets the user sees. After `panel_install` you MUST ' +
+        'call `panel_update_binding(panel_id, user_intent)` to bind real data — ' +
+        "the manifest binding is a placeholder. `panel_delete` requires `confirm: true`.",
+    },
+    {
+      key: 'dashboard',
+      heading: 'Dashboard (whole-team)',
+      blurb: 'Backups + restore for the entire dashboard layout.',
+    },
+  ]
+  const grouped = new Map<string, BuiltinToolForPrompt[]>()
+  for (const t of tools) {
+    if (!t.category) continue
+    if (!grouped.has(t.category)) grouped.set(t.category, [])
+    grouped.get(t.category)!.push(t)
+  }
+  if (grouped.size === 0) return ''
+  const out: string[] = ['\n\n# Built-in tools\n']
+  out.push(
+    'These tools talk directly to in-app state (DB rows, dashboard.yaml). ' +
+      'Tool schemas are in your tool-call API; this list anchors WHEN to use them.\n',
+  )
+  for (const cat of cats) {
+    const list = grouped.get(cat.key)
+    if (!list || list.length === 0) continue
+    out.push(`\n## ${cat.heading}\n`)
+    out.push(`${cat.blurb}\n`)
+    for (const t of list) {
+      out.push(`- \`${t.name}\` — ${formatToolHint(t)}\n`)
+    }
+  }
+  return out.join('')
+}
+
+export function composeSystemPrompt(
+  base: string,
+  agentSkills: SkillDef[],
+  teamSection: string,
+  builtinTools: BuiltinToolForPrompt[] = [],
+): string {
   const today = todayBlock()
-  if (agentSkills.length === 0 && !teamSection) return base ? base.trimEnd() + today : today.trimStart()
+  const builtinSection = renderBuiltinToolsSection(builtinTools)
+  if (agentSkills.length === 0 && !teamSection && !builtinSection) {
+    const head = base ? base.trimEnd() + ABOUT_THIS_APP_BLOCK : ABOUT_THIS_APP_BLOCK
+    return head + today
+  }
   const parts: string[] = []
   if (base) parts.push(base.trimEnd())
+  parts.push(ABOUT_THIS_APP_BLOCK)
   parts.push(today)
   if (teamSection) {
     parts.push('\n\n')
     parts.push(teamSection)
   }
+  if (builtinSection) parts.push(builtinSection)
   if (agentSkills.length === 0) return parts.join('')
   parts.push('\n\n# Skills available to you\n')
   parts.push(

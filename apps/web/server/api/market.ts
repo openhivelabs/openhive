@@ -4,6 +4,11 @@ import { installAgentFrame } from '@/lib/server/agent-frames'
 import { installFrame } from '@/lib/server/frames'
 import { loadDashboard, saveDashboard } from '@/lib/server/dashboards'
 import { aiBindPanel, looksLikeMoneySql } from '@/lib/server/panels/ai-bind'
+import {
+  fetchPanelFrameParts,
+  shouldSkipCreate,
+  splitStatements,
+} from '@/lib/server/panels/install-helpers'
 import { acquireInstallLock } from '@/lib/server/panels/install-lock'
 import { buildInstallPlan } from '@/lib/server/panels/install-plan'
 import { apply as applyMapper } from '@/lib/server/panels/mapper'
@@ -156,39 +161,8 @@ interface PanelApplyBody extends PanelInstallBody {
   row_span?: number
 }
 
-// Shared: fetch panel frame + extract setup_sql + panel body.
-async function fetchPanelFrameParts(
-  id: string,
-  category: string | undefined,
-): Promise<{
-  setupSql: string | undefined
-  panel: Record<string, unknown>
-  description: string | undefined
-}> {
-  if (!category) throw new Error('category required for panel install')
-  const frame = (await fetchMarketFrame('panel', id, category)) as
-    | Record<string, unknown>
-    | null
-  if (!frame || typeof frame !== 'object') {
-    throw new Error('invalid panel frame')
-  }
-  const panelRaw = (frame as { panel?: unknown }).panel ?? frame
-  if (!panelRaw || typeof panelRaw !== 'object') {
-    throw new Error('panel frame missing `panel` body')
-  }
-  const setupSqlVal = (frame as { setup_sql?: unknown }).setup_sql
-  const setupSql =
-    typeof setupSqlVal === 'string' && setupSqlVal.trim() ? setupSqlVal : undefined
-  const descVal =
-    (frame as { description?: unknown }).description ??
-    (panelRaw as { description?: unknown }).description
-  const description = typeof descVal === 'string' ? descVal : undefined
-  return {
-    setupSql,
-    panel: JSON.parse(JSON.stringify(panelRaw)) as Record<string, unknown>,
-    description,
-  }
-}
+// (fetchPanelFrameParts now lives in lib/server/panels/install-helpers.ts so
+// chat-callable installers can share it.)
 
 function extractPanelSql(panel: Record<string, unknown>): string | undefined {
   const binding = (panel.binding as Record<string, unknown> | undefined) ?? {}
@@ -549,20 +523,4 @@ market.post('/install/ai-bind-preview', async (c) => {
   }
 })
 
-function splitStatements(sql: string): string[] {
-  // Naive but fine for our seed DDL: split on `;` at top level (no strings
-  // in our CREATE TABLEs). For paranoia, strip any empty chunks.
-  return sql
-    .split(/;\s*(?:\n|$)/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-}
-
-function shouldSkipCreate(stmt: string, skipNames: Set<string>): boolean {
-  if (skipNames.size === 0) return false
-  const m = stmt.match(
-    /^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?([A-Za-z_][A-Za-z0-9_]*)["`]?/i,
-  )
-  if (!m) return false
-  return skipNames.has(m[1]!)
-}
+// (splitStatements/shouldSkipCreate moved to lib/server/panels/install-helpers.ts)
