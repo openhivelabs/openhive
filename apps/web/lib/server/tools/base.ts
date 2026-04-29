@@ -31,6 +31,15 @@ export interface Tool {
       opts?: { signal?: AbortSignal },
     ) => Promise<unknown>
   } | null
+  /**
+   * Optional category that drives the system-prompt narrative (`# Built-in
+   * tools` in `composeSystemPrompt`). Tools without a category are sent only
+   * as raw OpenAI tool schemas — fine for trajectory tools the LLM already
+   * understands (delegate_to, ask_user, todo_*). Set this on domain tools
+   * (db_*, panel_*, dashboard_*) where the model needs explicit prose
+   * anchoring to map user requests onto the correct tool.
+   */
+  category?: 'db' | 'panel' | 'dashboard' | null
 }
 
 interface ToolCallSpec {

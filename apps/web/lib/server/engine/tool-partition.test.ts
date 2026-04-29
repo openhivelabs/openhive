@@ -32,12 +32,12 @@ describe('classifyTool', () => {
   })
 
   it('serial_write tools', () => {
-    expect(classifyTool('sql_exec')).toBe('serial_write')
+    expect(classifyTool('db_exec')).toBe('serial_write')
     expect(classifyTool('run_skill_script')).toBe('serial_write')
   })
 
   it('safe_parallel tools', () => {
-    expect(classifyTool('sql_query')).toBe('safe_parallel')
+    expect(classifyTool('db_query')).toBe('safe_parallel')
     expect(classifyTool('read_skill_file')).toBe('safe_parallel')
     expect(classifyTool('web-fetch')).toBe('safe_parallel')
     expect(classifyTool('web-search')).toBe('safe_parallel')
@@ -101,7 +101,7 @@ describe('partitionRuns', () => {
   it('interleaves serial_write between parallel buckets', () => {
     const calls = [
       tc('mcp__a__x', 'a'),
-      tc('sql_exec', 'b'),
+      tc('db_exec', 'b'),
       tc('mcp__b__x', 'c'),
       tc('mcp__c__x', 'd'),
     ]
@@ -126,7 +126,7 @@ describe('partitionRuns', () => {
       tc('ask_user', 'u'),
       tc('mcp__b__x', 'b'),
       tc('mcp__c__x', 'c'),
-      tc('sql_exec', 's'),
+      tc('db_exec', 's'),
       tc('mcp__d__x', 'd2'),
     ]
     const { runs } = partitionRuns(calls, 10)
@@ -237,7 +237,7 @@ describe('partitionRuns', () => {
   })
 
   it('only serial_write → no parallel groups', () => {
-    const calls = [tc('sql_exec', 'a'), tc('run_skill_script', 'b')]
+    const calls = [tc('db_exec', 'a'), tc('run_skill_script', 'b')]
     const { runs, stats } = partitionRuns(calls, 10)
     expect(runs.length).toBe(2)
     expect(runs.every((r) => r.kind === 'serial')).toBe(true)

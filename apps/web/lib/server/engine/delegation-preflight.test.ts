@@ -23,14 +23,15 @@ function fakeAgent(opts: Partial<AgentSpec> & { id: string; role: string }): Age
   }
 }
 
-function fakeTeam(agents: AgentSpec[], allowed: string[] = []): TeamSpec {
+function fakeTeam(agents: AgentSpec[], disabled: string[] = []): TeamSpec {
   return {
     id: 't-test',
     name: 'test',
     agents,
     edges: [],
     entry_agent_id: agents[0]?.id ?? null,
-    allowed_skills: allowed,
+    allowed_skills: [],
+    disabled_skills: disabled,
     allowed_mcp_servers: [],
     limits: {
       max_tool_rounds_per_turn: 24,
@@ -45,14 +46,14 @@ function fakeTeam(agents: AgentSpec[], allowed: string[] = []): TeamSpec {
 
 describe('preflightDelegation', () => {
   it('rejects research-shaped task to assignee lacking web-search', () => {
-    // The exact bug shape: a Member-like role declaring file skills + web-fetch
-    // but with web-search stripped from coupling by an explicit allow-list.
+    // Bug shape: assignee can fetch URLs but team explicitly forbids web-search
+    // via denylist, defeating the coupling rule. Preflight should catch it.
     const member = fakeAgent({
       id: 'a-1',
       role: 'WeirdRole',
       skills: ['web-fetch'],
     })
-    const team = fakeTeam([member], ['web-fetch']) // narrow: no web-search
+    const team = fakeTeam([member], ['web-search']) // explicit denial
     const err = preflightDelegation(team, member, 'search the web for latest AI model releases')
     expect(err).not.toBeNull()
     expect(err).toMatch(/web-search/)
@@ -72,7 +73,7 @@ describe('preflightDelegation', () => {
       role: 'WeirdRole',
       skills: ['pdf'],
     })
-    const team = fakeTeam([designer], ['pdf'])
+    const team = fakeTeam([designer], ['web-search'])
     expect(
       preflightDelegation(team, designer, 'render this report to a PDF document'),
     ).toBeNull()
@@ -84,7 +85,7 @@ describe('preflightDelegation', () => {
       role: 'WeirdRole',
       skills: ['web-fetch'],
     })
-    const team = fakeTeam([member], ['web-fetch'])
+    const team = fakeTeam([member], ['web-search'])
     const err = preflightDelegation(team, member, '최신 AI 모델 발표를 조사해줘')
     expect(err).not.toBeNull()
   })
@@ -225,5 +226,61 @@ describe('composeSystemPrompt — skill enumeration with "when to use" hints', (
     expect(personaIdx).toBeGreaterThanOrEqual(0)
     expect(todayIdx).toBeGreaterThan(personaIdx)
     expect(teamIdx).toBeGreaterThan(todayIdx)
+  })
+})
+
+describe('composeSystemPrompt — about-this-app + built-in tools', () => {
+  it('always includes the # About this app preamble (even with no skills/tools)', () => {
+    const out = composeSystemPrompt('persona.', [], '')
+    expect(out).toContain('# About this app')
+    expect(out).toContain('OpenHive')
+    expect(out).toContain('db_*')
+    expect(out).toContain('panel_*')
+  })
+
+  it('omits the # Built-in tools section when no categorised tools are passed', () => {
+    const out = composeSystemPrompt('persona.', [], '')
+    expect(out).not.toContain('# Built-in tools')
+  })
+
+  it('renders only the DB subsection when only db tools are categorised', () => {
+    const tools = [
+      { name: 'db_query', description: 'SELECT / FTS5 search.', category: 'db' as const },
+      { name: 'db_exec', description: 'INSERT/UPDATE/DELETE/CREATE/ALTER.', category: 'db' as const },
+    ]
+    const out = composeSystemPrompt('persona.', [], '', tools)
+    expect(out).toContain('# Built-in tools')
+    expect(out).toMatch(/##\s+Database/)
+    expect(out).toMatch(/`db_query`/)
+    expect(out).toMatch(/`db_exec`/)
+    expect(out).not.toMatch(/##\s+Dashboard panels/)
+  })
+
+  it('renders panel + dashboard subsections when both are present', () => {
+    const tools = [
+      { name: 'panel_list', description: 'List every panel on the dashboard.', category: 'panel' as const },
+      { name: 'panel_install', description: 'Install a panel frame.', category: 'panel' as const },
+      {
+        name: 'dashboard_list_backups',
+        description: 'List timestamped backups.',
+        category: 'dashboard' as const,
+      },
+    ]
+    const out = composeSystemPrompt('persona.', [], '', tools)
+    expect(out).toMatch(/##\s+Dashboard panels/)
+    expect(out).toMatch(/##\s+Dashboard \(whole-team\)/)
+    expect(out).toMatch(/`panel_install`/)
+    expect(out).toMatch(/`dashboard_list_backups`/)
+  })
+
+  it('skips tools without a category', () => {
+    const tools = [
+      { name: 'delegate_to', description: 'Delegate to a sub.', category: null },
+      { name: 'db_query', description: 'SELECT.', category: 'db' as const },
+    ]
+    const out = composeSystemPrompt('persona.', [], '', tools)
+    expect(out).toContain('# Built-in tools')
+    expect(out).toMatch(/`db_query`/)
+    expect(out).not.toMatch(/`delegate_to`/)
   })
 })

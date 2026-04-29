@@ -48,7 +48,7 @@ const LONG_BODY = 'x'.repeat(5_000)
 describe('isCompactable', () => {
   it('clears built-ins', () => {
     expect(isCompactable('web-fetch')).toBe(true)
-    expect(isCompactable('sql_query')).toBe(true)
+    expect(isCompactable('db_query')).toBe(true)
     expect(isCompactable('read_skill_file')).toBe(true)
     expect(isCompactable('run_skill_script')).toBe(true)
   })
@@ -57,7 +57,7 @@ describe('isCompactable', () => {
     expect(isCompactable('delegate_parallel')).toBe(false)
     expect(isCompactable('ask_user')).toBe(false)
     expect(isCompactable('set_todos')).toBe(false)
-    expect(isCompactable('sql_exec')).toBe(false)
+    expect(isCompactable('db_exec')).toBe(false)
     expect(isCompactable('activate_skill')).toBe(false)
   })
   it('treats mcp__* as compactable', () => {
@@ -212,7 +212,7 @@ describe('maybeMicrocompact', () => {
           {
             id: 'c2',
             type: 'function',
-            function: { name: 'sql_query', arguments: '{}' },
+            function: { name: 'db_query', arguments: '{}' },
           },
         ],
         // no _ts — reattach simulation
@@ -226,8 +226,8 @@ describe('maybeMicrocompact', () => {
     expect(history[2].content).toContain('[Old tool result cleared')
   })
 
-  // -------- Case I: sql_exec preserved, sql_query cleared --------
-  it('I: sql_exec preserved, sql_query cleared', () => {
+  // -------- Case I: db_exec preserved, db_query cleared --------
+  it('I: db_exec preserved, db_query cleared', () => {
     const now = 10_000_000
     const history: ChatMessage[] = [
       {
@@ -237,12 +237,12 @@ describe('maybeMicrocompact', () => {
           {
             id: 'q1',
             type: 'function',
-            function: { name: 'sql_query', arguments: '{}' },
+            function: { name: 'db_query', arguments: '{}' },
           },
           {
             id: 'e1',
             type: 'function',
-            function: { name: 'sql_exec', arguments: '{}' },
+            function: { name: 'db_exec', arguments: '{}' },
           },
         ],
         _ts: now - (STALE_AFTER_MS + 60_000),
