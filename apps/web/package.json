@@ -1,6 +1,6 @@
 {
   "name": "openhiveai",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Run a company of AI agents. Ship your own dashboard.",
   "license": "MIT",
   "homepage": "https://github.com/openhivelabs/openhive",
