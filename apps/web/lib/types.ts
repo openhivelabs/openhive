@@ -54,7 +54,12 @@ export interface Team {
   agents: Agent[]
   edges: ReportingEdge[]
   entryAgentId?: string | null
+  /** @deprecated Legacy positive whitelist. No longer enforced at session boot
+   *  — filesystem scan is the source of truth for skills. Kept for round-trip. */
   allowedSkills?: string[]
+  /** Explicit denylist for skills. Anything listed is removed from the
+   *  resolved candidate set even if filesystem-bundled. Default empty. */
+  disabledSkills?: string[]
   /** MCP server names whose tools (`<server>__<tool>`) get exposed to this team's agents. */
   allowedMcpServers?: string[]
   limits?: RunLimits

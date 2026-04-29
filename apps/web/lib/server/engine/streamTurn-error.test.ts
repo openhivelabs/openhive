@@ -38,6 +38,7 @@ const teamFixture: TeamSpec = {
   edges: [],
   entry_agent_id: null,
   allowed_skills: [],
+  disabled_skills: [],
   allowed_mcp_servers: [],
   limits: {
     max_tool_rounds_per_turn: 8,

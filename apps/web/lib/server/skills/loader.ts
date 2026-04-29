@@ -296,6 +296,17 @@ export function getSkill(name: string): SkillDef | null {
   return listSkills().get(name) ?? null
 }
 
+/**
+ * Filesystem-discovered skill names (sorted). Used at session boot so the
+ * effective-skills resolver can union "everything bundled or user-installed"
+ * into the candidate pool — no hardcoded defaults array required.
+ *
+ * Cached for 5s via listSkills(); cheap to call per agent boot.
+ */
+export function listAllSkillNames(): string[] {
+  return Array.from(listSkills().keys()).sort()
+}
+
 export function resolveWithinSkill(
   skill: SkillDef,
   relPath: string,

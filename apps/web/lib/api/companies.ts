@@ -24,6 +24,7 @@ function teamToServer(team: Team): Record<string, unknown> {
     edges: team.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
     entry_agent_id: team.entryAgentId ?? null,
     allowed_skills: team.allowedSkills ?? [],
+    disabled_skills: team.disabledSkills ?? [],
     allowed_mcp_servers: team.allowedMcpServers ?? [],
     limits: team.limits ?? { max_tool_rounds_per_turn: 8, max_delegation_depth: 4 },
   }
@@ -58,6 +59,7 @@ function teamFromServer(t: Record<string, unknown>): Team {
     })),
     entryAgentId: (t.entry_agent_id as string | null) ?? null,
     allowedSkills: (t.allowed_skills as string[]) ?? [],
+    disabledSkills: (t.disabled_skills as string[]) ?? [],
     allowedMcpServers: (t.allowed_mcp_servers as string[]) ?? [],
     limits: (t.limits as { max_tool_rounds_per_turn: number; max_delegation_depth: number } | undefined) ?? {
       max_tool_rounds_per_turn: 8,

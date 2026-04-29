@@ -68,8 +68,20 @@ export interface TeamSpec {
   edges: EdgeSpec[]
   /** Entry agent ID; defaults to Lead (no incoming edges). */
   entry_agent_id: string | null
-  /** Skill IDs every agent in this team may use. */
+  /**
+   * @deprecated Legacy positive whitelist. No longer enforced at session boot
+   * — filesystem scan (`listAllSkillNames()`) is the source of truth for what
+   * skills *exist*. Field is preserved for round-trip compatibility with old
+   * team YAMLs and existing UI that may still display it. Use
+   * `disabled_skills` to explicitly deny a skill.
+   */
   allowed_skills: string[]
+  /**
+   * Explicit team-level denylist. Any skill name listed here is removed from
+   * the resolved candidate set, even if filesystem-bundled or role-required.
+   * Empty/missing = nothing removed (default).
+   */
+  disabled_skills: string[]
   /**
    * Names of MCP servers whose tools every agent may invoke. Each server's
    * tools are injected as `<server>__<tool>` so a team can enable multiple
@@ -146,6 +158,9 @@ export function toTeamSpec(raw: Record<string, unknown>): TeamSpec {
         : null,
     allowed_skills: Array.isArray(raw.allowed_skills)
       ? (raw.allowed_skills as unknown[]).filter((s): s is string => typeof s === 'string')
+      : [],
+    disabled_skills: Array.isArray(raw.disabled_skills)
+      ? (raw.disabled_skills as unknown[]).filter((s): s is string => typeof s === 'string')
       : [],
     allowed_mcp_servers: Array.isArray(raw.allowed_mcp_servers)
       ? (raw.allowed_mcp_servers as unknown[]).filter(

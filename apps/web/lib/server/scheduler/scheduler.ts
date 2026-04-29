@@ -116,6 +116,7 @@ function normaliseTeamShape(raw: Record<string, unknown>): Record<string, unknow
     agents: normalisedAgents,
     entry_agent_id: raw.entry_agent_id ?? raw.entryAgentId,
     allowed_skills: raw.allowed_skills ?? raw.allowedSkills ?? [],
+    disabled_skills: raw.disabled_skills ?? raw.disabledSkills ?? [],
     allowed_mcp_servers: raw.allowed_mcp_servers ?? raw.allowedMcpServers ?? [],
     limits: raw.limits ?? {
       max_tool_rounds_per_turn: 8,
