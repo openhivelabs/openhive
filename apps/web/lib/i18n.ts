@@ -118,6 +118,7 @@ const en: Dict = {
   'sidebar.settings': 'Settings',
   'sidebar.companySettings': 'Company settings',
   'sidebar.teamSettings': 'Team settings',
+  'sidebar.updateAvailable': 'Update available',
   // canvas
   'canvas.dragRole': 'Drag a role',
   'canvas.addAgent': 'Add agent',
@@ -981,6 +982,7 @@ const ko: Dict = {
   'sidebar.settings': '설정',
   'sidebar.companySettings': '회사 설정',
   'sidebar.teamSettings': '팀 설정',
+  'sidebar.updateAvailable': '신규 버전',
   // canvas
   'canvas.dragRole': '역할 드래그',
   'canvas.addAgent': '에이전트 추가',

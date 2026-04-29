@@ -21,6 +21,12 @@ export const CLAUDE_CODE_MODELS: ModelCatalogEntry[] = [
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
 ]
 
+export const ANTHROPIC_MODELS: ModelCatalogEntry[] = [
+  { id: 'claude-opus-4-7', label: 'Opus 4.7', default: true },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+]
+
 export const CODEX_MODELS: ModelCatalogEntry[] = [
   // GPT-5.5 (announced 2026-04-23) — Codex-only via ChatGPT sign-in, not
   // yet reachable with API-key auth. Listed first so new sessions pick it
@@ -48,6 +54,7 @@ export async function listModelsFor(
   providerId: string,
 ): Promise<ModelCatalogEntry[]> {
   if (providerId === 'claude-code') return CLAUDE_CODE_MODELS
+  if (providerId === 'anthropic') return ANTHROPIC_MODELS
   if (providerId === 'codex') return CODEX_MODELS
   if (providerId === 'copilot') {
     let session
