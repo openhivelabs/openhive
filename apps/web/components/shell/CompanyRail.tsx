@@ -1,8 +1,9 @@
-import { GearSix, Plus, Storefront } from '@phosphor-icons/react'
+import { GearSix, Plus, RocketLaunch, Storefront } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { FrameMarketModal } from '@/components/modals/FrameMarketModal'
+import { useLatestVersion } from '@/lib/hooks/useLatestVersion'
 import { useT } from '@/lib/i18n'
 import { useAppStore } from '@/lib/stores/useAppStore'
 
@@ -26,6 +27,7 @@ export function CompanyRail() {
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<{ id: string; position: 'before' | 'after' } | null>(null)
   const [marketOpen, setMarketOpen] = useState(false)
+  const version = useLatestVersion()
 
   function handleDrop(targetId: string, position: 'before' | 'after') {
     if (!draggingId || draggingId === targetId) {
@@ -134,6 +136,30 @@ export function CompanyRail() {
           <Storefront className="w-5 h-5" />
         </button>
       </div>
+      {version.hasUpdate && (
+        <div
+          aria-label={`Update available: ${version.latest}`}
+          className="group relative mx-auto mb-1 w-9 h-9 rounded-md flex items-center justify-center text-amber-600 hover:text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-500/10"
+        >
+          <RocketLaunch className="w-5 h-5" weight="fill" />
+          <span
+            role="tooltip"
+            className="pointer-events-none absolute left-full ml-2 bottom-0 z-50 hidden group-hover:flex flex-col gap-1.5 whitespace-nowrap rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 shadow-lg"
+          >
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-600">
+              {t('sidebar.updateAvailable')}
+            </span>
+            <span className="text-[12px] text-neutral-700 dark:text-neutral-200">
+              <span className="text-neutral-400 line-through">v{version.current}</span>
+              <span className="mx-1.5 text-neutral-400">→</span>
+              <span className="font-semibold">{version.latest}</span>
+            </span>
+            <code className="text-[11.5px] font-mono text-neutral-800 dark:text-neutral-100 bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded border border-neutral-200 dark:border-neutral-700">
+              npm i -g openhiveai@latest
+            </code>
+          </span>
+        </div>
+      )}
       <Link
         to="/settings"
         aria-label={t('sidebar.settings')}
