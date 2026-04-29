@@ -165,20 +165,22 @@ export function PersonaTreeRows(props: RowsProps) {
               <button
                 type="button"
                 onClick={() => onToggle(child.path)}
-                className="flex-1 min-w-0 flex items-center gap-1 py-1 text-left"
+                className="flex-1 min-w-0 flex items-center gap-1.5 py-1 pr-1.5 text-left"
                 style={pad}
               >
-                {isOpen ? (
-                  <CaretDown className="w-3 h-3 text-neutral-500 shrink-0" />
-                ) : (
-                  <CaretRight className="w-3 h-3 text-neutral-500 shrink-0" />
-                )}
                 {isOpen ? (
                   <FolderOpen className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
                 ) : (
                   <Folder className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
                 )}
-                <span className="font-mono text-[11.5px] truncate">{child.name}</span>
+                <span className="flex-1 min-w-0 font-mono text-[11.5px] truncate">
+                  {child.name}
+                </span>
+                {isOpen ? (
+                  <CaretDown className="w-3 h-3 text-neutral-400 shrink-0" />
+                ) : (
+                  <CaretRight className="w-3 h-3 text-neutral-400 shrink-0" />
+                )}
               </button>
               {!readOnly && (
                 <>
@@ -212,7 +214,16 @@ export function PersonaTreeRows(props: RowsProps) {
                 </>
               )}
             </div>
-            {isOpen && <PersonaTreeRows {...props} node={child} depth={depth + 1} />}
+            {isOpen && (
+              <div className="relative">
+                <div
+                  aria-hidden
+                  className="absolute top-0 bottom-0 border-l border-neutral-200 dark:border-neutral-700 pointer-events-none"
+                  style={{ left: `${8 + depth * 12 + 7}px` }}
+                />
+                <PersonaTreeRows {...props} node={child} depth={depth + 1} />
+              </div>
+            )}
           </div>
         )
       })}

@@ -559,69 +559,6 @@ export function installFrame(
   return { team: teamYaml, warnings }
 }
 
-// -------- gallery --------
-
-interface GalleryEntry {
-  id: string
-  name: string
-  description: string
-  version: string
-  tags: string[]
-  agent_count: number
-  has_dashboard: boolean
-  requires: { skills: string[]; providers: string[] }
-  frame: Record<string, unknown>
-}
-
-export function listGallery(): GalleryEntry[] {
-  const root = path.join(packagesRoot(), 'frames')
-  if (!fs.existsSync(root)) return []
-  const out: GalleryEntry[] = []
-  let entries: string[]
-  try {
-    entries = fs
-      .readdirSync(root)
-      .filter((f) => f.endsWith('.openhive-frame.yaml'))
-      .sort()
-  } catch {
-    return []
-  }
-  for (const name of entries) {
-    const file = path.join(root, name)
-    let raw: unknown
-    try {
-      raw = yaml.load(fs.readFileSync(file, 'utf8'))
-    } catch {
-      continue
-    }
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
-    const data = raw as Record<string, unknown>
-    if (data.openhive_frame !== 1) continue
-    const team = (data.team as Record<string, unknown> | undefined) ?? {}
-    const requires =
-      (data.requires as Record<string, unknown> | undefined) ?? {}
-    out.push({
-      id: name.replace(/\.openhive-frame\.yaml$/, ''),
-      name: String(data.name ?? name),
-      description: String(data.description ?? ''),
-      version: String(data.version ?? '1.0.0'),
-      tags: Array.isArray(data.tags) ? (data.tags as string[]) : [],
-      agent_count: Array.isArray(team.agents) ? (team.agents as unknown[]).length : 0,
-      has_dashboard: !!data.dashboard,
-      requires: {
-        skills: Array.isArray(requires.skills)
-          ? (requires.skills as string[])
-          : [],
-        providers: Array.isArray(requires.providers)
-          ? (requires.providers as string[])
-          : [],
-      },
-      frame: data,
-    })
-  }
-  return out
-}
-
 /** Scrub `project_id` out of every MCP panel binding before exporting the
  *  frame. The id alone isn't a credential (the access token lives in the
  *  installer's mcp.yaml, never in the frame), but it identifies the

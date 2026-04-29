@@ -21,6 +21,23 @@ export const market = new Hono()
 // GET /api/market — remote catalog (companies / teams / agents + warnings)
 market.get('/', async (c) => c.json(await fetchMarketIndex()))
 
+// GET /api/market/frame?type=agent&id=advocate — parsed frame YAML so the
+// detail panel can show what files an agent ships with before install.
+market.get('/frame', async (c) => {
+  const type = c.req.query('type') as MarketType | undefined
+  const id = c.req.query('id')
+  const category = c.req.query('category') ?? undefined
+  if (!type || !id) return c.json({ detail: 'type and id required' }, 400)
+  try {
+    const frame = await fetchMarketFrame(type, id, category)
+    return c.json(frame)
+  } catch (err) {
+    const code = (err as { code?: string }).code
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ detail: message }, code === 'ENOENT' ? 404 : 400)
+  }
+})
+
 interface InstallBody {
   type?: MarketType
   id?: string
@@ -28,6 +45,11 @@ interface InstallBody {
   target_team_slug?: string
   /** Required for `type=panel` — category subdirectory in the remote repo. */
   category?: string
+  /** User's settings-level default model (provider + model). Wins over the
+   *  hard-coded `defaultModelFor` so agent installs honour the same model the
+   *  user picked for new agents. */
+  default_provider_id?: string
+  default_model?: string
 }
 
 // POST /api/market/install — legacy non-panel installer (team/agent/company).
@@ -68,7 +90,14 @@ market.post('/install', async (c) => {
     }
     try {
       const frame = await fetchMarketFrame('agent', id)
-      const result = installAgentFrame(targetCompany, targetTeam, frame)
+      const defaultProviderId =
+        typeof body.default_provider_id === 'string' ? body.default_provider_id : undefined
+      const defaultModel =
+        typeof body.default_model === 'string' ? body.default_model : undefined
+      const result = installAgentFrame(targetCompany, targetTeam, frame, {
+        defaultProviderId,
+        defaultModel,
+      })
       return c.json({ type, id, ...result })
     } catch (err) {
       const code = (err as { code?: string }).code

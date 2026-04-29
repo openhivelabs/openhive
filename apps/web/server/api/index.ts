@@ -6,7 +6,6 @@ import { artifacts } from './artifacts'
 import { backup } from './backup'
 import { companies } from './companies'
 import { credentials } from './credentials'
-import { frames } from './frames'
 import { health } from './health'
 import { market } from './market'
 import { mcp } from './mcp'
@@ -26,7 +25,6 @@ api.route('/agent-frames', agentFrames)
 api.route('/ai', ai)
 api.route('/artifacts', artifacts)
 api.route('/backup', backup)
-api.route('/frames', frames)
 api.route('/market', market)
 api.route('/mcp', mcp)
 api.route('/panels', panels)

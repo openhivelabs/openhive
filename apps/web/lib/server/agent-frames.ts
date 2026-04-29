@@ -217,6 +217,9 @@ export function buildAgentFrame(
 interface InstallAgentOpts {
   connectedProviders?: Set<string>
   installedSkills?: Set<string>
+  /** User's chosen default — wins over hard-coded `defaultModelFor`. */
+  defaultProviderId?: string
+  defaultModel?: string
 }
 
 interface InstallAgentResult {
@@ -264,7 +267,13 @@ export function installAgentFrame(
 
   const warnings: string[] = []
   let fallbackProvider: string | null = null
-  if (opts.connectedProviders && opts.connectedProviders.size > 0) {
+  // User's settings-level default wins, but only if it's a connected provider.
+  if (
+    opts.defaultProviderId &&
+    (!opts.connectedProviders || opts.connectedProviders.has(opts.defaultProviderId))
+  ) {
+    fallbackProvider = opts.defaultProviderId
+  } else if (opts.connectedProviders && opts.connectedProviders.size > 0) {
     fallbackProvider = [...opts.connectedProviders].sort()[0] ?? null
   }
 
@@ -326,7 +335,9 @@ export function installAgentFrame(
   }
   const chosenProv = typeof agent.provider_id === 'string' ? agent.provider_id : ''
   if (chosenProv && (typeof agent.model !== 'string' || (agent.model as string).length === 0)) {
-    const def = defaultModelFor(chosenProv)
+    const userDefault =
+      opts.defaultModel && opts.defaultProviderId === chosenProv ? opts.defaultModel : ''
+    const def = userDefault || defaultModelFor(chosenProv)
     if (def) agent.model = def
   }
   // Fresh agents start unpositioned; the UI auto-layout will place them.

@@ -65,24 +65,6 @@ export async function parseFrameFile(file: File): Promise<FramePreview> {
   }
 }
 
-export interface GalleryEntry {
-  id: string
-  name: string
-  description: string
-  version: string
-  tags: string[]
-  agent_count: number
-  has_dashboard: boolean
-  requires: FrameRequires
-  frame: unknown
-}
-
-export async function listGallery(): Promise<GalleryEntry[]> {
-  const res = await fetch('/api/frames/gallery')
-  if (!res.ok) throw new Error(`GET /api/frames/gallery ${res.status}`)
-  return (await res.json()) as GalleryEntry[]
-}
-
 interface InstallFrameResult {
   team: Record<string, unknown>
   warnings: string[]

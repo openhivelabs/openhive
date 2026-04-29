@@ -830,9 +830,11 @@ function MetricGridView({ data }: { data: MetricGridShape }) {
   if (cells.length === 0) {
     return <div className="p-4 text-[13px] text-neutral-400">(no metrics)</div>
   }
-  const cols = cells.length >= 4 ? 'grid-cols-2 md:grid-cols-3' : `grid-cols-${cells.length}`
   return (
-    <div className={`grid ${cols} gap-3 p-3`}>
+    <div
+      className="grid gap-3 p-3"
+      style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}
+    >
       {cells.map((c, i) => {
         const display =
           typeof c.value === 'number'

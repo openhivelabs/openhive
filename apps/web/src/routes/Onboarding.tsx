@@ -4,9 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { saveCompany } from '@/lib/api/companies'
 import {
   type FramePreview,
-  type GalleryEntry,
   installFrame,
-  listGallery,
   parseFrameFile,
 } from '@/lib/api/frames'
 import {
@@ -715,104 +713,6 @@ function StepTemplate({
   )
 }
 
-function FrameGalleryModal({
-  creating,
-  onClose,
-  onSelect,
-}: {
-  creating: boolean
-  onClose: () => void
-  onSelect: (entry: GalleryEntry) => void | Promise<void>
-}) {
-  const t = useT()
-  const [entries, setEntries] = useState<GalleryEntry[] | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [query, setQuery] = useState('')
-
-  const filtered = useMemo(() => {
-    if (!entries) return null
-    const q = query.trim().toLowerCase()
-    if (!q) return entries
-    return entries.filter((e) => {
-      const haystack = [e.name, e.description ?? '', e.id, ...(e.requires?.skills ?? [])]
-        .join(' ')
-        .toLowerCase()
-      return haystack.includes(q)
-    })
-  }, [entries, query])
-
-  useEffect(() => {
-    let cancelled = false
-    listGallery()
-      .then((list) => {
-        if (!cancelled) setEntries(list)
-      })
-      .catch((err) => {
-        if (!cancelled) setLoadError(String(err))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  return (
-    <ModalShell title={t('onboarding.template.gallery.title')} onClose={onClose}>
-      {loadError && (
-        <div className="text-[13px] text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
-          {loadError}
-        </div>
-      )}
-      {entries && entries.length === 0 && (
-        <div className="text-[13px] text-neutral-500 py-6 text-center">
-          {t('onboarding.template.gallery.empty')}
-        </div>
-      )}
-      {entries && entries.length > 0 && (
-        <>
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t('onboarding.template.gallery.search')}
-            className="w-full px-3 py-2 rounded border border-neutral-300 text-[14px] focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400 sticky top-0"
-          />
-          {filtered && filtered.length === 0 ? (
-            <div className="text-[13px] text-neutral-500 py-6 text-center">
-              {t('onboarding.template.gallery.noMatch')}
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {(filtered ?? entries).map((e) => (
-                <button
-                  key={e.id}
-                  type="button"
-                  disabled={creating}
-                  onClick={() => void onSelect(e)}
-                  className="w-full text-left rounded-md border border-neutral-200 bg-white hover:border-neutral-400 hover:shadow-sm transition-all p-3 disabled:opacity-50"
-                >
-                  <div className="flex items-baseline justify-between gap-3">
-                    <div className="text-[15px] font-semibold text-neutral-900">{e.name}</div>
-                    <div className="text-[11.5px] text-neutral-400">v{e.version}</div>
-                  </div>
-                  {e.description && (
-                    <div className="text-[13px] text-neutral-600 mt-1 leading-relaxed">
-                      {e.description}
-                    </div>
-                  )}
-                  <div className="text-[12px] text-neutral-500 mt-2">
-                    {t('onboarding.template.gallery.agents', { n: e.agent_count })}
-                    {e.requires.skills.length > 0 &&
-                      ` · ${t('onboarding.template.gallery.skills', { list: e.requires.skills.join(', ') })}`}
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-    </ModalShell>
-  )
-}
 
 function FrameImportModal({
   creating,

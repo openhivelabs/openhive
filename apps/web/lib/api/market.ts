@@ -13,6 +13,12 @@ export interface MarketEntry {
   author?: string
   agent_count?: number
   teams?: string[]
+  /** Locale-keyed name translations. Display only — install uses English. */
+  name_i18n?: Record<string, string>
+  /** Locale-keyed description translations. Falls back to `description`. */
+  description_i18n?: Record<string, string>
+  /** type=agent → icon key (TEAM_ICONS). */
+  icon?: string
   category?: string
   sizes?: PanelSize[]
   /** DDL the panel would run in blank form. Surfaced so the client can
@@ -81,6 +87,20 @@ export async function fetchMarketIndex(): Promise<MarketIndex> {
   return (await res.json()) as MarketIndex
 }
 
+/** Fetch the parsed frame YAML for one entry — used by the detail panel to
+ *  show what files an agent / team ships with before install. */
+export async function fetchMarketFrameDetail(
+  type: MarketType,
+  id: string,
+  category?: string,
+): Promise<Record<string, unknown>> {
+  const params = new URLSearchParams({ type, id })
+  if (category) params.set('category', category)
+  const res = await fetch(`/api/market/frame?${params.toString()}`)
+  if (!res.ok) throw new Error(`GET /api/market/frame ${res.status}`)
+  return (await res.json()) as Record<string, unknown>
+}
+
 interface InstallMarketResult {
   type: MarketType
   id: string
@@ -97,6 +117,9 @@ export async function installMarketEntry(input: {
   target_team_slug?: string
   /** Required for `type=panel` — panel frames are stored under category subdirs. */
   category?: string
+  /** User's settings default — applied to fresh agent installs. */
+  default_provider_id?: string
+  default_model?: string
 }): Promise<InstallMarketResult> {
   const res = await fetch('/api/market/install', {
     method: 'POST',

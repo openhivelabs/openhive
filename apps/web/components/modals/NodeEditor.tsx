@@ -10,7 +10,7 @@ import { PROVIDERS } from '@/lib/providers'
 import { useAppStore, useCurrentTeam } from '@/lib/stores/useAppStore'
 import { useCanvasStore } from '@/lib/stores/useCanvasStore'
 import type { Agent } from '@/lib/types'
-import { DEFAULT_TEAM_ICON_KEY, IconPickerButton } from '../shell/TeamIcon'
+import { DEFAULT_TEAM_ICON_KEY, IconPickerButton, TeamIcon } from '../shell/TeamIcon'
 import { Button } from '../ui/Button'
 import {
   buildTree,
@@ -151,6 +151,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
   // user-global personas are shown read-only (tree hides action buttons).
   const personaPath = draft.personaPath ?? ''
   const readOnly =
+    isLead ||
     !personaPath ||
     !personaPath.includes(`/companies/`) ||
     !personaPath.includes(`/agents/`)
@@ -371,15 +372,26 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
         {/* Header — identity row + runtime row */}
         <div className="px-5 pt-3.5 pb-3 border-b border-neutral-200 space-y-2.5">
           <div className="flex items-center gap-2.5">
-            <IconPickerButton
-              value={draft.icon ?? DEFAULT_TEAM_ICON_KEY}
-              onChange={(k) => setDraft({ ...draft, icon: k })}
-              className="!h-9"
-            />
+            {isLead ? (
+              <span className="inline-flex items-center justify-center w-9 h-9 rounded-md border border-neutral-200 bg-neutral-50 text-neutral-700">
+                <TeamIcon name={draft.icon ?? DEFAULT_TEAM_ICON_KEY} size={18} weight="regular" />
+              </span>
+            ) : (
+              <IconPickerButton
+                value={draft.icon ?? DEFAULT_TEAM_ICON_KEY}
+                onChange={(k) => setDraft({ ...draft, icon: k })}
+                className="!h-9"
+              />
+            )}
             <input
               value={draft.role}
               onChange={(e) => setDraft({ ...draft, role: e.target.value })}
-              className="flex-1 min-w-0 px-2.5 py-1.5 text-[15px] font-semibold bg-transparent border-0 border-b border-transparent hover:border-neutral-200 focus:border-neutral-400 focus:outline-none rounded-none"
+              readOnly={isLead}
+              className={`flex-1 min-w-0 px-2.5 py-1.5 text-[15px] font-semibold bg-transparent border-0 border-b border-transparent rounded-none focus:outline-none ${
+                isLead
+                  ? 'cursor-default text-neutral-700'
+                  : 'hover:border-neutral-200 focus:border-neutral-400'
+              }`}
               placeholder={t('nodeEditor.rolePlaceholder')}
             />
             <button
@@ -456,15 +468,19 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
                 />
               </label>
             )}
-            {agent.role !== 'Lead' && (
+            {!isLead && (
               <button
                 type="button"
-                onClick={() => setConfirmDelete(true)}
-                title={t('nodeEditor.deleteAgent')}
-                aria-label={t('nodeEditor.deleteAgent')}
-                className="ml-auto self-end p-1.5 rounded-sm text-neutral-400 hover:text-red-600 hover:bg-red-50 transition-colors focus:outline-none"
+                onClick={() => {
+                  if (companySlug && team?.slug)
+                    downloadAgentFrame(companySlug, team.slug, agent.id)
+                }}
+                disabled={!companySlug || !team?.slug}
+                title={t('canvas.exportAsFrameHint')}
+                className="ml-auto self-end inline-flex items-center gap-1.5 px-2 py-1.5 rounded-sm text-[13px] text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 transition-colors focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                <Trash className="w-4 h-4" />
+                <Package className="w-4 h-4" />
+                Export
               </button>
             )}
           </div>
@@ -475,16 +491,10 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
           {/* LEFT: tree */}
           <div className="w-[340px] shrink-0 flex flex-col min-h-0 bg-neutral-50/60 border-r border-neutral-200">
             <div className="px-4 py-2.5 border-b border-neutral-200 flex items-center gap-1 bg-white/50">
-              <FolderOpen className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
               <span className="text-[12px] font-semibold text-neutral-800">
                 {draft.role || t('nodeEditor.agentFallback')}
               </span>
               <span className="text-[11px] text-neutral-400">· {fileCount}</span>
-              {readOnly && (
-                <span className="text-[10px] text-neutral-400 ml-1">
-                  · {t('nodeEditor.referenceSourceBundled')}
-                </span>
-              )}
               {!readOnly && (
                 <div className="ml-auto flex items-center gap-0.5">
                   <button
@@ -554,11 +564,6 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
                   className="font-mono text-[12px] text-neutral-700 bg-transparent outline-none focus:bg-white focus:border focus:border-neutral-300 rounded px-1 min-w-[260px]"
                 />
               )}
-              {readOnly && (
-                <span className="text-[11px] text-neutral-500 ml-auto">
-                  {t('nodeEditor.referenceSourceBundled')}
-                </span>
-              )}
             </div>
             {selectedIsFolder ? (
               <div className="flex-1 min-h-0 flex items-center justify-center text-[13px] text-neutral-400">
@@ -583,18 +588,17 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
 
         <div className="flex items-center justify-between px-5 py-2.5 border-t border-neutral-200 rounded-b-md gap-3">
           <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              onClick={() => {
-                if (companySlug && team?.slug) downloadAgentFrame(companySlug, team.slug, agent.id)
-              }}
-              disabled={!companySlug || !team?.slug}
-              title={t('canvas.exportAsFrameHint')}
-              className="!text-neutral-600 focus:outline-none"
-            >
-              <Package className="w-4 h-4" />
-              {t('canvas.exportAsFrame')}
-            </Button>
+            {agent.role !== 'Lead' && (
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                title={t('nodeEditor.deleteAgent')}
+                aria-label={t('nodeEditor.deleteAgent')}
+                className="p-1.5 rounded-sm text-neutral-400 hover:text-red-600 hover:bg-red-50 transition-colors focus:outline-none"
+              >
+                <Trash className="w-4 h-4" />
+              </button>
+            )}
             {saveError && (
               <span className="ml-2 text-[12px] text-red-600 truncate">{saveError}</span>
             )}
@@ -605,7 +609,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
             </Button>
             <Button variant="primary" onClick={save} disabled={saving}>
               {saving && <CircleNotch className="w-3.5 h-3.5 animate-spin" />}
-              {dirty || filesChanged ? t('settings.save') : t('settings.close')}
+              {t('settings.save')}
             </Button>
           </div>
         </div>

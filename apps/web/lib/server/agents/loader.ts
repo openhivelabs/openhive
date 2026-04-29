@@ -10,7 +10,6 @@
  *      — the agent reads them on demand via `read_agent_file`).
  *
  * Scan roots (later overrides earlier):
- *   - bundled:      <repo>/packages/agents/:name/AGENT.md or :name.md
  *   - company:      <company_dir>/agents/:name/AGENT.md or :name.md
  *   - user-global:  ~/.openhive/agents/:name/AGENT.md or :name.md
  */
@@ -18,7 +17,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import yaml from 'js-yaml'
-import { dataDir, packagesRoot } from '../paths'
+import { dataDir } from '../paths'
 
 const MAX_LISTED_FILES = 60
 export const MAX_READABLE_FILE_BYTES = 256 * 1024
@@ -272,9 +271,7 @@ function scanRoots(
 }
 
 export function listPersonas(companyDir?: string | null): Map<string, PersonaDef> {
-  const roots: [string, PersonaDef['source']][] = [
-    [path.join(packagesRoot(), 'agents'), 'bundled'],
-  ]
+  const roots: [string, PersonaDef['source']][] = []
   if (companyDir) roots.push([path.join(companyDir, 'agents'), 'company'])
   roots.push([path.join(dataDir(), 'agents'), 'user'])
   return scanRoots(roots)

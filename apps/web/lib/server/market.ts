@@ -6,7 +6,7 @@
  * Catalog layout (relative to packages/frame-market/):
  *   index.json                       { companies, teams, agents, panels }
  *   teams/<id>.openhive-frame.yaml
- *   agents/<id>.openhive-agent-frame.yaml
+ *   agents/<id>/<id>.openhive-agent-frame.yaml  (alongside AGENT.md + reference/)
  *   companies/<id>.openhive-company.yaml   (bundles team frame ids)
  *   panels/<category>/<id>.openhive-panel-frame.yaml
  *                                         (PanelSpec template. Categories:
@@ -35,6 +35,14 @@ interface MarketEntry {
   agent_count?: number
   /** type=company → bundled team frame ids. */
   teams?: string[]
+  /** Locale-keyed translations of `name`. Display only — installs always use
+   *  the English `name` (and the agent role/label baked into the yaml). */
+  name_i18n?: Record<string, string>
+  /** Locale-keyed translations of `description`. UI picks current locale,
+   *  falling back to the English `description` field above. */
+  description_i18n?: Record<string, string>
+  /** type=agent → icon key (TEAM_ICONS) used for the card and post-install. */
+  icon?: string
   /** type=panel → category hint for grouping in the UI. */
   category?: string
   /** type=panel → size variants the frame author declared. Users can only
@@ -120,6 +128,9 @@ function coerceEntry(raw: unknown, type: MarketType): MarketEntry | null {
     agent_count:
       typeof r.agent_count === 'number' ? r.agent_count : undefined,
     teams: Array.isArray(r.teams) ? (r.teams as string[]) : undefined,
+    name_i18n: coerceLocaleMap(r.name_i18n),
+    description_i18n: coerceLocaleMap(r.description_i18n),
+    icon: typeof r.icon === 'string' && r.icon ? r.icon : undefined,
     category: typeof r.category === 'string' ? r.category : undefined,
     sizes: coerceSizes(r.sizes),
     setup_sql:
@@ -303,6 +314,15 @@ function coercePreview(raw: unknown): PanelPreview | undefined {
   }
 }
 
+function coerceLocaleMap(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (/^[a-z]{2}$/.test(k) && typeof v === 'string' && v) out[k] = v
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 function coerceSizes(raw: unknown): PanelSize[] | undefined {
   if (!Array.isArray(raw)) return undefined
   const out: PanelSize[] = []
@@ -366,7 +386,7 @@ function pathFor(type: MarketType, id: string, category?: string): string {
     case 'team':
       return `teams/${safe}.openhive-frame.yaml`
     case 'agent':
-      return `agents/${safe}.openhive-agent-frame.yaml`
+      return `agents/${safe}/${safe}.openhive-agent-frame.yaml`
     case 'company':
       return `companies/${safe}.openhive-company.yaml`
     case 'panel': {

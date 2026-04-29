@@ -1,7 +1,246 @@
 {
   "companies": [],
   "teams": [],
-  "agents": [],
+  "agents": [
+    {
+      "id": "advocate",
+      "name": "Advocate",
+      "name_i18n": {
+        "ko": "옹호자"
+      },
+      "description": "Argues in favour of a proposal — marshals the strongest case, evidence, and rebuttals to objections.",
+      "description_i18n": {
+        "ko": "제안을 지지하며 가장 강한 논거, 증거, 예상 반론에 대한 재반박을 정리합니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "advocate"
+      ],
+      "icon": "rocket"
+    },
+    {
+      "id": "analyst",
+      "name": "Analyst",
+      "name_i18n": {
+        "ko": "분석가"
+      },
+      "description": "Reads data, tables, or metrics and returns patterns, anomalies, and a one-line takeaway.",
+      "description_i18n": {
+        "ko": "데이터, 표, 지표를 읽어 패턴과 이상치, 한 줄 인사이트로 반환합니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "analyst"
+      ],
+      "icon": "chart"
+    },
+    {
+      "id": "copywriter",
+      "name": "Copywriter",
+      "name_i18n": {
+        "ko": "카피라이터"
+      },
+      "description": "Writes short, persuasive marketing and sales copy — headlines, taglines, ads, landing pages, outreach.",
+      "description_i18n": {
+        "ko": "헤드라인, 태그라인, 광고, 랜딩, 아웃리치 등 짧고 설득력 있는 마케팅·세일즈 카피를 씁니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "copywriter"
+      ],
+      "icon": "megaphone"
+    },
+    {
+      "id": "correspondent",
+      "name": "Correspondent",
+      "name_i18n": {
+        "ko": "답신가"
+      },
+      "description": "Drafts replies to incoming messages — emails, support tickets, inquiries — in the right tone and with the right action.",
+      "description_i18n": {
+        "ko": "들어온 메일·티켓·문의에 적절한 톤과 다음 액션이 담긴 답신을 작성합니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "correspondent"
+      ],
+      "icon": "briefcase"
+    },
+    {
+      "id": "critic",
+      "name": "Critic",
+      "name_i18n": {
+        "ko": "비판자"
+      },
+      "description": "Attacks a proposal — finds the strongest objections, hidden assumptions, and failure modes.",
+      "description_i18n": {
+        "ko": "제안을 공격해 가장 강한 반박, 숨은 가정, 실패 모드를 찾아냅니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "critic"
+      ],
+      "icon": "lightning"
+    },
+    {
+      "id": "curator",
+      "name": "Curator",
+      "name_i18n": {
+        "ko": "큐레이터"
+      },
+      "description": "Selects the most valuable items from a large pool of content and returns a ranked, annotated shortlist.",
+      "description_i18n": {
+        "ko": "많은 콘텐츠 중 가장 가치 있는 것만 골라 이유와 함께 랭킹된 숏리스트로 반환합니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "curator"
+      ],
+      "icon": "star"
+    },
+    {
+      "id": "editor",
+      "name": "Editor",
+      "name_i18n": {
+        "ko": "에디터"
+      },
+      "description": "Polishes existing prose for clarity, flow, and tone without changing meaning.",
+      "description_i18n": {
+        "ko": "의미는 유지한 채 명료성, 흐름, 톤을 다듬어 기존 글을 정리합니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "editor"
+      ],
+      "icon": "wrench"
+    },
+    {
+      "id": "fact-checker",
+      "name": "Fact Checker",
+      "name_i18n": {
+        "ko": "팩트체커"
+      },
+      "description": "Verifies factual claims against primary sources and labels each as supported, contradicted, or unverifiable.",
+      "description_i18n": {
+        "ko": "사실 주장을 1차 출처에 대조하고 입증/반박/검증불가로 라벨링합니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "fact-checker"
+      ],
+      "icon": "target"
+    },
+    {
+      "id": "planner",
+      "name": "Planner",
+      "name_i18n": {
+        "ko": "기획자"
+      },
+      "description": "Breaks a goal into ordered steps, owners, and milestones, with dependencies surfaced.",
+      "description_i18n": {
+        "ko": "목표를 단계, 담당자, 마일스톤으로 쪼개고 의존관계를 드러냅니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "planner"
+      ],
+      "icon": "flag"
+    },
+    {
+      "id": "researcher",
+      "name": "Researcher",
+      "name_i18n": {
+        "ko": "리서처"
+      },
+      "description": "Investigates a topic across web and documents, returns structured findings with citations.",
+      "description_i18n": {
+        "ko": "주제를 웹과 문서에서 조사하고, 출처가 달린 정리된 결과를 반환합니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "researcher"
+      ],
+      "icon": "flask"
+    },
+    {
+      "id": "reviewer",
+      "name": "Reviewer",
+      "name_i18n": {
+        "ko": "리뷰어"
+      },
+      "description": "Reviews a deliverable and returns a prioritised list of defects, weaknesses, and improvement suggestions.",
+      "description_i18n": {
+        "ko": "결과물을 검토해 결함, 약점, 개선 제안을 우선순위 순으로 반환합니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "reviewer"
+      ],
+      "icon": "scales"
+    },
+    {
+      "id": "summarizer",
+      "name": "Summarizer",
+      "name_i18n": {
+        "ko": "요약가"
+      },
+      "description": "Compresses long documents, transcripts, or threads into the shortest faithful summary at a requested length.",
+      "description_i18n": {
+        "ko": "긴 문서·녹취·스레드를 요청 길이에 맞춰 가장 짧고 충실한 요약으로 압축합니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "summarizer"
+      ],
+      "icon": "lightbulb"
+    },
+    {
+      "id": "translator",
+      "name": "Translator",
+      "name_i18n": {
+        "ko": "번역가"
+      },
+      "description": "Translates text between languages while preserving meaning, tone, and formatting.",
+      "description_i18n": {
+        "ko": "의미, 톤, 서식을 보존한 채 두 언어 사이를 자연스럽게 번역합니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "translator"
+      ],
+      "icon": "globe"
+    },
+    {
+      "id": "writer",
+      "name": "Writer",
+      "name_i18n": {
+        "ko": "라이터"
+      },
+      "description": "Turns an outline or research notes into clean prose at a requested length and tone.",
+      "description_i18n": {
+        "ko": "개요나 리서치 노트를 받아 요청한 길이와 톤에 맞춘 깔끔한 글로 작성합니다."
+      },
+      "author": "OpenHive",
+      "tags": [
+        "generic",
+        "writer"
+      ],
+      "icon": "paintBrush"
+    }
+  ],
   "panels": [
     {
       "id": "line-chart",
@@ -9,19 +248,112 @@
       "description": "Line chart of daily count with selectable 7 / 30 / 90 day window. Swap the table to plot any time-series.",
       "author": "OpenHive",
       "category": "chart",
-      "tags": ["chart", "line", "time-series", "universal"],
+      "tags": [
+        "chart",
+        "line",
+        "time-series",
+        "universal"
+      ],
       "preview": {
         "kind": "line",
         "subtitle": "Daily volume",
-        "time_ranges": [7, 30, 90],
+        "time_ranges": [
+          7,
+          30,
+          90
+        ],
         "default_range": 30,
         "data": [
-          1, 2, 1, 2, 3, 2, 1, 3, 2, 4, 3, 2, 4, 3, 5, 4, 3, 5, 4, 6,
-          5, 4, 6, 5, 7, 6, 5, 7, 6, 8, 4, 6, 5, 7, 8, 6, 9, 11, 9, 10,
-          12, 11, 9, 12, 14, 11, 13, 15, 14, 13, 16, 14, 12, 15, 17, 14,
-          16, 18, 17, 15, 19, 17, 20, 18, 22, 19, 21, 23, 20, 24, 22,
-          21, 25, 27, 24, 26, 28, 25, 27, 30, 28, 26, 31, 29, 33, 30,
-          28, 34, 32, 35
+          1,
+          2,
+          1,
+          2,
+          3,
+          2,
+          1,
+          3,
+          2,
+          4,
+          3,
+          2,
+          4,
+          3,
+          5,
+          4,
+          3,
+          5,
+          4,
+          6,
+          5,
+          4,
+          6,
+          5,
+          7,
+          6,
+          5,
+          7,
+          6,
+          8,
+          4,
+          6,
+          5,
+          7,
+          8,
+          6,
+          9,
+          11,
+          9,
+          10,
+          12,
+          11,
+          9,
+          12,
+          14,
+          11,
+          13,
+          15,
+          14,
+          13,
+          16,
+          14,
+          12,
+          15,
+          17,
+          14,
+          16,
+          18,
+          17,
+          15,
+          19,
+          17,
+          20,
+          18,
+          22,
+          19,
+          21,
+          23,
+          20,
+          24,
+          22,
+          21,
+          25,
+          27,
+          24,
+          26,
+          28,
+          25,
+          27,
+          30,
+          28,
+          26,
+          31,
+          29,
+          33,
+          30,
+          28,
+          34,
+          32,
+          35
         ]
       }
     },
@@ -31,17 +363,38 @@
       "description": "Horizontal bars by category. Use when category labels are long.",
       "author": "OpenHive",
       "category": "chart",
-      "tags": ["chart", "bar", "distribution", "category", "universal"],
+      "tags": [
+        "chart",
+        "bar",
+        "distribution",
+        "category",
+        "universal"
+      ],
       "preview": {
         "kind": "bar",
         "orientation": "horizontal",
         "subtitle": "By category",
         "bars": [
-          { "label": "Prospect", "value": 42 },
-          { "label": "Qualified", "value": 28 },
-          { "label": "Proposal", "value": 17 },
-          { "label": "Won", "value": 9 },
-          { "label": "Lost", "value": 6 }
+          {
+            "label": "Prospect",
+            "value": 42
+          },
+          {
+            "label": "Qualified",
+            "value": 28
+          },
+          {
+            "label": "Proposal",
+            "value": 17
+          },
+          {
+            "label": "Won",
+            "value": 9
+          },
+          {
+            "label": "Lost",
+            "value": 6
+          }
         ]
       }
     },
@@ -51,16 +404,37 @@
       "description": "Vertical bars by category. Use when labels are short.",
       "author": "OpenHive",
       "category": "chart",
-      "tags": ["chart", "column", "bar", "distribution", "universal"],
+      "tags": [
+        "chart",
+        "column",
+        "bar",
+        "distribution",
+        "universal"
+      ],
       "preview": {
         "kind": "bar",
         "subtitle": "By category",
         "bars": [
-          { "label": "A", "value": 42 },
-          { "label": "B", "value": 28 },
-          { "label": "C", "value": 17 },
-          { "label": "D", "value": 9 },
-          { "label": "E", "value": 6 }
+          {
+            "label": "A",
+            "value": 42
+          },
+          {
+            "label": "B",
+            "value": 28
+          },
+          {
+            "label": "C",
+            "value": 17
+          },
+          {
+            "label": "D",
+            "value": 9
+          },
+          {
+            "label": "E",
+            "value": 6
+          }
         ]
       }
     },
@@ -70,16 +444,37 @@
       "description": "Donut showing category share of a total. Up to 10 slices (9 + Other) — beyond that the extras collapse into one Other wedge.",
       "author": "OpenHive",
       "category": "chart",
-      "tags": ["chart", "pie", "donut", "distribution", "universal"],
+      "tags": [
+        "chart",
+        "pie",
+        "donut",
+        "distribution",
+        "universal"
+      ],
       "preview": {
         "kind": "pie",
         "subtitle": "Share",
         "slices": [
-          { "label": "Prospect", "value": 42 },
-          { "label": "Qualified", "value": 28 },
-          { "label": "Proposal", "value": 17 },
-          { "label": "Won", "value": 9 },
-          { "label": "Lost", "value": 6 }
+          {
+            "label": "Prospect",
+            "value": 42
+          },
+          {
+            "label": "Qualified",
+            "value": 28
+          },
+          {
+            "label": "Proposal",
+            "value": 17
+          },
+          {
+            "label": "Won",
+            "value": 9
+          },
+          {
+            "label": "Lost",
+            "value": 6
+          }
         ]
       }
     },
@@ -89,7 +484,13 @@
       "description": "Single big number with a label. Use for total counts, sums, today's revenue — anything that fits in one bold metric.",
       "author": "OpenHive",
       "category": "kpi",
-      "tags": ["kpi", "number", "metric", "summary", "universal"],
+      "tags": [
+        "kpi",
+        "number",
+        "metric",
+        "summary",
+        "universal"
+      ],
       "preview": {
         "kind": "kpi",
         "value": "1,234",
@@ -103,7 +504,12 @@
       "description": "Current value plus % change vs the prior period. Single number alone tells you the level — delta tells you whether it's good or bad.",
       "author": "OpenHive",
       "category": "kpi",
-      "tags": ["kpi", "delta", "comparison", "trend"],
+      "tags": [
+        "kpi",
+        "delta",
+        "comparison",
+        "trend"
+      ],
       "preview": {
         "kind": "kpi",
         "value": "142",
@@ -117,7 +523,13 @@
       "description": "Current value vs a target with a progress bar. Use for OKRs, monthly sales targets, usage quotas.",
       "author": "OpenHive",
       "category": "kpi",
-      "tags": ["kpi", "goal", "target", "progress", "okr"],
+      "tags": [
+        "kpi",
+        "goal",
+        "target",
+        "progress",
+        "okr"
+      ],
       "preview": {
         "kind": "kpi",
         "value": "$7.2M",
@@ -132,14 +544,29 @@
       "description": "Sortable grid of every row in a table. Use for raw lookup — every fact visible, no aggregation.",
       "author": "OpenHive",
       "category": "table",
-      "tags": ["table", "grid", "raw", "lookup", "universal"],
+      "tags": [
+        "table",
+        "grid",
+        "raw",
+        "lookup",
+        "universal"
+      ],
       "preview": {
         "kind": "table",
         "subtitle": "Records",
-        "columns": ["name", "stage"],
+        "columns": [
+          "name",
+          "stage"
+        ],
         "rows": [
-          ["Acme", "won"],
-          ["Globex", "prospect"]
+          [
+            "Acme",
+            "won"
+          ],
+          [
+            "Globex",
+            "prospect"
+          ]
         ]
       }
     },
@@ -149,14 +576,31 @@
       "description": "Ranked list — top N rows by a numeric column, descending. Use for top sales, most active users, highest scoring.",
       "author": "OpenHive",
       "category": "table",
-      "tags": ["leaderboard", "ranking", "top", "sorted"],
+      "tags": [
+        "leaderboard",
+        "ranking",
+        "top",
+        "sorted"
+      ],
       "preview": {
         "kind": "table",
         "subtitle": "Top",
-        "columns": ["#", "name", "value"],
+        "columns": [
+          "#",
+          "name",
+          "value"
+        ],
         "rows": [
-          ["1", "Acme", "28K"],
-          ["2", "Initech", "24K"]
+          [
+            "1",
+            "Acme",
+            "28K"
+          ],
+          [
+            "2",
+            "Initech",
+            "24K"
+          ]
         ]
       }
     },
@@ -166,14 +610,37 @@
       "description": "Cards organized into columns by a status / stage column. Use for task boards, sales pipelines, or any flow-style data.",
       "author": "OpenHive",
       "category": "kanban",
-      "tags": ["kanban", "board", "status", "pipeline", "flow", "cards"],
+      "tags": [
+        "kanban",
+        "board",
+        "status",
+        "pipeline",
+        "flow",
+        "cards"
+      ],
       "preview": {
         "kind": "kanban",
         "subtitle": "Board",
         "columns": [
-          { "label": "TODO", "cards": ["Implement OAuth", "Update copy"] },
-          { "label": "DOING", "cards": ["Refactor cache"] },
-          { "label": "DONE", "cards": ["Ship v1"] }
+          {
+            "label": "TODO",
+            "cards": [
+              "Implement OAuth",
+              "Update copy"
+            ]
+          },
+          {
+            "label": "DOING",
+            "cards": [
+              "Refactor cache"
+            ]
+          },
+          {
+            "label": "DONE",
+            "cards": [
+              "Ship v1"
+            ]
+          }
         ]
       }
     },
@@ -183,17 +650,136 @@
       "description": "Interactive month grid + detail pane. Click a date to see its events, click an event card to expand full row data, edit / delete inline, + Add to create new ones.",
       "author": "OpenHive",
       "category": "calendar",
-      "tags": ["calendar", "schedule", "month", "events", "editable", "universal"],
+      "tags": [
+        "calendar",
+        "schedule",
+        "month",
+        "events",
+        "editable",
+        "universal"
+      ],
       "preview": {
         "kind": "calendar",
         "subtitle": "April 2026",
         "month": "April 2026",
         "days": [
-          { "day": 30, "muted": true }, { "day": 31, "muted": true }, { "day": 1 }, { "day": 2 }, { "day": 3, "events": 1 }, { "day": 4 }, { "day": 5 },
-          { "day": 6 }, { "day": 7, "events": 2 }, { "day": 8 }, { "day": 9 }, { "day": 10, "events": 1 }, { "day": 11 }, { "day": 12 },
-          { "day": 13 }, { "day": 14 }, { "day": 15, "events": 3 }, { "day": 16 }, { "day": 17 }, { "day": 18 }, { "day": 19 },
-          { "day": 20 }, { "day": 21 }, { "day": 22, "events": 1 }, { "day": 23 }, { "day": 24 }, { "day": 25 }, { "day": 26, "today": true, "events": 2 },
-          { "day": 27 }, { "day": 28 }, { "day": 29 }, { "day": 30 }, { "day": 1, "muted": true }, { "day": 2, "muted": true }, { "day": 3, "muted": true }
+          {
+            "day": 30,
+            "muted": true
+          },
+          {
+            "day": 31,
+            "muted": true
+          },
+          {
+            "day": 1
+          },
+          {
+            "day": 2
+          },
+          {
+            "day": 3,
+            "events": 1
+          },
+          {
+            "day": 4
+          },
+          {
+            "day": 5
+          },
+          {
+            "day": 6
+          },
+          {
+            "day": 7,
+            "events": 2
+          },
+          {
+            "day": 8
+          },
+          {
+            "day": 9
+          },
+          {
+            "day": 10,
+            "events": 1
+          },
+          {
+            "day": 11
+          },
+          {
+            "day": 12
+          },
+          {
+            "day": 13
+          },
+          {
+            "day": 14
+          },
+          {
+            "day": 15,
+            "events": 3
+          },
+          {
+            "day": 16
+          },
+          {
+            "day": 17
+          },
+          {
+            "day": 18
+          },
+          {
+            "day": 19
+          },
+          {
+            "day": 20
+          },
+          {
+            "day": 21
+          },
+          {
+            "day": 22,
+            "events": 1
+          },
+          {
+            "day": 23
+          },
+          {
+            "day": 24
+          },
+          {
+            "day": 25
+          },
+          {
+            "day": 26,
+            "today": true,
+            "events": 2
+          },
+          {
+            "day": 27
+          },
+          {
+            "day": 28
+          },
+          {
+            "day": 29
+          },
+          {
+            "day": 30
+          },
+          {
+            "day": 1,
+            "muted": true
+          },
+          {
+            "day": 2,
+            "muted": true
+          },
+          {
+            "day": 3,
+            "muted": true
+          }
         ]
       }
     },
@@ -203,13 +789,26 @@
       "description": "Compact horizontal row of 2-6 sibling counters. Use for queue states, deploy stats, status summaries — anywhere multiple related metrics should be scanned together.",
       "author": "OpenHive",
       "category": "stat-row",
-      "tags": ["stat", "row", "summary", "counters", "compact", "header"],
+      "tags": [
+        "stat",
+        "row",
+        "summary",
+        "counters",
+        "compact",
+        "header"
+      ],
       "preview": {
         "kind": "stat_row",
         "subtitle": "Status",
         "stats": [
-          { "label": "ACTIVE", "value": "12" },
-          { "label": "DONE", "value": "47" }
+          {
+            "label": "ACTIVE",
+            "value": "12"
+          },
+          {
+            "label": "DONE",
+            "value": "47"
+          }
         ]
       }
     },
@@ -219,15 +818,33 @@
       "description": "Live counts of this team's chat sessions by state — running, awaiting input, unreviewed, failed. No data binding; reflects the in-app session store.",
       "author": "OpenHive",
       "category": "session-status",
-      "tags": ["session", "status", "live", "sessions", "conversation"],
+      "tags": [
+        "session",
+        "status",
+        "live",
+        "sessions",
+        "conversation"
+      ],
       "preview": {
         "kind": "session_status",
         "subtitle": "Live",
         "stats": [
-          { "label": "RUNNING", "value": "2" },
-          { "label": "WAITING", "value": "1" },
-          { "label": "UNREVIEWED", "value": "3" },
-          { "label": "FAILED", "value": "0" }
+          {
+            "label": "RUNNING",
+            "value": "2"
+          },
+          {
+            "label": "WAITING",
+            "value": "1"
+          },
+          {
+            "label": "UNREVIEWED",
+            "value": "3"
+          },
+          {
+            "label": "FAILED",
+            "value": "0"
+          }
         ]
       }
     },
@@ -237,7 +854,13 @@
       "description": "Free-form note panel. Click to edit, type Markdown, save. Content lives on the panel itself — no data binding, no SQL. Use for meeting notes, TODOs, links, or anything you want pinned to a dashboard.",
       "author": "OpenHive",
       "category": "memo",
-      "tags": ["memo", "note", "sticky", "markdown", "freeform"],
+      "tags": [
+        "memo",
+        "note",
+        "sticky",
+        "markdown",
+        "freeform"
+      ],
       "preview": {
         "kind": "memo",
         "subtitle": "Note",
@@ -250,18 +873,67 @@
       "description": "Two-dimensional density grid. Each cell is shaded by intensity. Use for patterns line/bar can't show — usage by day-of-week × hour, signups by region × month.",
       "author": "OpenHive",
       "category": "chart",
-      "tags": ["chart", "heatmap", "matrix", "2d", "density", "pattern"],
+      "tags": [
+        "chart",
+        "heatmap",
+        "matrix",
+        "2d",
+        "density",
+        "pattern"
+      ],
       "preview": {
         "kind": "heatmap",
         "subtitle": "Density",
-        "colLabels": ["Mon", "Tue", "Wed", "Thu", "Fri"],
-        "rowLabels": ["09", "12", "15", "18", "21"],
+        "colLabels": [
+          "Mon",
+          "Tue",
+          "Wed",
+          "Thu",
+          "Fri"
+        ],
+        "rowLabels": [
+          "09",
+          "12",
+          "15",
+          "18",
+          "21"
+        ],
         "values": [
-          [1, 2, 3, 2, 1],
-          [4, 6, 9, 6, 4],
-          [7, 11, 15, 12, 8],
-          [5, 8, 11, 9, 6],
-          [2, 4, 6, 4, 2]
+          [
+            1,
+            2,
+            3,
+            2,
+            1
+          ],
+          [
+            4,
+            6,
+            9,
+            6,
+            4
+          ],
+          [
+            7,
+            11,
+            15,
+            12,
+            8
+          ],
+          [
+            5,
+            8,
+            11,
+            9,
+            6
+          ],
+          [
+            2,
+            4,
+            6,
+            4,
+            2
+          ]
         ]
       }
     }

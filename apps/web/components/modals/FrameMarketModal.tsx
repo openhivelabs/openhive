@@ -2,6 +2,7 @@ import {
   Buildings,
   CaretRight,
   ChartBar,
+  Check,
   CircleNotch,
   CloudSlash,
   DownloadSimple,
@@ -35,9 +36,11 @@ import {
   type PanelSize,
   aiBindPreview,
   applyPanelInstall,
+  fetchMarketFrameDetail,
   fetchMarketIndex,
   installMarketEntry,
 } from '@/lib/api/market'
+import { buildTree, PersonaTreeRows, type TreeNode } from './PersonaFileTree'
 import { BindingCodeEditor } from '@/components/dashboard/BindingCodeEditor'
 import { PanelShape } from '@/components/dashboard/BoundPanel'
 import type { PanelAction, PanelBinding } from '@/lib/api/dashboards'
@@ -59,6 +62,20 @@ import {
 } from 'recharts'
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose'
 import { useT } from '@/lib/i18n'
+import { TeamIcon } from '@/components/shell/TeamIcon'
+
+/** Pick the localized description if the entry ships one, falling back to
+ *  the English `description` field. */
+function pickDescription(entry: MarketEntry, locale: string): string {
+  return entry.description_i18n?.[locale] ?? entry.description ?? ''
+}
+
+/** Pick the localized display name. The English `name` (and the agent's
+ *  role/label inside the yaml) stay English everywhere — install always
+ *  creates the agent with the English identifier. */
+function pickName(entry: MarketEntry, locale: string): string {
+  return entry.name_i18n?.[locale] ?? entry.name ?? ''
+}
 import { useAppStore } from '@/lib/stores/useAppStore'
 
 interface Props {
@@ -131,6 +148,9 @@ export function FrameMarketModal({
   const t = useT()
   const companies = useAppStore((s) => s.companies)
   const addTeam = useAppStore((s) => s.addTeam)
+  const hydrate = useAppStore((s) => s.hydrate)
+  const defaultModel = useAppStore((s) => s.defaultModel)
+  const locale = useAppStore((s) => s.locale)
   const visibleTabs = useMemo(
     () => TAB_DEFS.filter((d) => !allowedTabs || allowedTabs.includes(d.type)),
     [allowedTabs],
@@ -392,9 +412,14 @@ export function FrameMarketModal({
         id: entry.id,
         target_company_slug: targetCompany.slug,
         target_team_slug: entry.type === 'agent' ? targetTeam?.slug : undefined,
+        default_provider_id: defaultModel?.providerId,
+        default_model: defaultModel?.model,
       })
       if (entry.type === 'team' && result.team) {
         addTeam(targetCompany.id, teamFromInstallResult(result.team))
+      }
+      if (entry.type === 'agent') {
+        await hydrate()
       }
       setLastInstalled(entry.id)
       setTimeout(() => {
@@ -618,7 +643,13 @@ export function FrameMarketModal({
             onInstall={() => onInstall(selectedEntry)}
           />
         ) : (
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div
+          className={
+            selectedEntry
+              ? 'flex-1 min-h-0 px-5 py-4 flex flex-col'
+              : 'flex-1 overflow-y-auto px-5 py-4'
+          }
+        >
           {loading && (
             <div className="flex items-center gap-2 text-[14px] text-neutral-500">
               <CircleNotch className="w-4 h-4 animate-spin" />
@@ -706,33 +737,89 @@ export function FrameMarketModal({
                     ? `${entry.agent_count} agent${entry.agent_count === 1 ? '' : 's'}`
                     : entry.type === 'company' && entry.teams
                       ? `${entry.teams.length} team${entry.teams.length === 1 ? '' : 's'}`
-                      : entry.type === 'agent'
-                        ? 'single agent'
-                        : ''
+                      : ''
+                const showAgentInstall = entry.type === 'agent'
+                const agentInstalling = installing === entry.id
+                const agentInstalled = lastInstalled === entry.id
+                const agentInstallDisabled =
+                  showAgentInstall &&
+                  (!targetCompany || !targetTeam || agentInstalling || agentInstalled)
                 return (
                   <button
                     key={entry.id}
                     type="button"
                     onClick={() => setSelectedEntry(entry)}
-                    className="h-[150px] text-left rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-3.5 flex gap-4 hover:border-neutral-300 dark:hover:border-neutral-600 hover:shadow-sm transition-colors cursor-pointer overflow-hidden"
+                    className={`${showAgentInstall ? 'h-[170px]' : 'h-[150px]'} text-left rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-4 flex gap-4 hover:border-neutral-300 dark:hover:border-neutral-600 hover:shadow-sm transition-colors cursor-pointer overflow-hidden`}
                   >
                     <div className="flex-1 min-w-0 flex flex-col">
-                      <div className="font-semibold text-[14.5px] text-neutral-900 dark:text-neutral-50 truncate">
-                        {entry.name}
+                      <div className="flex items-center gap-2 min-w-0">
+                        {entry.type === 'agent' && (
+                          <span className="w-7 h-7 shrink-0 inline-flex items-center justify-center rounded-sm bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">
+                            <TeamIcon name={entry.icon} weight="regular" className="w-4 h-4" />
+                          </span>
+                        )}
+                        <div className="font-semibold text-[15px] text-neutral-900 dark:text-neutral-50 truncate">
+                          {pickName(entry, locale)}
+                        </div>
                       </div>
                       {entry.author && (
                         <div className="text-[12px] text-neutral-400 font-mono truncate">
                           {entry.author}
                         </div>
                       )}
-                      {entry.description && (
-                        <p className="text-[13px] text-neutral-600 dark:text-neutral-300 mt-1.5 leading-relaxed line-clamp-3">
-                          {entry.description}
+                      {pickDescription(entry, locale) && (
+                        <p
+                          className={`text-[13px] text-neutral-600 dark:text-neutral-300 mt-1.5 leading-relaxed ${showAgentInstall ? 'line-clamp-2' : 'line-clamp-3'}`}
+                        >
+                          {pickDescription(entry, locale)}
                         </p>
                       )}
-                      {meta && (
-                        <div className="mt-auto pt-3 text-[12px] text-neutral-400">
-                          {meta}
+                      {(meta || showAgentInstall) && (
+                        <div className="mt-auto pt-3 flex items-center justify-between gap-3">
+                          {meta ? (
+                            <div className="text-[12px] text-neutral-400">{meta}</div>
+                          ) : (
+                            <span />
+                          )}
+                          {showAgentInstall && (
+                            <span
+                              role="button"
+                              tabIndex={agentInstallDisabled ? -1 : 0}
+                              aria-disabled={agentInstallDisabled}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (agentInstallDisabled) return
+                                void onInstall(entry)
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault()
+                                  e.stopPropagation()
+                                  if (agentInstallDisabled) return
+                                  void onInstall(entry)
+                                }
+                              }}
+                              className={clsx(
+                                'inline-flex items-center gap-1.5 px-4 py-2 rounded-sm text-[13px] transition-colors select-none',
+                                agentInstalled
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:border-emerald-800'
+                                  : !targetCompany || !targetTeam
+                                    ? 'bg-neutral-50 text-neutral-400 border border-neutral-200 dark:bg-neutral-800/60 dark:text-neutral-500 dark:border-neutral-700 cursor-not-allowed'
+                                    : 'bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300 cursor-pointer',
+                              )}
+                            >
+                              {agentInstalled ? (
+                                <Check className="w-3.5 h-3.5" weight="bold" />
+                              ) : agentInstalling ? (
+                                <CircleNotch className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <>
+                                  <DownloadSimple className="w-3.5 h-3.5" />
+                                  Install
+                                </>
+                              )}
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>
@@ -786,6 +873,74 @@ export function FrameMarketModal({
   )
 }
 
+/** File-tree preview for an agent persona bundle. Shows AGENT.md and any
+ *  reference/* files the agent ships with, read-only. Layout mirrors the
+ *  NodeEditor split: left = tree, right = selected file body. */
+function PersonaFilesPreview({
+  slug,
+  files,
+}: {
+  slug: string
+  files: Record<string, string>
+}) {
+  const filePaths = useMemo(() => Object.keys(files).sort(), [files])
+  const tree = useMemo<TreeNode>(
+    () => buildTree(filePaths, new Set<string>()),
+    [filePaths],
+  )
+  const [selected, setSelected] = useState<string>(
+    filePaths.includes('AGENT.md') ? 'AGENT.md' : (filePaths[0] ?? ''),
+  )
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    const e = new Set<string>()
+    for (const p of filePaths) {
+      const slash = p.lastIndexOf('/')
+      if (slash > 0) e.add(p.slice(0, slash))
+    }
+    return e
+  })
+  const toggle = (path: string) =>
+    setExpanded((cur) => {
+      const next = new Set(cur)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  const body = files[selected] ?? ''
+  return (
+    <div className="border border-neutral-200 dark:border-neutral-800 rounded-md overflow-hidden flex flex-1 min-h-0 bg-white dark:bg-neutral-900">
+      <div className="w-[220px] shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
+        <div className="h-[33px] shrink-0 px-3 flex items-center text-[11.5px] font-mono uppercase tracking-wide text-neutral-500 border-b border-neutral-200 dark:border-neutral-800">
+          {slug} · {filePaths.length}
+        </div>
+        <div className="flex-1 min-h-0 overflow-auto py-1">
+          <PersonaTreeRows
+            node={tree}
+            depth={0}
+            selected={selected}
+            expanded={expanded}
+            readOnly
+            onToggle={toggle}
+            onPick={setSelected}
+            onAddFile={() => undefined}
+            onAddFolder={() => undefined}
+            onDelete={() => undefined}
+            labels={{ addFile: '', addFolder: '', delete: '' }}
+          />
+        </div>
+      </div>
+      <div className="flex-1 min-w-0 flex flex-col">
+        <div className="h-[33px] shrink-0 px-3 flex items-center text-[12px] font-mono text-neutral-600 dark:text-neutral-300 border-b border-neutral-200 dark:border-neutral-800 truncate">
+          {selected}
+        </div>
+        <pre className="flex-1 min-h-0 overflow-auto px-4 py-3 text-[12px] leading-relaxed font-mono whitespace-pre-wrap text-neutral-800 dark:text-neutral-100">
+          {body}
+        </pre>
+      </div>
+    </div>
+  )
+}
+
 function EntryDetailView({
   entry,
   justInstalled,
@@ -814,9 +969,38 @@ function EntryDetailView({
   onInstall: () => void
 }) {
   const t = useT()
+  const locale = useAppStore((s) => s.locale)
   const isCompany = entry.type === 'company'
+  const isAgent = entry.type === 'agent'
+
+  // Agent personas ship as AGENT.md + reference/* — fetch the frame so we can
+  // render the actual file structure the user is about to install.
+  const [personaFiles, setPersonaFiles] = useState<Record<string, string> | null>(null)
+  const [personaError, setPersonaError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!isAgent) {
+      setPersonaFiles(null)
+      return
+    }
+    let cancelled = false
+    setPersonaError(null)
+    fetchMarketFrameDetail('agent', entry.id)
+      .then((frame) => {
+        if (cancelled) return
+        const assets = (frame.persona_assets ?? {}) as Record<string, unknown>
+        const first = Object.values(assets)[0] as { files?: Record<string, string> } | undefined
+        setPersonaFiles(first?.files ?? null)
+      })
+      .catch((err) => {
+        if (!cancelled) setPersonaError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isAgent, entry.id])
+
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 flex-1 min-h-0">
       <button
         type="button"
         onClick={onBack}
@@ -825,25 +1009,56 @@ function EntryDetailView({
         ← Back
       </button>
 
-      <div className="flex flex-col min-w-0">
-        <div className="text-[11px] font-mono uppercase tracking-wide text-neutral-400">
-          {entry.type}
-          {entry.type === 'panel' && entry.category ? ` · ${entry.category}` : ''}
-        </div>
-        <div className="mt-0.5 text-[18px] font-semibold text-neutral-900 dark:text-neutral-50">
-          {entry.name}
-        </div>
-        {entry.author && (
-          <div className="text-[12px] text-neutral-400 font-mono mt-0.5">
-            {entry.author}
+      <div className="flex items-start gap-4 min-w-0">
+        <div className="flex-1 min-w-0 flex flex-col">
+          <div className="text-[18px] font-semibold text-neutral-900 dark:text-neutral-50 truncate">
+            {pickName(entry, locale)}
           </div>
-        )}
+          {entry.author && (
+            <div className="text-[12px] text-neutral-400 font-mono mt-0.5">
+              {entry.author}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onInstall}
+          disabled={isInstalling || aiPreviewLoading || isCompany || !canInstall}
+          className={clsx(
+            'shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-sm text-[13px] transition-colors',
+            justInstalled
+              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:border-emerald-800'
+              : isCompany
+                ? 'bg-neutral-50 text-neutral-400 border border-neutral-200 dark:bg-neutral-800/60 dark:text-neutral-500 dark:border-neutral-700 cursor-not-allowed'
+                : 'bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer',
+          )}
+        >
+          {justInstalled ? (
+            <Check className="w-3.5 h-3.5" weight="bold" />
+          ) : isInstalling ? (
+            <CircleNotch className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <>
+              <DownloadSimple className="w-3.5 h-3.5" />
+              {isCompany ? 'Coming soon' : 'Install'}
+            </>
+          )}
+        </button>
       </div>
 
-      {entry.description && (
+      {pickDescription(entry, locale) && (
         <p className="text-[14px] leading-relaxed text-neutral-700 dark:text-neutral-200">
-          {entry.description}
+          {pickDescription(entry, locale)}
         </p>
+      )}
+
+      {isAgent && personaFiles && Object.keys(personaFiles).length > 0 && (
+        <PersonaFilesPreview slug={entry.id} files={personaFiles} />
+      )}
+      {isAgent && personaError && (
+        <div className="text-[12px] text-red-600 dark:text-red-300 font-mono">
+          {personaError}
+        </div>
       )}
 
       {entry.type === 'panel' && entry.category !== 'memo' && entry.category !== 'session-status' && (
@@ -901,34 +1116,6 @@ function EntryDetailView({
         </dl>
       )}
 
-      <div className="flex justify-end pt-2">
-        <button
-          type="button"
-          onClick={onInstall}
-          disabled={isInstalling || aiPreviewLoading || isCompany || !canInstall}
-          className={clsx(
-            'inline-flex items-center gap-1.5 px-4 py-2 rounded-sm text-[13px] transition-colors',
-            justInstalled
-              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:border-emerald-800'
-              : isCompany
-                ? 'bg-neutral-50 text-neutral-400 border border-neutral-200 dark:bg-neutral-800/60 dark:text-neutral-500 dark:border-neutral-700 cursor-not-allowed'
-                : 'bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer',
-          )}
-        >
-          {isInstalling ? (
-            <CircleNotch className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <DownloadSimple className="w-3.5 h-3.5" />
-          )}
-          {isCompany
-            ? 'Coming soon'
-            : isInstalling
-              ? 'Installing…'
-              : justInstalled
-                ? 'Installed ✓'
-                : 'Install'}
-        </button>
-      </div>
     </div>
   )
 }
@@ -982,6 +1169,7 @@ function PanelDetailView({
   onInstall: () => void
 }) {
   const t = useT()
+  const locale = useAppStore((s) => s.locale)
   return (
     <div className="flex-1 min-h-0 flex overflow-hidden">
       {/* Left column — info + controls */}
@@ -999,16 +1187,16 @@ function PanelDetailView({
 
           <div className="px-5 pb-4 border-b border-neutral-100 dark:border-neutral-800">
             <div className="text-[18px] font-semibold text-neutral-900 dark:text-neutral-50">
-              {entry.name}
+              {pickName(entry, locale)}
             </div>
             {entry.author && (
               <div className="text-[12px] text-neutral-400 font-mono mt-0.5">
                 {entry.author}
               </div>
             )}
-            {entry.description && (
+            {pickDescription(entry, locale) && (
               <p className="mt-3 text-[13.5px] leading-relaxed text-neutral-700 dark:text-neutral-200">
-                {entry.description}
+                {pickDescription(entry, locale)}
               </p>
             )}
           </div>
@@ -1095,12 +1283,16 @@ function PanelDetailView({
                 : 'bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer',
             )}
           >
-            {isInstalling ? (
+            {justInstalled ? (
+              <Check className="w-3.5 h-3.5" weight="bold" />
+            ) : isInstalling ? (
               <CircleNotch className="w-3.5 h-3.5 animate-spin" />
             ) : (
-              <DownloadSimple className="w-3.5 h-3.5" />
+              <>
+                <DownloadSimple className="w-3.5 h-3.5" />
+                Install
+              </>
             )}
-            {isInstalling ? 'Installing…' : justInstalled ? 'Installed ✓' : 'Install'}
           </button>
         </div>
       </div>
