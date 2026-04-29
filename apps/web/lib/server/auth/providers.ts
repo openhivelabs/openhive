@@ -35,6 +35,12 @@ export const PROVIDERS: ProviderDef[] = [
     description: 'Direct OpenAI API access via API key (platform.openai.com).',
   },
   {
+    id: 'anthropic',
+    label: 'Anthropic',
+    kind: 'api_key',
+    description: 'Direct Anthropic API access via API key (console.anthropic.com).',
+  },
+  {
     id: 'gemini',
     label: 'Google Gemini',
     kind: 'api_key',
