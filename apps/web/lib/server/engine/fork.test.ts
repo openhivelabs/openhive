@@ -242,6 +242,27 @@ describe('decideForkOrFresh — six-gate', () => {
     expect(d.reason).toBe('provider_mismatch')
   })
 
+  it('gate 2: anthropic api_key child is allowed (treated as Anthropic-family)', () => {
+    const d = decideForkOrFresh({
+      snapshot: snapshot({ providerId: 'anthropic' }),
+      parent: agent({ id: 'lead', provider_id: 'anthropic' }),
+      child: agent({ id: 'writer-1', provider_id: 'anthropic' }),
+      depth: 0,
+    })
+    expect(d.fork).toBe(true)
+  })
+
+  it('gate 3: cross-provider claude-code → anthropic falls back to provider_mismatch', () => {
+    const d = decideForkOrFresh({
+      snapshot: snapshot({ providerId: 'claude-code' }),
+      parent: agent({ id: 'lead' }),
+      child: agent({ id: 'writer-1', provider_id: 'anthropic' }),
+      depth: 0,
+    })
+    expect(d.fork).toBe(false)
+    expect(d.reason).toBe('provider_mismatch')
+  })
+
   it('gate 4a: no snapshot', () => {
     const d = decideForkOrFresh({
       snapshot: undefined,

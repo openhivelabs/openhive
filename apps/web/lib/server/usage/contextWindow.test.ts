@@ -3,8 +3,18 @@ import { contextWindow, effectiveWindow } from './contextWindow'
 
 describe('contextWindow', () => {
   it('returns table entry for known (provider, model)', () => {
+    const cw = contextWindow('claude-code', 'claude-opus-4-7')
+    expect(cw).toEqual({ input: 200_000, output: 32_000 })
+  })
+
+  it('mirrors claude-code entries under anthropic provider', () => {
+    expect(contextWindow('anthropic', 'claude-opus-4-7')).toEqual({ input: 200_000, output: 32_000 })
+    expect(contextWindow('anthropic', 'claude-haiku-4-5')).toEqual({ input: 200_000, output: 16_000 })
+  })
+
+  it('falls back to SAFE_DEFAULT for retired [1m] beta variants (2026-04-30)', () => {
     const cw = contextWindow('claude-code', 'claude-opus-4-7[1m]')
-    expect(cw).toEqual({ input: 1_000_000, output: 32_000 })
+    expect(cw).toEqual({ input: 128_000, output: 8_000 })
   })
 
   it('falls back to SAFE_DEFAULT for unknown model', () => {
@@ -19,13 +29,12 @@ describe('contextWindow', () => {
 })
 
 describe('effectiveWindow', () => {
-  it('claude-opus-4-7[1m] → 980_000 window, 967K autocompact, 960K warn, 977K block', () => {
+  // The legacy [1m] beta is retired (2026-04-30). Test we no longer carry the
+  // 1M-window thresholds and instead fall through to SAFE_DEFAULT.
+  it('claude-opus-4-7[1m] (retired) → SAFE_DEFAULT 128K window', () => {
     const ew = effectiveWindow('claude-code', 'claude-opus-4-7[1m]')
-    expect(ew.window).toBe(980_000)
-    expect(ew.autoCompactThreshold).toBe(967_000)
-    expect(ew.warningThreshold).toBe(960_000)
-    expect(ew.blockingLimit).toBe(977_000)
-    expect(ew.meta.reserveOutput).toBe(20_000)
+    expect(ew.meta.rawInput).toBe(128_000)
+    expect(ew.meta.reserveOutput).toBe(8_000)
   })
 
   it('claude-opus-4-7 → 180_000 window (200K - 20K reserve)', () => {

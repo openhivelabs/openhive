@@ -1,14 +1,21 @@
 /**
  * Async auto-title generation for sessions.
  *
- * Fires a single cheap LLM call (Copilot gpt-5-mini) to produce a 6-10 word
- * human-friendly title from the goal text. Fire-and-forget from driveSession
- * once the first run_started event has been persisted. Failures are swallowed
- * and return null — a missing title falls back to the goal slice in the UI.
+ * Fires a single cheap LLM call to produce a 6-10 word human-friendly title
+ * from the goal text. Fire-and-forget from driveSession once the first
+ * run_started event has been persisted. Failures are swallowed and return
+ * null — a missing title falls back to the goal slice in the UI.
+ *
+ * Provider routing: `pickCheapModel()` walks connected providers and returns
+ * the cheapest available. Copilot's `chatCompletion` is the fast path because
+ * it's already a one-shot string API; other providers go through the engine's
+ * generic `stream()` and concatenate text deltas.
  *
  * Spec: docs/superpowers/specs/2026-04-22-session-auto-title.md
  */
 
+import { stream as engineStream } from '../engine/providers'
+import { pickCheapModel } from '../providers/cheap-model'
 import { chatCompletion } from '../providers/copilot'
 
 type TitleLocale = 'en' | 'ko'
@@ -47,7 +54,8 @@ async function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T | nul
 }
 
 interface GenerateTitleDeps {
-  /** Injectable for tests — defaults to the Copilot gpt-5-mini chat completion. */
+  /** Injectable for tests — defaults to dispatching through the connected
+   *  cheap-model picked by `pickCheapModel`. */
   complete?: (goal: string, locale: TitleLocale) => Promise<string>
   timeoutMs?: number
 }
@@ -57,14 +65,36 @@ async function defaultComplete(goal: string, locale: TitleLocale): Promise<strin
   const prompt =
     `Produce a 6-10 word session title in ${localeName}. ` +
     `Return only the title, no quotes, no trailing punctuation.\n\nGoal: ${goal}`
-  return chatCompletion({
-    model: 'gpt-5-mini',
-    messages: [
-      { role: 'system', content: 'You write short, concrete titles.' },
-      { role: 'user', content: prompt },
-    ],
+  const messages = [
+    { role: 'system' as const, content: 'You write short, concrete titles.' },
+    { role: 'user' as const, content: prompt },
+  ]
+
+  const choice = pickCheapModel()
+  if (!choice) {
+    // No connected provider — caller's catch path turns this into null which
+    // becomes "title generation skipped" in the UI.
+    throw new Error('no provider connected for title generation')
+  }
+
+  // Copilot has a one-shot `chatCompletion` helper that returns a string
+  // directly; preserve the fast path because copilot subscriptions are free
+  // for the user and avoid the streaming overhead.
+  if (choice.providerId === 'copilot') {
+    return chatCompletion({ model: choice.model, messages, temperature: 0.3 })
+  }
+
+  // All other providers go through the engine's generic stream(). We
+  // accumulate text deltas; tool_call / native_tool / usage events are
+  // dropped because a title generator never needs tools.
+  let text = ''
+  for await (const delta of engineStream(choice.providerId, choice.model, messages, undefined, {
     temperature: 0.3,
-  })
+    nativeWebSearch: false,
+  })) {
+    if (delta.kind === 'text') text += delta.text
+  }
+  return text
 }
 
 /**

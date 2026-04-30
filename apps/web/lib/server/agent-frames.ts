@@ -13,7 +13,14 @@ import path from 'node:path'
 import yaml from 'js-yaml'
 import { saveTeam, type TeamDict } from './companies'
 import { companyDir, packagesRoot, teamYamlPath } from './paths'
-import { CLAUDE_CODE_MODELS, CODEX_MODELS } from './providers/models'
+import {
+  ANTHROPIC_MODELS,
+  CLAUDE_CODE_MODELS,
+  CODEX_MODELS,
+  GEMINI_MODELS,
+  OPENAI_MODELS,
+  VERTEX_MODELS,
+} from './providers/models'
 
 const AGENT_FRAME_VERSION = 1
 
@@ -32,8 +39,20 @@ function defaultModelFor(providerId: string): string {
   if (providerId === 'claude-code') {
     return CLAUDE_CODE_MODELS.find((m) => m.default)?.id ?? CLAUDE_CODE_MODELS[0]?.id ?? ''
   }
+  if (providerId === 'anthropic') {
+    return ANTHROPIC_MODELS.find((m) => m.default)?.id ?? ANTHROPIC_MODELS[0]?.id ?? ''
+  }
   if (providerId === 'codex') {
     return CODEX_MODELS.find((m) => m.default)?.id ?? CODEX_MODELS[0]?.id ?? ''
+  }
+  if (providerId === 'openai') {
+    return OPENAI_MODELS.find((m) => m.default)?.id ?? OPENAI_MODELS[0]?.id ?? ''
+  }
+  if (providerId === 'gemini') {
+    return GEMINI_MODELS.find((m) => m.default)?.id ?? GEMINI_MODELS[0]?.id ?? ''
+  }
+  if (providerId === 'vertex-ai') {
+    return VERTEX_MODELS.find((m) => m.default)?.id ?? VERTEX_MODELS[0]?.id ?? ''
   }
   if (providerId === 'copilot') return 'gpt-5-mini'
   return ''

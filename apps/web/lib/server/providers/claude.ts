@@ -15,12 +15,16 @@
 import { CLIENT_ID } from '../auth/claude'
 import { getAccountLabel, loadToken, saveToken } from '../tokens'
 import { AnthropicCachingStrategy } from './caching'
+import { redactCredentials } from './errors'
+import { retryWithBackoff } from './retry'
 import type { ChatMessage, ToolCall, ToolSpec } from './types'
 
 const MESSAGES_URL = 'https://api.anthropic.com/v1/messages?beta=true'
 const TOKEN_URL = 'https://api.anthropic.com/v1/oauth/token'
 
-const ANTHROPIC_BETA = [
+// OAuth (`claude-code`) beta header — includes the Claude Code persona /
+// OAuth-only flags. Sent with `Authorization: Bearer <oauth-token>`.
+const ANTHROPIC_BETA_OAUTH = [
   'claude-code-20250219',
   'oauth-2025-04-20',
   'interleaved-thinking-2025-05-14',
@@ -39,11 +43,38 @@ const ANTHROPIC_BETA = [
   'web-search-2025-03-05',
 ].join(',')
 
-const ANTHROPIC_HEADERS: Record<string, string> = {
-  'anthropic-version': '2023-06-01',
-  'anthropic-beta': ANTHROPIC_BETA,
-  'anthropic-dangerous-direct-browser-access': 'true',
-  'Content-Type': 'application/json',
+// api_key (`anthropic`) beta header — `claude-code-*` and `oauth-*` are
+// OAuth-only and would 4xx on raw API key auth. `fast-mode` is account-
+// gated; left out until per-account probe says otherwise. `context-1m-
+// 2025-08-07` retired 2026-04-30 — never include.
+const ANTHROPIC_BETA_APIKEY = [
+  'interleaved-thinking-2025-05-14',
+  'context-management-2025-06-27',
+  'prompt-caching-scope-2026-01-05',
+  'advanced-tool-use-2025-11-20',
+  'effort-2025-11-24',
+  'structured-outputs-2025-12-15',
+  'redact-thinking-2026-02-12',
+  'token-efficient-tools-2026-03-28',
+  'web-search-2025-03-05',
+].join(',')
+
+function headersFor(providerId: string, accessToken: string): Record<string, string> {
+  if (providerId === 'anthropic') {
+    return {
+      'x-api-key': accessToken,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': ANTHROPIC_BETA_APIKEY,
+      'Content-Type': 'application/json',
+    }
+  }
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': ANTHROPIC_BETA_OAUTH,
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'Content-Type': 'application/json',
+  }
 }
 
 interface CachedAuth {
@@ -62,6 +93,13 @@ function authCache(): Map<string, CachedAuth> {
   return globalForAuth.__openhive_claude_auth
 }
 
+/** Drop the cached access_token for `providerId`. Called when the user
+ *  disconnects so a fresh credential isn't shadowed by a stale OAuth
+ *  token cached on `getAccessToken`. */
+export function clearClaudeAuthCache(providerId: string): void {
+  authCache().delete(providerId)
+}
+
 async function refreshAccess(
   providerId: string,
   refreshToken: string,
@@ -78,7 +116,7 @@ async function refreshAccess(
   })
   if (!resp.ok) {
     throw new Error(
-      `Claude refresh failed (${resp.status}): ${await resp.text()}`,
+      redactCredentials(`Claude refresh failed (${resp.status}): ${await resp.text()}`),
     )
   }
   const data = (await resp.json()) as Record<string, unknown>
@@ -102,6 +140,17 @@ async function refreshAccess(
 }
 
 async function getAccessToken(providerId = 'claude-code'): Promise<string> {
+  // api_key providers (`anthropic`) store the raw key as `access_token`
+  // with no expiry / refresh — return it directly. Auth cache is also
+  // bypassed because the key never rotates server-side.
+  if (providerId === 'anthropic') {
+    const record = loadToken(providerId)
+    if (!record) {
+      throw new Error('Anthropic is not connected. Add an API key in Settings first.')
+    }
+    return record.access_token
+  }
+
   const now = Date.now() / 1000
   const hit = authCache().get(providerId)
   if (hit && hit.expiresAt - 60 > now) return hit.accessToken
@@ -267,6 +316,13 @@ interface StreamOpts {
    *  etc.) the model can still call our function-shaped `web-search`
    *  skill as a fallback. */
   nativeWebSearch?: boolean
+  /** Cache breakpoint TTL — `'5m'` (default) or `'1h'`. The 1h variant
+   *  costs 2x on writes (vs 1.25x for 5m) but keeps the cache warm
+   *  across longer idle periods. Useful for trajectory-heavy agents
+   *  whose latest tool result lands >5min after the prefix was last
+   *  exercised. Caller can also flip every Anthropic call by setting
+   *  `OPENHIVE_ANTHROPIC_CACHE_TTL=1h` (env override). */
+  cacheTtl?: '5m' | '1h'
 }
 
 export async function* streamMessages(
@@ -290,6 +346,7 @@ export async function* streamMessages(
     model: opts.model,
     maxTokens: opts.maxTokens ?? 4096,
     useExactTools: opts.useExactTools,
+    cacheTtl: opts.cacheTtl,
   })
 
   // Inject Anthropic's hosted `web_search_20250305` builtin alongside the
@@ -308,39 +365,21 @@ export async function* streamMessages(
     ;(payload as { tools?: unknown[] }).tools = list
   }
 
-  // Anthropic returns 429 with `x-should-retry: true` and no rate-limit
-  // detail headers when the per-minute input-token rate is tripped (large
-  // prompts in close succession). Auto-retry with exponential backoff:
-  // attempt 1 = immediate, attempt 2 after ~6s, attempt 3 after ~18s.
-  // Total wait ≤ 30s. Beyond that, the burst is over and bubbling the
-  // error up gives the caller a chance to surface it. 5xx are treated
-  // the same — Anthropic's transient error class.
-  let resp: Response
-  let attempt = 0
-  while (true) {
-    resp = await fetch(MESSAGES_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${access}`,
-        ...ANTHROPIC_HEADERS,
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(180_000),
-    })
-    const retriable =
-      resp.status === 429 ||
-      resp.status === 529 ||
-      (resp.status >= 500 && resp.status <= 599)
-    if (resp.ok || !retriable || attempt >= 2) break
-    // Drain body (avoid socket leak), then back off.
-    try { await resp.text() } catch { /* ignore */ }
-    attempt += 1
-    const waitMs = 6000 * attempt + Math.floor(Math.random() * 2000)
-    await new Promise((r) => setTimeout(r, waitMs))
-  }
+  // Anthropic returns 429/529/5xx for transient overload. Retry up to 2x
+  // with backoff (~6s, ~18s, ≤30s total). See `providers/retry.ts`.
+  const resp = await retryWithBackoff(
+    () =>
+      fetch(MESSAGES_URL, {
+        method: 'POST',
+        headers: headersFor(providerId, access),
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(180_000),
+      }),
+    { maxAttempts: 3, baseMs: 6000, on429RespectHeader: true },
+  )
   if (!resp.ok || !resp.body) {
     const body = resp.body ? await resp.text() : ''
-    throw new Error(`Claude messages stream ${resp.status}: ${body}`)
+    throw new Error(redactCredentials(`Claude messages stream ${resp.status}: ${body}`))
   }
   yield* sseEvents(resp.body)
 }
