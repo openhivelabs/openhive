@@ -177,9 +177,20 @@ interface RunState {
   readSkillFileTotal: Map<string, number>
   // sessionId → set of `{skill}:{path}` already read. Phase C3 dedupe.
   readSkillFileSeen: Map<string, Set<string>>
-  // sessionId → count of `web-search` calls this turn. Prevents runaway
-  // search loops (LLM re-queries 20+ times when results aren't perfect).
-  webSearch: Map<string, number>
+  // sessionId → count of FUNCTION-TOOL `web-search` skill invocations
+  // this turn. Prevents runaway search loops (LLM re-queries 20+ times
+  // when results aren't perfect). NOT counted: provider-hosted native
+  // web_search (Anthropic web_search_20250305, Codex/OpenAI web_search,
+  // Gemini googleSearch) — those have their own per-provider caps
+  // (Anthropic max_uses=5, others provider-enforced) and the model
+  // can fall back to skill when native fails. Splitting the budgets
+  // is intentional: native exhaustion shouldn't block the skill
+  // fallback path, and vice versa.
+  webSearchSkill: Map<string, number>
+  // sessionId → count of native_tool `searching` deltas this turn.
+  // Observability only — not enforced. Surfaced via session metadata
+  // for UI (sources card consolidation) and cost-monitoring.
+  webSearchNative: Map<string, number>
   // sessionId → ordered todo list maintained by the Lead via native tools.
   todos: Map<string, TodoItem[]>
   // S3 fork: sessionId → last-turn snapshot captured at streamTurn entry.
@@ -238,7 +249,8 @@ function state(): RunState {
       delegations: new Map(),
       readSkillFileTotal: new Map(),
       readSkillFileSeen: new Map(),
-      webSearch: new Map(),
+      webSearchSkill: new Map(),
+      webSearchNative: new Map(),
       todos: new Map(),
       lastTurnSnapshot: new Map(),
       forkSystemCache: new Map(),
@@ -252,7 +264,8 @@ function state(): RunState {
   if (!s.delegations) s.delegations = new Map()
   if (!s.readSkillFileTotal) s.readSkillFileTotal = new Map()
   if (!s.readSkillFileSeen) s.readSkillFileSeen = new Map()
-  if (!s.webSearch) s.webSearch = new Map()
+  if (!s.webSearchSkill) s.webSearchSkill = new Map()
+  if (!s.webSearchNative) s.webSearchNative = new Map()
   if (!s.todos) s.todos = new Map()
   if (!s.lastTurnSnapshot) s.lastTurnSnapshot = new Map()
   if (!s.forkSystemCache) s.forkSystemCache = new Map()
@@ -295,7 +308,8 @@ function resetPerTurnCaps(sessionId: string): void {
   s.readSkillFileTotal.delete(sessionId)
   const seen = s.readSkillFileSeen.get(sessionId)
   if (seen) seen.clear()
-  s.webSearch.delete(sessionId)
+  s.webSearchSkill.delete(sessionId)
+  s.webSearchNative.delete(sessionId)
   for (const k of s.budgetRetries.keys()) {
     if (k.startsWith(`${sessionId}:`)) s.budgetRetries.delete(k)
   }
@@ -693,7 +707,8 @@ export async function* runTeam(
     }
     state().readSkillFileTotal.delete(sessionId)
     state().readSkillFileSeen.delete(sessionId)
-    state().webSearch.delete(sessionId)
+    state().webSearchSkill.delete(sessionId)
+    state().webSearchNative.delete(sessionId)
     state().todos.delete(sessionId)
     // S3 fork: release snapshot history ref so parent history GC can proceed.
     state().lastTurnSnapshot.delete(sessionId)
@@ -1545,13 +1560,17 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       break
     }
   }
+  // Resolve native_search: per-agent opt-out wins over engine defaults.
+  // `agentSatisfied` (synthesis-mode short-circuit) still hard-disables.
+  const nativeSearchAgentOptOut = node.native_search === false
   const streamOpts = {
     useExactTools: opts.useExactTools,
     overrideSystem: opts.systemPromptOverride,
     temperature: leadTemperature,
     sessionId,
     chainKey,
-    nativeWebSearch: agentSatisfied ? false : undefined,
+    nativeWebSearch:
+      agentSatisfied || nativeSearchAgentOptOut ? false : undefined,
   }
   // Meta-label stripper buffer — only applied to Lead (depth 0) turns where
   // small-model slop is the concern. Sub-agent output goes through un-stripped
@@ -1592,11 +1611,20 @@ export async function* streamTurn(opts: StreamTurnOpts): AsyncGenerator<Event> {
       }
     } else if (delta.kind === 'native_tool') {
       // Provider-side hosted tool lifecycle (Codex web_search, Anthropic
-      // server_tool_use). Surfaced to the UI as a discrete event so the
-      // user sees "🔍 web_search • searching" instead of a frozen turn.
-      // No round-trip needed — the provider folds results into the
-      // assistant text directly.
+      // server_tool_use, Gemini googleSearch). Surfaced to the UI as a
+      // discrete event so the user sees "🔍 web_search • searching"
+      // instead of a frozen turn. No round-trip needed — the provider
+      // folds results into the assistant text directly.
       lastDeltaKind = 'native_tool'
+      // Observability: count distinct native searches per session.
+      // The `searching` (or `in_progress` when 'searching' isn't
+      // emitted, e.g. Gemini) phase marks the start of one search.
+      // Not enforced — the function-tool skill counter and provider-
+      // side caps own enforcement.
+      if (delta.tool === 'web_search' && (delta.phase === 'searching' || delta.phase === 'in_progress')) {
+        const m = state().webSearchNative
+        m.set(sessionId, (m.get(sessionId) ?? 0) + 1)
+      }
       yield makeEvent(
         'native_tool',
         sessionId,
@@ -4525,7 +4553,7 @@ function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
           const cap =
             ctx.team.limits.max_web_search_per_turn ??
             MAX_WEB_SEARCH_PER_TURN_FALLBACK
-          const used = state().webSearch.get(ctx.sessionId) ?? 0
+          const used = state().webSearchSkill.get(ctx.sessionId) ?? 0
           if (used >= cap) {
             // Skill never enters the concurrency limiter — fire the hooks
             // synchronously so `runSkillInvocation`'s startedPromise resolves.
@@ -4541,7 +4569,7 @@ function skillTool(skill: SkillDef, ctx: SkillToolContext): Tool {
                 `results, or hand back to your parent with the current findings.`,
             })
           }
-          state().webSearch.set(ctx.sessionId, used + 1)
+          state().webSearchSkill.set(ctx.sessionId, used + 1)
         }
         const result = await runSkill(skill, args, outputDir, { hooks, signal: runOpts?.signal })
         const registered = registerSkillArtifacts(result.files, {

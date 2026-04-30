@@ -254,15 +254,25 @@ function ApiKeyForm({
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const isJson = provider.id === 'vertex-ai'
+  // Vertex AI takes the service-account JSON value (paste content
+  // directly — NOT a file path) plus a separate region selector.
+  // Region is sent as the credential `label` and read back at request
+  // time by `providers/vertex.ts:resolveLocation()`.
+  const isVertex = provider.id === 'vertex-ai'
+  const [region, setRegion] = useState('global')
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!key.trim()) return
+    if (isVertex && !region.trim()) return
     setBusy(true)
     setError(null)
     try {
-      await connectWithApiKey(provider.id, key.trim())
+      await connectWithApiKey(
+        provider.id,
+        key.trim(),
+        isVertex ? region.trim() : undefined,
+      )
       await onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -276,15 +286,51 @@ function ApiKeyForm({
       onSubmit={submit}
       className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-800 space-y-2"
     >
-      {isJson ? (
-        <textarea
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          placeholder={t('settings.providers.apiKeyJsonPlaceholder')}
-          rows={5}
-          className="w-full px-3 py-2 rounded-sm border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-[13px] font-mono text-neutral-800 dark:text-neutral-100"
-          autoFocus
-        />
+      {isVertex ? (
+        <>
+          <label className="block">
+            <span className="block text-[12px] text-neutral-600 dark:text-neutral-400 mb-1">
+              {t('settings.providers.vertexJsonLabel')}
+            </span>
+            <textarea
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              placeholder={t('settings.providers.vertexJsonPlaceholder')}
+              rows={5}
+              className="w-full px-3 py-2 rounded-sm border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-[13px] font-mono text-neutral-800 dark:text-neutral-100"
+              autoFocus
+            />
+          </label>
+          <label className="block">
+            <span className="block text-[12px] text-neutral-600 dark:text-neutral-400 mb-1">
+              {t('settings.providers.vertexRegionLabel')}
+            </span>
+            <input
+              type="text"
+              list="vertex-region-options"
+              value={region}
+              onChange={(e) => setRegion(e.target.value)}
+              placeholder="global"
+              className="w-full h-9 px-3 rounded-sm border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-[13px] font-mono text-neutral-800 dark:text-neutral-100"
+            />
+            <datalist id="vertex-region-options">
+              <option value="global" />
+              <option value="us-central1" />
+              <option value="us-east1" />
+              <option value="us-east4" />
+              <option value="us-west1" />
+              <option value="us-west4" />
+              <option value="europe-west1" />
+              <option value="europe-west4" />
+              <option value="asia-northeast1" />
+              <option value="asia-northeast3" />
+              <option value="asia-southeast1" />
+            </datalist>
+            <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+              {t('settings.providers.vertexRegionHint')}
+            </p>
+          </label>
+        </>
       ) : (
         <input
           type="password"
@@ -304,7 +350,12 @@ function ApiKeyForm({
         <Button variant="ghost" size="sm" type="button" onClick={onCancel} disabled={busy}>
           {t('settings.providers.cancel')}
         </Button>
-        <Button variant="primary" size="sm" type="submit" disabled={busy || !key.trim()}>
+        <Button
+          variant="primary"
+          size="sm"
+          type="submit"
+          disabled={busy || !key.trim() || (isVertex && !region.trim())}
+        >
           {busy ? <CircleNotch className="w-3.5 h-3.5 animate-spin" /> : <Plugs className="w-3.5 h-3.5" />}
           {t('settings.providers.save')}
         </Button>

@@ -36,6 +36,13 @@ export interface AgentSpec {
     strategy?: 'heuristic' | 'llm' | 'off'
     max_chars?: number
   }
+  /** Provider-hosted web_search opt-out. Default `true` — every supported
+   *  provider/model combination uses native search where available with
+   *  the function-tool `web-search` skill as a fallback. Set `false` to
+   *  force-disable native search for this agent (compliance use case:
+   *  airgapped customer policy, eval determinism). The function-tool
+   *  skill is still allowed unless removed from the agent's `skills`. */
+  native_search?: boolean
 }
 
 interface EdgeSpec {
@@ -129,6 +136,8 @@ function toAgentSpec(raw: Record<string, unknown>): AgentSpec {
       raw.result_cap && typeof raw.result_cap === 'object' && !Array.isArray(raw.result_cap)
         ? (raw.result_cap as AgentSpec['result_cap'])
         : undefined,
+    native_search:
+      typeof raw.native_search === 'boolean' ? raw.native_search : undefined,
   }
 }
 

@@ -41,6 +41,12 @@ function cache(): Map<string, CachedSession> {
   return globalForCache.__openhive_copilot_session
 }
 
+/** Drop the cached Copilot session so a fresh OAuth credential isn't
+ *  shadowed by a stale ephemeral token. */
+export function clearCopilotSessionCache(providerId = 'copilot'): void {
+  cache().delete(providerId)
+}
+
 async function refreshSession(providerId: string): Promise<CachedSession> {
   const record = loadToken(providerId)
   if (!record) {

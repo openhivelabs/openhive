@@ -20,6 +20,7 @@ function teamToServer(team: Team): Record<string, unknown> {
       persona_name: a.personaName ?? null,
       persona_path: a.personaPath ?? null,
       icon: a.icon ?? null,
+      native_search: a.nativeSearch ?? undefined,
     })),
     edges: team.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
     entry_agent_id: team.entryAgentId ?? null,
@@ -51,6 +52,8 @@ function teamFromServer(t: Record<string, unknown>): Team {
       personaName: typeof a.persona_name === 'string' && a.persona_name ? a.persona_name : undefined,
       personaPath: typeof a.persona_path === 'string' && a.persona_path ? a.persona_path : undefined,
       icon: typeof a.icon === 'string' && a.icon ? a.icon : undefined,
+      nativeSearch:
+        typeof a.native_search === 'boolean' ? a.native_search : undefined,
     })),
     edges: rawEdges.map((e) => ({
       id: String(e.id ?? ''),
