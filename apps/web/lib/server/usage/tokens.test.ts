@@ -143,19 +143,22 @@ describe('tokenCountWithEstimation', () => {
 })
 
 describe('threshold helpers', () => {
-  it('shouldMicrocompact true above warning (960K for opus[1m])', () => {
-    expect(shouldMicrocompact(961_000, 'claude-code', 'claude-opus-4-7[1m]')).toBe(true)
-    expect(shouldMicrocompact(960_000, 'claude-code', 'claude-opus-4-7[1m]')).toBe(false)
+  // Anthropic 1M-context beta retired 2026-04-30; thresholds now use the
+  // standard 200K window (claude-opus-4-7).
+  // window = 180K, warning = 160K, autoCompact = 167K, block = 177K.
+  it('shouldMicrocompact true above warning (160K for opus 200K)', () => {
+    expect(shouldMicrocompact(161_000, 'claude-code', 'claude-opus-4-7')).toBe(true)
+    expect(shouldMicrocompact(160_000, 'claude-code', 'claude-opus-4-7')).toBe(false)
   })
 
-  it('shouldAutoCompact at 967K boundary', () => {
-    expect(shouldAutoCompact(967_001, 'claude-code', 'claude-opus-4-7[1m]')).toBe(true)
-    expect(shouldAutoCompact(967_000, 'claude-code', 'claude-opus-4-7[1m]')).toBe(false)
+  it('shouldAutoCompact at 167K boundary', () => {
+    expect(shouldAutoCompact(167_001, 'claude-code', 'claude-opus-4-7')).toBe(true)
+    expect(shouldAutoCompact(167_000, 'claude-code', 'claude-opus-4-7')).toBe(false)
   })
 
-  it('shouldBlockTurn at 977K boundary', () => {
-    expect(shouldBlockTurn(978_000, 'claude-code', 'claude-opus-4-7[1m]')).toBe(true)
-    expect(shouldBlockTurn(977_000, 'claude-code', 'claude-opus-4-7[1m]')).toBe(false)
-    expect(shouldBlockTurn(960_000, 'claude-code', 'claude-opus-4-7[1m]')).toBe(false)
+  it('shouldBlockTurn at 177K boundary', () => {
+    expect(shouldBlockTurn(178_000, 'claude-code', 'claude-opus-4-7')).toBe(true)
+    expect(shouldBlockTurn(177_000, 'claude-code', 'claude-opus-4-7')).toBe(false)
+    expect(shouldBlockTurn(160_000, 'claude-code', 'claude-opus-4-7')).toBe(false)
   })
 })

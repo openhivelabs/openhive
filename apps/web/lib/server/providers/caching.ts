@@ -44,6 +44,12 @@ interface AnthropicRequest {
   /** S3 fork sentinel — reserved for future reorder guards. Currently
    *  inert: the strategy already preserves input order. */
   useExactTools?: boolean
+  /** Cache lifetime for the ephemeral breakpoints. `'5m'` is the
+   *  Anthropic default (since 2026-03-06 — silently dropped from the
+   *  prior 1h default); `'1h'` opts into the longer TTL at 2x write
+   *  cost. Use for long-idle agents (db_exec heavy trajectories,
+   *  sessions that get re-attached after >5min idle). */
+  cacheTtl?: '5m' | '1h'
 }
 
 interface AnthropicPayload {
@@ -70,11 +76,21 @@ export class AnthropicCachingStrategy
       stream: true,
     }
 
+    // Resolve TTL: explicit `req.cacheTtl` wins, else env default.
+    // `OPENHIVE_ANTHROPIC_CACHE_TTL=1h` flips every Anthropic request
+    // to the 1-hour breakpoint without touching call sites — useful
+    // for operators with long-idle workloads.
+    const envTtl = process.env.OPENHIVE_ANTHROPIC_CACHE_TTL?.trim()
+    const ttl: '5m' | '1h' =
+      req.cacheTtl ?? (envTtl === '1h' ? '1h' : '5m')
+    const cacheControl: Record<string, unknown> =
+      ttl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' }
+
     if (req.system) {
       // Single ephemeral marker on system caches persona + team outline +
       // relay rules + skill index across turns.
       payload.system = [
-        { type: 'text', text: req.system, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: req.system, cache_control: cacheControl },
       ]
     }
 
@@ -87,7 +103,7 @@ export class AnthropicCachingStrategy
         }
         // Last-tool marker caches the full tools + system prefix.
         if (i === req.tools!.length - 1) {
-          block.cache_control = { type: 'ephemeral' }
+          block.cache_control = cacheControl
         }
         return block
       })
@@ -103,14 +119,12 @@ export class AnthropicCachingStrategy
           {
             type: 'text',
             text: last.content,
-            cache_control: { type: 'ephemeral' },
-          } as AnthropicBlock & { cache_control: { type: 'ephemeral' } },
+            cache_control: cacheControl,
+          } as AnthropicBlock & { cache_control: Record<string, unknown> },
         ]
       } else if (Array.isArray(last.content) && last.content.length > 0) {
         const tail = last.content[last.content.length - 1]!
-        ;(tail as AnthropicBlock & { cache_control?: unknown }).cache_control = {
-          type: 'ephemeral',
-        }
+        ;(tail as AnthropicBlock & { cache_control?: unknown }).cache_control = cacheControl
       }
     }
 
@@ -170,6 +184,118 @@ export class CodexCachingStrategy
       payload.tool_choice = 'auto'
     }
     return payload
+  }
+}
+
+// ---------- OpenAI api_key (Responses API direct) ----------
+
+interface OpenAIResponsesRequest {
+  instructions: string
+  input: unknown[]
+  tools: unknown[] | null
+  model: string
+  /** When set, server resumes from this prior response (server-side
+   *  conversation state). On first turn this is null. */
+  previousResponseId?: string | null
+}
+
+interface OpenAIResponsesPayload {
+  model: string
+  input: unknown[]
+  instructions: string
+  stream: true
+  /** Required for `previous_response_id` to work; opts the response
+   *  envelope into the 30-day server-side store. Setting this `false`
+   *  silently disables chain continuity, so we always set `true` for
+   *  this strategy and accept the data-retention trade-off. */
+  store: true
+  parallel_tool_calls: true
+  reasoning: { effort: string; summary: string }
+  include: string[]
+  tools?: unknown[]
+  tool_choice?: string
+  previous_response_id?: string
+}
+
+/**
+ * Payload builder for the public OpenAI Responses API (`api.openai.com
+ * /v1/responses`). Differences from `CodexCachingStrategy`:
+ *
+ *  - Uses the canonical `previous_response_id + store: true` chain
+ *    (Codex falls back to `attach_item_ids` because chatgpt.com/backend
+ *    -api doesn't store responses reliably).
+ *  - Caller manages a per-`chainKey` Map of `lastResponseId` and only
+ *    sends incremental input items after the first turn — see
+ *    `providers/openai.ts:streamResponses`.
+ */
+export class OpenAIResponsesCachingStrategy
+  implements CachingStrategy<OpenAIResponsesRequest, OpenAIResponsesPayload>
+{
+  applyToRequest(req: OpenAIResponsesRequest): OpenAIResponsesPayload {
+    const payload: OpenAIResponsesPayload = {
+      model: req.model,
+      input: req.input,
+      instructions: req.instructions,
+      stream: true,
+      store: true,
+      parallel_tool_calls: true,
+      reasoning: { effort: 'low', summary: 'auto' },
+      include: ['reasoning.encrypted_content'],
+    }
+    if (req.tools) {
+      payload.tools = req.tools
+      payload.tool_choice = 'auto'
+    }
+    if (req.previousResponseId) {
+      payload.previous_response_id = req.previousResponseId
+    }
+    return payload
+  }
+
+  /** Pull `response.id` from `response.completed` events so the caller
+   *  can chain the next turn. Returns null until the final event arrives. */
+  extractResponseId(ev: unknown): string | null {
+    if (!ev || typeof ev !== 'object') return null
+    const e = ev as { type?: unknown; response?: { id?: unknown } }
+    if (e.type !== 'response.completed') return null
+    const id = e.response?.id
+    return typeof id === 'string' && id ? id : null
+  }
+}
+
+// ---------- Gemini (api_key + Vertex AI) ----------
+
+interface GeminiRequest {
+  /** Pre-built body — caller (gemini.ts) does the contents/tools
+   *  assembly because Gemini's wire model differs enough that a single
+   *  generic strategy adds zero value. The strategy hook is reserved
+   *  for Phase F (`cachedContents` API) which will let callers pre-
+   *  attach a `cachedContent` reference. */
+  body: Record<string, unknown>
+  /** Optional `cachedContents` resource name from Phase F. Reserved
+   *  shape — gemini.ts ignores it for v1. */
+  cachedContent?: string
+}
+
+/**
+ * Phase D stub. Gemini caching uses a separate `cachedContents` REST
+ * resource (4096-32768 token minimum prefix) rather than inline
+ * cache_control markers, so v1 doesn't try to layer it onto the
+ * normal generateContent call. Implicit auto-cache still fires
+ * server-side when the prefix repeats; usage tokens are reported via
+ * `usageMetadata.cachedContentTokenCount` regardless.
+ *
+ * Phase F will populate `cachedContent` on the returned payload to opt
+ * into the explicit cache when the workload measurement justifies it.
+ */
+export class GeminiCachingStrategy
+  implements CachingStrategy<GeminiRequest, Record<string, unknown>>
+{
+  applyToRequest(req: GeminiRequest): Record<string, unknown> {
+    if (req.cachedContent) {
+      return { ...req.body, cachedContent: req.cachedContent }
+    }
+    return req.body
   }
 }
 

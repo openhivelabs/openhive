@@ -28,24 +28,38 @@ export const ANTHROPIC_MODELS: ModelCatalogEntry[] = [
 ]
 
 export const CODEX_MODELS: ModelCatalogEntry[] = [
-  // GPT-5.5 (announced 2026-04-23) — Codex-only via ChatGPT sign-in, not
-  // yet reachable with API-key auth. Listed first so new sessions pick it
-  // up by default on teams whose Codex connection uses the OAuth flow.
   { id: 'gpt-5.5', label: 'GPT-5.5', default: true },
-  { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro' },
   { id: 'gpt-5.4', label: 'GPT-5.4' },
   { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
-  { id: 'gpt-5', label: 'GPT-5' },
   { id: 'gpt-5-mini', label: 'GPT-5 mini' },
 ]
 
+export const OPENAI_MODELS: ModelCatalogEntry[] = [
+  { id: 'gpt-5.5', label: 'GPT-5.5', default: true },
+  { id: 'gpt-5.4', label: 'GPT-5.4' },
+  { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
+  { id: 'gpt-5-mini', label: 'GPT-5 mini' },
+]
+
+// Gemini 3.x models all carry the `-preview` suffix on the wire (verified
+// against generativelanguage.googleapis.com/v1beta/models on 2026-04-30).
+// Catalog ids match the wire ids exactly; the label hides the suffix.
+export const GEMINI_MODELS: ModelCatalogEntry[] = [
+  { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', default: true },
+  { id: 'gemini-3-flash-preview', label: 'Gemini 3.0 Flash' },
+  { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite' },
+]
+
+// Vertex AI carries the same wire ids. Default region is `global` — Gemini
+// 3 preview models are not provisioned in us-central1 / us-west4 yet.
+export const VERTEX_MODELS: ModelCatalogEntry[] = [
+  { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', default: true },
+  { id: 'gemini-3-flash-preview', label: 'Gemini 3.0 Flash' },
+  { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite' },
+]
+
 const COPILOT_FALLBACK: ModelCatalogEntry[] = [
-  // Placeholder shown before the user connects Copilot. Once connected the
-  // real list comes from `api.githubcopilot.com/models`. GPT-5.5 is NOT
-  // included here — it's Codex-exclusive at launch (2026-04-23) and
-  // Copilot doesn't serve it yet.
   { id: 'gpt-5-mini', label: 'GPT-5 mini', default: true },
-  { id: 'gpt-5', label: 'GPT-5' },
   { id: 'gpt-5.4', label: 'GPT-5.4' },
   { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
 ]
@@ -56,6 +70,9 @@ export async function listModelsFor(
   if (providerId === 'claude-code') return CLAUDE_CODE_MODELS
   if (providerId === 'anthropic') return ANTHROPIC_MODELS
   if (providerId === 'codex') return CODEX_MODELS
+  if (providerId === 'openai') return OPENAI_MODELS
+  if (providerId === 'gemini') return GEMINI_MODELS
+  if (providerId === 'vertex-ai') return VERTEX_MODELS
   if (providerId === 'copilot') {
     let session
     try {

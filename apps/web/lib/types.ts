@@ -30,6 +30,11 @@ export interface Agent {
   /** 에이전트 카드에 표시되는 아이콘 키. TEAM_ICONS 에서 찾는 식별자.
    *  값 없으면 role 기반 기본 아이콘(Lead=Crown, 그 외 User) 사용. */
   icon?: string
+  /** Allow provider-hosted native web_search for this agent. Default
+   *  `true` — disable for compliance / determinism / airgapped runs.
+   *  The function-tool `web-search` skill is unaffected; remove from
+   *  `skills` to also block that path. */
+  nativeSearch?: boolean
 }
 
 export interface ReportingEdge {

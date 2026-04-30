@@ -139,11 +139,30 @@ describe('result-cap', () => {
     })
   })
 
-  it('pickSummaryModel falls back to the child node when no env override', () => {
-    expect(pickSummaryModel(makeNode({ provider_id: 'claude-code', model: 'opus' }))).toEqual({
-      providerId: 'claude-code',
-      model: 'opus',
-    })
+  it('pickSummaryModel returns the child node when its provider is connected', async () => {
+    const tokens = await import('../tokens')
+    const spy = vi.spyOn(tokens, 'listConnected').mockReturnValue(['claude-code'])
+    try {
+      expect(pickSummaryModel(makeNode({ provider_id: 'claude-code', model: 'opus' }))).toEqual({
+        providerId: 'claude-code',
+        model: 'opus',
+      })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('pickSummaryModel falls back to cheap-model when child provider is not connected', async () => {
+    const tokens = await import('../tokens')
+    const spy = vi.spyOn(tokens, 'listConnected').mockReturnValue(['anthropic'])
+    try {
+      expect(pickSummaryModel(makeNode({ provider_id: 'codex', model: 'gpt-5' }))).toEqual({
+        providerId: 'anthropic',
+        model: 'claude-haiku-4-5',
+      })
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   // ---- spec Cases A–H ----

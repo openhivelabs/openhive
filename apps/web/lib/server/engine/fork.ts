@@ -24,6 +24,12 @@
 import type { ChatMessage, ToolSpec } from '../providers/types'
 import type { AgentSpec } from './team'
 
+/** Providers that share Anthropic's prompt-cache protocol — fork only fires
+ *  when the child agent uses one of these (cross-provider forks are blocked
+ *  by the `provider_mismatch` gate further down because Anthropic isolates
+ *  cache keys per workspace as of 2026-02-05). */
+const ANTHROPIC_FORK_PROVIDERS = new Set(['claude-code', 'anthropic'])
+
 /** Verbatim string from Claude Code — the placeholder content for the parent's
  *  tool_use_id that fork children see in their synthetic tool_result block. */
 export const FORK_PLACEHOLDER = 'Fork started — processing in background'
@@ -108,7 +114,7 @@ export function decideForkOrFresh(args: {
   if (process.env.OPENHIVE_FORK_DISABLE === '1') {
     return { fork: false, reason: 'env_disabled' }
   }
-  if (args.child.provider_id !== 'claude-code') {
+  if (!ANTHROPIC_FORK_PROVIDERS.has(args.child.provider_id)) {
     return { fork: false, reason: 'non_claude' }
   }
   const snap = args.snapshot

@@ -1,17 +1,29 @@
 import { getFlow } from '@/lib/server/auth/flows'
 import { callbackHtml, handleCallback, startConnect } from '@/lib/server/auth/orchestrator'
 import { PROVIDERS, getProvider } from '@/lib/server/auth/providers'
+import { clearProviderCache } from '@/lib/server/providers/cache-control'
 import { listModelsFor } from '@/lib/server/providers/models'
 import { deleteToken, getAccountLabel, listConnected, saveToken } from '@/lib/server/tokens'
 import { Hono } from 'hono'
 
 export const providers = new Hono()
 
+/** Phase rollout gating — `OPENHIVE_PROVIDER_<UPPER>=0` hides a provider
+ *  from the UI list. Default is shown for everyone (post-rollout state).
+ *  Already-connected providers are always shown so users can disconnect
+ *  even after a flag flip. */
+function isProviderEnabled(providerId: string, alreadyConnected: boolean): boolean {
+  if (alreadyConnected) return true
+  const flag = process.env[`OPENHIVE_PROVIDER_${providerId.replace(/-/g, '_').toUpperCase()}`]
+  if (flag === undefined) return true // default-on
+  return flag === '1' || flag.toLowerCase() === 'true' || flag.toLowerCase() === 'on'
+}
+
 // GET /api/providers — list all providers with connection status
 providers.get('/', (c) => {
   const connected = new Set(listConnected())
   return c.json(
-    PROVIDERS.map((p) => ({
+    PROVIDERS.filter((p) => isProviderEnabled(p.id, connected.has(p.id))).map((p) => ({
       id: p.id,
       label: p.label,
       kind: p.kind,
@@ -46,7 +58,12 @@ providers.delete('/:providerId', (c) => {
   if (!getProvider(providerId)) {
     return c.json({ detail: 'unknown provider' }, 404)
   }
-  return c.json({ removed: deleteToken(providerId) })
+  const removed = deleteToken(providerId)
+  // Drop in-memory caches (auth tokens, parsed service-account, etc.)
+  // so a fresh credential isn't shadowed when the user reconnects with
+  // a different key.
+  clearProviderCache(providerId)
+  return c.json({ removed })
 })
 
 // GET /api/providers/:providerId/models

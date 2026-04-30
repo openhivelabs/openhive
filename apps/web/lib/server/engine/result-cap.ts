@@ -13,6 +13,8 @@
  * See dev/active/runtime-claude-patterns/s1-result-cap.md for the full spec.
  */
 
+import { pickCheapModel } from '../providers/cheap-model'
+import { listConnected } from '../tokens'
 import { buildMessages, stream as providerStream } from './providers'
 import type { AgentSpec } from './team'
 
@@ -205,9 +207,14 @@ const summaryUserPrompt = (raw: string, paths: string[]) => {
 }
 
 /**
- * Pick the model to use for summarisation. Env override wins for operators
- * who want a cheap small model across the board; otherwise we reuse the
- * child's own provider+model so per-node provider selection is respected.
+ * Pick the model to use for summarisation. Resolution order:
+ *   1. Explicit env override (`OPENHIVE_RESULT_SUMMARY_MODEL=provider:model`)
+ *   2. Child's own provider+model **if connected**
+ *   3. Cheap-model fallback (`pickCheapModel()` walks connected providers)
+ *
+ * Step 3 covers the case where a user has only connected (say) Anthropic
+ * api_key and the child node's provider is `codex` — without the fallback,
+ * `providerStream` would throw and we'd lose the summary path.
  */
 export function pickSummaryModel(node: AgentSpec): {
   providerId: string
@@ -220,6 +227,14 @@ export function pickSummaryModel(node: AgentSpec): {
       return { providerId, model: rest.join(':') }
     }
   }
+  const connected = listConnected()
+  if (connected.includes(node.provider_id)) {
+    return { providerId: node.provider_id, model: node.model }
+  }
+  const cheap = pickCheapModel(connected)
+  if (cheap) return cheap
+  // Last-resort: return the node's own (will likely throw downstream, but
+  // matches old behaviour and lets the caller handle it).
   return { providerId: node.provider_id, model: node.model }
 }
 

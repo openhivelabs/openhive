@@ -62,22 +62,38 @@ export function classify(exc: unknown): ClassifiedError {
     return { kind: 'provider_network', statusCode: null, detail: msg }
   }
 
-  // Providers raise Error with "{name} stream {code}: {body}".
-  if (msg.includes('stream 401') || msg.includes('stream 403') || lower.includes('unauthorized')) {
-    return { kind: 'provider_auth', statusCode: 401, detail: msg }
+  // Providers raise `Error` with one of these shapes:
+  //   "Claude messages stream 401: {body}"          (claude.ts)
+  //   "Codex responses 401: {body}"                 (codex.ts)
+  //   "OpenAI responses 401: {body}"                (openai.ts)
+  //   "Gemini 401: {body}"                          (gemini.ts)
+  //   "Vertex AI 401: {body}"                       (vertex.ts)
+  //   "Vertex token exchange failed (401): {body}"  (auth/vertex.ts)
+  //   "Anthropic is not connected. ..."             (no-token guard)
+  // We classify on the embedded HTTP status / quota markers; the body
+  // has already been redacted in the adapter. `insufficient_quota`,
+  // `credit balance`, and OpenAI quota wording all map to rate_limit.
+  const has = (code: number) =>
+    msg.includes(`${code}:`) || msg.includes(`(${code})`)
+
+  if (lower.includes('not connected')) {
+    return { kind: 'provider_auth', statusCode: null, detail: msg }
   }
-  if (msg.includes('stream 429') || lower.includes('rate limit')) {
-    return { kind: 'provider_rate_limit', statusCode: 429, detail: msg }
-  }
-  if (msg.includes('stream 404') || (lower.includes('model') && lower.includes('not found'))) {
-    return { kind: 'provider_model_not_found', statusCode: 404, detail: msg }
+  if (has(401) || has(403) || lower.includes('unauthorized') || lower.includes('forbidden')) {
+    return { kind: 'provider_auth', statusCode: has(403) ? 403 : 401, detail: msg }
   }
   if (
-    msg.includes('stream 5') ||
-    msg.includes('stream 502') ||
-    msg.includes('stream 503') ||
-    msg.includes('stream 504')
+    has(429) ||
+    lower.includes('rate limit') ||
+    lower.includes('insufficient_quota') ||
+    lower.includes('credit balance')
   ) {
+    return { kind: 'provider_rate_limit', statusCode: 429, detail: msg }
+  }
+  if (has(404) || (lower.includes('model') && lower.includes('not found'))) {
+    return { kind: 'provider_model_not_found', statusCode: 404, detail: msg }
+  }
+  if (has(500) || has(502) || has(503) || has(504) || has(529)) {
     return { kind: 'provider_unknown', statusCode: null, detail: msg }
   }
 

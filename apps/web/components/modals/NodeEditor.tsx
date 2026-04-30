@@ -339,6 +339,7 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
       personaName: draft.personaName || undefined,
       personaPath: draft.personaPath || undefined,
       icon: draft.icon || undefined,
+      nativeSearch: draft.nativeSearch,
     })
     onClose()
   }
@@ -468,6 +469,24 @@ export function NodeEditor({ agent, onClose }: NodeEditorProps) {
                 />
               </label>
             )}
+            <label className="flex flex-col gap-1" title={t('nodeEditor.nativeSearchHint')}>
+              <span className="font-medium uppercase tracking-wide">
+                {t('nodeEditor.nativeSearchLabel')}
+              </span>
+              <span className="inline-flex items-center h-7">
+                <input
+                  type="checkbox"
+                  checked={draft.nativeSearch !== false}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      nativeSearch: e.target.checked ? undefined : false,
+                    })
+                  }
+                  className="h-4 w-4 rounded border-neutral-300"
+                />
+              </span>
+            </label>
             {!isLead && (
               <button
                 type="button"

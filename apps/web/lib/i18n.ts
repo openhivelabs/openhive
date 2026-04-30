@@ -442,6 +442,10 @@ const en: Dict = {
   'settings.providers.groupEmpty': 'None available.',
   'settings.providers.apiKeyPlaceholder': 'Paste API key',
   'settings.providers.apiKeyJsonPlaceholder': 'Paste service-account JSON',
+  'settings.providers.vertexJsonLabel': 'Service account JSON',
+  'settings.providers.vertexJsonPlaceholder': 'Paste the contents of your Vertex AI service-account JSON',
+  'settings.providers.vertexRegionLabel': 'Region',
+  'settings.providers.vertexRegionHint': 'Default `global`. Gemini 3 preview models are only available in `global` (verified Apr 2026); use a specific region only if your data-residency policy requires it.',
   'settings.providers.save': 'Save',
   'settings.usage.header': 'Usage',
   'settings.usage.headerDesc': 'Token consumption and estimated cost.',
@@ -814,6 +818,8 @@ const en: Dict = {
   'nodeEditor.modelLabel': 'Model',
   'nodeEditor.modelPlaceholder': 'model id',
   'nodeEditor.parallelLabel': 'Parallel',
+  'nodeEditor.nativeSearchLabel': 'Web search',
+  'nodeEditor.nativeSearchHint': "Allow this agent to use the provider's hosted web_search builtin (Anthropic web_search_20250305, OpenAI web_search, Gemini googleSearch). Off → restricted to the function-tool web-search skill if available. Use Off for compliance / determinism / airgapped runs.",
   'nodeEditor.deleteAgent': 'Delete agent',
   'nodeEditor.disconnected': '{label} (disconnected)',
   'nodeEditor.notInList': '{model} (not in list)',
@@ -867,6 +873,12 @@ const en: Dict = {
   // frame market install errors
   'frameMarket.errorNoCompany': 'Create a company first before installing.',
   'frameMarket.errorNoTeam': "This company has no teams yet — please create one first.",
+  // provider error toasts (raised by ProviderError.userMessage)
+  'error.provider.auth': 'API key is invalid. Re-add it under Settings → Providers.',
+  'error.provider.quota': 'Provider usage limit reached. Check your plan or billing.',
+  'error.provider.unsupported_model': 'Model is not available on this provider.',
+  'error.provider.geo_restricted': 'Provider is unavailable in this region. Try Vertex AI instead.',
+  'error.provider.transient': 'Temporary provider error. Please retry in a moment.',
 }
 
 const ko: Dict = {
@@ -1304,6 +1316,10 @@ const ko: Dict = {
   'settings.providers.groupEmpty': '없음.',
   'settings.providers.apiKeyPlaceholder': 'API 키 붙여넣기',
   'settings.providers.apiKeyJsonPlaceholder': '서비스 계정 JSON 붙여넣기',
+  'settings.providers.vertexJsonLabel': '서비스 계정 JSON',
+  'settings.providers.vertexJsonPlaceholder': 'Vertex AI 서비스 계정 JSON 내용을 붙여넣으세요',
+  'settings.providers.vertexRegionLabel': '리전',
+  'settings.providers.vertexRegionHint': '기본값 `global`. Gemini 3 preview 모델은 현재 `global`에서만 가용 (2026-04 검증). 데이터 거주 정책상 필요한 경우에만 다른 리전을 선택하세요.',
   'settings.providers.save': '저장',
   'settings.usage.header': '사용량',
   'settings.usage.headerDesc': '토큰 소비량 및 예상 비용.',
@@ -1674,6 +1690,8 @@ const ko: Dict = {
   'nodeEditor.modelLabel': '모델',
   'nodeEditor.modelPlaceholder': '모델 ID',
   'nodeEditor.parallelLabel': '병렬',
+  'nodeEditor.nativeSearchLabel': '웹 검색',
+  'nodeEditor.nativeSearchHint': '이 에이전트가 프로바이더 호스티드 web_search 빌트인(Anthropic web_search_20250305, OpenAI web_search, Gemini googleSearch)을 사용하도록 허용. 끄면 함수형 web-search 스킬만 사용 가능. 컴플라이언스/결정성/에어갭 환경에서는 끄세요.',
   'nodeEditor.deleteAgent': '에이전트 삭제',
   'nodeEditor.disconnected': '{label} (연결 해제됨)',
   'nodeEditor.notInList': '{model} (목록에 없음)',
@@ -1727,6 +1745,12 @@ const ko: Dict = {
   // frame market install errors
   'frameMarket.errorNoCompany': '먼저 회사를 만들어야 설치할 수 있어요.',
   'frameMarket.errorNoTeam': '해당 회사에 팀이 없어요. 먼저 팀을 하나 만들어주세요.',
+  // provider error toasts (ProviderError.userMessage 키)
+  'error.provider.auth': 'API 키가 유효하지 않습니다. 설정 → 프로바이더에서 다시 등록하세요.',
+  'error.provider.quota': '프로바이더 사용량 한도에 도달했습니다. 결제·플랜을 확인하세요.',
+  'error.provider.unsupported_model': '이 프로바이더에서 해당 모델을 사용할 수 없습니다.',
+  'error.provider.geo_restricted': '현재 지역에서 사용 불가입니다. Vertex AI를 시도해보세요.',
+  'error.provider.transient': '일시적 오류입니다. 잠시 후 다시 시도하세요.',
 }
 
 const dicts: Record<Locale, Dict> = { en, ko }

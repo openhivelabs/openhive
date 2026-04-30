@@ -17,25 +17,52 @@ interface ModelWindow {
 }
 
 const CONTEXT_WINDOW: Record<string, Record<string, ModelWindow>> = {
-  // Anthropic — Claude Code OAuth path. [1m] beta variants are separate ids.
+  // Anthropic — Claude Code OAuth path. `context-1m-2025-08-07` beta retired
+  // 2026-04-30; `[1m]` variants removed.
   'claude-code': {
     'claude-opus-4-7': { input: 200_000, output: 32_000 },
-    'claude-opus-4-7[1m]': { input: 1_000_000, output: 32_000 },
     'claude-sonnet-4-6': { input: 200_000, output: 64_000 },
-    'claude-sonnet-4-6[1m]': { input: 1_000_000, output: 64_000 },
+    'claude-haiku-4-5': { input: 200_000, output: 16_000 },
+  },
+  // Anthropic — raw API key path. Same models, same wire as claude-code; the
+  // distinction is the auth scheme. Sharing the same numbers keeps the engine
+  // sizing predictable across both paths.
+  anthropic: {
+    'claude-opus-4-7': { input: 200_000, output: 32_000 },
+    'claude-sonnet-4-6': { input: 200_000, output: 64_000 },
     'claude-haiku-4-5': { input: 200_000, output: 16_000 },
   },
   // OpenAI Codex — ChatGPT backend Responses API. GPT-5 family public ceilings.
-  // TODO(a4): re-verify on model rev; add o3 variants if codex catalogue gains them.
   codex: {
-    'gpt-5': { input: 400_000, output: 128_000 },
+    'gpt-5.5': { input: 1_050_000, output: 130_000 },
+    'gpt-5.4': { input: 1_050_000, output: 130_000 },
+    'gpt-5.4-mini': { input: 400_000, output: 130_000 },
     'gpt-5-mini': { input: 400_000, output: 128_000 },
-    'gpt-5.4': { input: 400_000, output: 128_000 },
-    'gpt-5.4-mini': { input: 400_000, output: 128_000 },
   },
-  // GitHub Copilot — exposes the same model ids but /models response omits
+  // OpenAI direct API key — same model id space as codex, same ceilings.
+  openai: {
+    'gpt-5.5': { input: 1_050_000, output: 130_000 },
+    'gpt-5.4': { input: 1_050_000, output: 130_000 },
+    'gpt-5.4-mini': { input: 400_000, output: 130_000 },
+    'gpt-5-mini': { input: 400_000, output: 128_000 },
+  },
+  // Gemini api_key — Google AI Studio. Gemini 3 preview models only;
+  // 2.5 retired 2026-06-17 and never carried in the catalogue.
+  gemini: {
+    'gemini-3.1-pro-preview': { input: 1_000_000, output: 64_000 },
+    'gemini-3-flash-preview': { input: 1_000_000, output: 64_000 },
+    'gemini-3.1-flash-lite-preview': { input: 1_000_000, output: 64_000 },
+  },
+  // Vertex AI — same wire as Gemini; default region is `global` because
+  // Gemini 3 preview models are not provisioned in us-central1 / us-west4
+  // (verified 2026-04-30 probe).
+  'vertex-ai': {
+    'gemini-3.1-pro-preview': { input: 1_000_000, output: 64_000 },
+    'gemini-3-flash-preview': { input: 1_000_000, output: 64_000 },
+    'gemini-3.1-flash-lite-preview': { input: 1_000_000, output: 64_000 },
+  },
+  // GitHub Copilot — exposes mixed vendor models but /models response omits
   // window info, so we take conservative OpenAI defaults.
-  // TODO(a4): revisit if Copilot starts reporting window.
   copilot: {
     'gpt-5': { input: 200_000, output: 32_000 },
     'gpt-5-mini': { input: 200_000, output: 32_000 },

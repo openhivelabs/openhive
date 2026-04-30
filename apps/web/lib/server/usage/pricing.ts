@@ -54,6 +54,13 @@ interface ModelRates {
    *  5-minute TTL write). 1.25x input on Anthropic, 1x input elsewhere
    *  (OpenAI / Google autocache without a per-write charge). */
   cache_creation: number
+  /** Long-context threshold. When the response's input tokens exceed
+   *  this, GPT-5.5 / 5.4 charge `long_context_input_multiplier` × input
+   *  and `long_context_output_multiplier` × output for the full call.
+   *  OpenAI quotes this for the >272k input bracket. */
+  long_context_threshold?: number
+  long_context_input_multiplier?: number
+  long_context_output_multiplier?: number
 }
 
 /** Canonical model pricing — provider-agnostic exact-match table. */
@@ -74,11 +81,24 @@ const MODEL_PRICING: Record<string, ModelRates> = {
   // Standard rate card $5 / $30 per 1M in/out; Pro variant $30 / $180.
   // `cached` rates default to 10% of input per OpenAI's 90% cache discount
   // (same pattern as the rest of this table); reasoning matches output.
-  'gpt-5.5': { input: 5.0, output: 30.0, cached: 0.5, reasoning: 30.0, cache_creation: 5.0 },
+  'gpt-5.5': {
+    input: 5.0, output: 30.0, cached: 0.5, reasoning: 30.0, cache_creation: 5.0,
+    // >272k input → 2x input / 1.5x output for the whole call. Verified
+    // 2026-04-30 against developers.openai.com/api/docs/pricing.
+    long_context_threshold: 272_000,
+    long_context_input_multiplier: 2.0,
+    long_context_output_multiplier: 1.5,
+  },
   'gpt-5.5-pro': { input: 30.0, output: 180.0, cached: 3.0, reasoning: 180.0, cache_creation: 30.0 },
 
-  // GPT-5.4 family — previous default tier.
-  'gpt-5.4': { input: 2.5, output: 15.0, cached: 0.25, reasoning: 15.0, cache_creation: 2.5 },
+  // GPT-5.4 family — previous default tier. Same long-context bracket
+  // applies (1.05M context with 2x/1.5x markup over 272k).
+  'gpt-5.4': {
+    input: 2.5, output: 15.0, cached: 0.25, reasoning: 15.0, cache_creation: 2.5,
+    long_context_threshold: 272_000,
+    long_context_input_multiplier: 2.0,
+    long_context_output_multiplier: 1.5,
+  },
   'gpt-5.4-mini': { input: 0.75, output: 4.5, cached: 0.075, reasoning: 4.5, cache_creation: 0.75 },
   'gpt-5.4-nano': { input: 0.2, output: 1.25, cached: 0.02, reasoning: 1.25, cache_creation: 0.2 },
 
@@ -242,14 +262,27 @@ export function computeCost(input: CostInput): CostBreakdown {
       total_cents: 0,
     }
   }
+
+  // Long-context surcharge (GPT-5.5 / 5.4): when the call's TOTAL input
+  // (fresh + cached) exceeds the threshold, the input + output rates are
+  // multiplied for the whole call. Cache-write and reasoning are not
+  // documented as marked up, so we leave them at base rate.
+  const totalInput =
+    Math.max(0, input.freshInputTokens) + Math.max(0, input.cacheReadTokens ?? 0)
+  const longCtx =
+    rates.long_context_threshold !== undefined &&
+    totalInput > rates.long_context_threshold
+  const inMul = longCtx ? rates.long_context_input_multiplier ?? 1 : 1
+  const outMul = longCtx ? rates.long_context_output_multiplier ?? 1 : 1
+
   // $/1M tokens × tokens → dollars. ×100 → cents. Keep it in one expression
   // so rounding error only happens at the final sum.
   const toCents = (tokens: number, rate: number) => (tokens * rate) / 10_000
 
-  const fresh = toCents(Math.max(0, input.freshInputTokens), rates.input)
-  const cached = toCents(Math.max(0, input.cacheReadTokens ?? 0), rates.cached)
+  const fresh = toCents(Math.max(0, input.freshInputTokens), rates.input * inMul)
+  const cached = toCents(Math.max(0, input.cacheReadTokens ?? 0), rates.cached * inMul)
   const cacheWrite = toCents(Math.max(0, input.cacheWriteTokens ?? 0), rates.cache_creation)
-  const out = toCents(Math.max(0, input.outputTokens), rates.output)
+  const out = toCents(Math.max(0, input.outputTokens), rates.output * outMul)
   const reasoning = toCents(Math.max(0, input.reasoningTokens ?? 0), rates.reasoning)
 
   return {
