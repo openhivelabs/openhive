@@ -10,6 +10,11 @@
 import * as claude from '../providers/claude'
 import * as codex from '../providers/codex'
 import * as copilot from '../providers/copilot'
+import * as gemini from '../providers/gemini'
+import { normalizeGeminiStream } from '../providers/gemini-shared'
+import * as openai from '../providers/openai'
+import { normalizeResponsesStream } from '../providers/openai-response-shared'
+import * as vertex from '../providers/vertex'
 import type {
   ChatMessage,
   StreamDelta,
@@ -45,6 +50,36 @@ interface StreamOpts {
    *  tests, deterministic eval runs) can override the engine default.
    *  Copilot lacks hosted-tool support and ignores this flag. */
   nativeWebSearch?: boolean
+  /** Reasoning effort hint. Mapped onto provider-native fields:
+   *   - codex / openai → `reasoning.effort`
+   *   - gemini / vertex → `thinkingLevel` / `thinkingBudget`
+   *  Used here for the `effort='minimal'` web_search gate (gpt-5
+   *  family rejects native search at minimal). */
+  effort?: 'minimal' | 'low' | 'medium' | 'high'
+}
+
+/** Whether the (provider, model, effort) tuple supports the provider-
+ *  hosted web_search builtin. Returns false for known disallowed
+ *  combinations so the dispatcher doesn't trip a 4xx; otherwise true.
+ *
+ *  Verified rules (2026-04-30):
+ *    - OpenAI / Codex `gpt-5` with `reasoning.effort: 'minimal'` does
+ *      NOT support web_search (platform.openai.com docs).
+ *    - All other GPT-5.x / Claude 4.x / Gemini 3.x combinations support
+ *      it. */
+export function supportsNativeSearch(
+  providerId: string,
+  model: string,
+  effort?: 'minimal' | 'low' | 'medium' | 'high',
+): boolean {
+  if (
+    (providerId === 'openai' || providerId === 'codex') &&
+    model === 'gpt-5' &&
+    effort === 'minimal'
+  ) {
+    return false
+  }
+  return true
 }
 
 export async function* stream(
@@ -61,10 +96,14 @@ export async function* stream(
   // Codex + Claude support a hosted server-side web_search tool. Default
   // to ON unless the caller explicitly opted out — failures fall back to
   // our function-shaped `web-search` skill since both stay registered
-  // simultaneously and the model picks per-call.
-  const nativeWebSearch = opts?.nativeWebSearch ?? true
-  if (providerId === 'claude-code') {
-    yield* streamClaude(model, messages, tools, { ...opts, nativeWebSearch })
+  // simultaneously and the model picks per-call. Then gate on the
+  // (provider, model, effort) compatibility table to avoid a guaranteed
+  // 4xx from upstream (e.g. gpt-5 + minimal reasoning rejects search).
+  const nativeWebSearch =
+    (opts?.nativeWebSearch ?? true) &&
+    supportsNativeSearch(providerId, model, opts?.effort)
+  if (providerId === 'claude-code' || providerId === 'anthropic') {
+    yield* streamClaude(model, messages, tools, { ...opts, nativeWebSearch, providerId })
     return
   }
   if (providerId === 'codex') {
@@ -78,8 +117,41 @@ export async function* stream(
     )
     return
   }
+  if (providerId === 'openai') {
+    yield* streamOpenAI(
+      model,
+      messages,
+      tools,
+      opts?.sessionId,
+      nativeWebSearch,
+      opts?.chainKey,
+    )
+    return
+  }
+  if (providerId === 'gemini') {
+    yield* streamGemini(
+      model,
+      messages,
+      tools,
+      opts?.sessionId,
+      nativeWebSearch,
+      opts?.chainKey,
+    )
+    return
+  }
+  if (providerId === 'vertex-ai') {
+    yield* streamVertex(
+      model,
+      messages,
+      tools,
+      opts?.sessionId,
+      nativeWebSearch,
+      opts?.chainKey,
+    )
+    return
+  }
   throw new Error(
-    `provider '${providerId}' not yet wired into the engine. Use 'copilot', 'claude-code', or 'codex'.`,
+    `provider '${providerId}' not yet wired into the engine. Use 'copilot', 'claude-code', 'anthropic', 'codex', 'openai', 'gemini', or 'vertex-ai'.`,
   )
 }
 
@@ -169,7 +241,7 @@ async function* streamClaude(
   model: string,
   messages: ChatMessage[],
   tools: ToolSpec[] | undefined,
-  opts?: StreamOpts & { nativeWebSearch?: boolean },
+  opts?: StreamOpts & { nativeWebSearch?: boolean; providerId?: string },
 ): AsyncIterable<StreamDelta> {
   // Content-block index → tool_use ordinal (engine keeps dense keys).
   const toolOrdinal = new Map<number, number>()
@@ -186,6 +258,7 @@ async function* streamClaude(
     useExactTools: opts?.useExactTools,
     overrideSystem: opts?.overrideSystem,
     nativeWebSearch: opts?.nativeWebSearch,
+    providerId: opts?.providerId ?? 'claude-code',
   })) {
     const t = (ev as { type?: string }).type
     if (t === 'message_start') {
@@ -279,6 +352,14 @@ async function* streamClaude(
 }
 
 // -------- Codex (Responses API via ChatGPT backend) --------
+//
+// Thin wrapper. The SSE → StreamDelta normalization lives in
+// `providers/openai-response-shared.ts` so the upcoming OpenAI api_key
+// adapter (Phase C) can reuse the same logic against `api.openai.com/v1
+// /responses`. Codex-specific concerns (`attach_item_ids` reasoning anchor
+// capture, transient socket-drop retry-with-native-off) stay in
+// `providers/codex.ts:streamResponsesOnce`, layered between the fetch
+// and the normalizer.
 
 async function* streamCodex(
   model: string,
@@ -288,268 +369,119 @@ async function* streamCodex(
   nativeWebSearch: boolean,
   chainKey: string | undefined,
 ): AsyncIterable<StreamDelta> {
-  const toolOrd = new Map<string, number>()
-  let nextToolIdx = 0
-  let textStreamed = false
-  // Codex emits the actual search query inside `response.output_item.added`
-  // for `web_search_call` items (`item.action.query`), but the per-phase
-  // lifecycle events (`web_search_call.in_progress|searching|completed`)
-  // only carry the bare `item_id`. Buffer the query keyed by item_id so
-  // we can attach it to each native_tool delta — without this the UI
-  // chip can only show a generic placeholder and dozens of identical
-  // pills are useless to the user.
-  const nativeQueryByItemId = new Map<string, string>()
-  // url_citation annotations Codex attaches to the assistant text via
-  // `response.output_text.annotation.added`. Accumulated for the whole
-  // stream and flushed once at `response.completed` as a synthetic
-  // `native_tool` delta with `phase: 'completed'` + `sources: [...]` —
-  // the UI renders this as ONE consolidated sources card per agent turn
-  // (replaces the per-search placeholder chip the user found useless).
-  // Annotations from Codex aren't keyed back to the originating
-  // web_search_call, so per-search attribution isn't possible; one card
-  // per turn is the honest UX.
-  const nativeSources: { title?: string; url: string; domain?: string }[] = []
-  const seenSourceUrls = new Set<string>()
-  let sawNativeSearch = false
-
-  for await (const ev of codex.streamResponses({
-    model,
-    messages,
-    tools,
-    sessionId,
-    chainKey,
-    nativeWebSearch,
-  })) {
-    const t = (ev as { type?: string }).type
-    // Hosted-tool lifecycle. Codex emits these for `web_search` and any
-    // other provider-managed tool. We don't yield them as `tool_call`
-    // (no function-call round-trip needed) but surface them as
-    // `native_tool` deltas so the engine can log per-phase events for
-    // the UI — otherwise a 30-150s search burst is invisible.
-    if (
-      t === 'response.web_search_call.in_progress' ||
-      t === 'response.web_search_call.searching' ||
-      t === 'response.web_search_call.completed'
-    ) {
-      const phase =
-        t === 'response.web_search_call.in_progress'
-          ? 'in_progress'
-          : t === 'response.web_search_call.searching'
-            ? 'searching'
-            : 'completed'
-      const itemId = typeof (ev as { item_id?: unknown }).item_id === 'string'
-        ? (ev as { item_id: string }).item_id
-        : undefined
-      const query = itemId ? nativeQueryByItemId.get(itemId) : undefined
-      sawNativeSearch = true
-      yield { kind: 'native_tool', tool: 'web_search', phase, itemId, query }
-      continue
-    }
-    // Codex web_search splits one model "search" intent into multiple
-    // `web_search_call` items, each with a different action. Action
-    // shapes observed (probe `apps/web/scripts/probe-native-events.ts`):
-    //   - `output_item.added` → action is EMPTY (`{}`); the action is
-    //     resolved server-side after the call runs.
-    //   - `output_item.done`  → action is populated with one of:
-    //       `{ type: 'search',       query: '...' }`
-    //       `{ type: 'open_page',    url:   '...' }`
-    //       `{ type: 'find_in_page', url:   '...', pattern: '...' }`
-    // Codex does NOT emit `response.output_text.annotation.added`
-    // (verified). The `open_page` / `find_in_page` URLs ARE the
-    // citations. Capture them on `output_item.done` and also pick up
-    // queries here (the `added` handler below cannot — action is empty
-    // at that point). Dedup sources by URL.
-    if (t === 'response.output_item.done') {
-      const item = ((ev as { item?: Record<string, unknown> }).item ?? {}) as Record<string, unknown>
-      if (item.type === 'web_search_call') {
-        const action = (item.action ?? {}) as Record<string, unknown>
-        const aType = typeof action.type === 'string' ? action.type : ''
-        const url = typeof action.url === 'string' ? action.url : ''
-        if (
-          (aType === 'open_page' || aType === 'find_in_page') &&
-          url &&
-          !seenSourceUrls.has(url)
-        ) {
-          seenSourceUrls.add(url)
-          let domain: string | undefined
-          try {
-            domain = new URL(url).hostname.replace(/^www\./, '')
-          } catch {
-            /* ignore malformed urls */
-          }
-          nativeSources.push({
-            url,
-            title:
-              typeof action.title === 'string'
-                ? action.title
-                : typeof item.title === 'string'
-                  ? (item.title as string)
-                  : undefined,
-            domain,
-          })
-        }
-        if (aType === 'search') {
-          const query = typeof action.query === 'string' ? action.query : ''
-          const itemId = typeof item.id === 'string' ? item.id : ''
-          if (itemId && query) nativeQueryByItemId.set(itemId, query)
-        }
-      }
-    }
-    if (t === 'response.output_text.delta') {
-      const text = (ev as { delta?: unknown }).delta
-      if (typeof text === 'string' && text) {
-        textStreamed = true
-        // Codex's web_search results aren't always exposed as
-        // `open_page`/`find_in_page` action items — sometimes the model
-        // just runs a `search` action and embeds the citation URLs
-        // inline in the assistant text (verified via probe). Extract
-        // them so sources cards show the actual references the model
-        // used. Only scan when a web_search ran in this turn to avoid
-        // pulling URLs from regular non-search outputs (code samples,
-        // user-provided links echoed back, etc.). Dedup with the same
-        // Set used by `output_item.done` capture.
-        if (sawNativeSearch) {
-          for (const m of text.matchAll(/https?:\/\/[^\s)\]<>"'`]+/g)) {
-            let url = m[0].replace(/[.,;:!?]+$/, '')
-            // Drop trailing parens that aren't balanced inside the URL.
-            const opens = (url.match(/\(/g) ?? []).length
-            const closes = (url.match(/\)/g) ?? []).length
-            while (closes > opens && url.endsWith(')')) {
-              url = url.slice(0, -1)
-            }
-            if (!seenSourceUrls.has(url)) {
-              seenSourceUrls.add(url)
-              let domain: string | undefined
-              try {
-                domain = new URL(url).hostname.replace(/^www\./, '')
-              } catch {
-                continue
-              }
-              nativeSources.push({ url, domain })
-            }
-          }
-        }
-        yield { kind: 'text', text }
-      }
-    } else if (t === 'response.output_item.added') {
-      const item = ((ev as { item?: Record<string, unknown> }).item ?? {}) as Record<string, unknown>
-      if (item.type === 'function_call') {
-        const itemId = typeof item.id === 'string' ? item.id : ''
-        if (!toolOrd.has(itemId)) {
-          toolOrd.set(itemId, nextToolIdx++)
-        }
-        yield {
-          kind: 'tool_call',
-          index: toolOrd.get(itemId)!,
-          id:
-            typeof item.call_id === 'string'
-              ? item.call_id
-              : typeof item.id === 'string'
-                ? item.id
-                : undefined,
-          name: typeof item.name === 'string' ? item.name : undefined,
-          arguments_chunk: '',
-        }
-      } else if (item.type === 'web_search_call') {
-        // Capture the query before any phase event fires for this item.
-        // Codex shape (verified via probe): `item.action.query` carries the
-        // model-chosen search string. Some Codex variants instead surface
-        // it under `item.query` directly — fall back to that. Without this
-        // capture every native chip in the UI shows an identical generic
-        // placeholder.
-        const itemId = typeof item.id === 'string' ? item.id : ''
-        const action = (item.action ?? {}) as Record<string, unknown>
-        const query =
-          (typeof action.query === 'string' && action.query) ||
-          (typeof item.query === 'string' && (item.query as string)) ||
-          ''
-        if (itemId && query) nativeQueryByItemId.set(itemId, query)
-      }
-    } else if (t === 'response.function_call_arguments.delta') {
-      const itemId = typeof (ev as { item_id?: unknown }).item_id === 'string'
-        ? ((ev as { item_id: string }).item_id)
-        : ''
-      const delta = (ev as { delta?: unknown }).delta
-      const ord = toolOrd.get(itemId)
-      if (ord !== undefined && typeof delta === 'string' && delta) {
-        yield { kind: 'tool_call', index: ord, arguments_chunk: delta }
-      }
-    } else if (t === 'response.completed') {
-      const response = ((ev as { response?: Record<string, unknown> }).response ?? {}) as Record<string, unknown>
-      const u = (response.usage ?? {}) as Record<string, unknown>
-      if (Object.keys(u).length > 0) {
-        const inputDetails = (u.input_tokens_details ?? {}) as Record<string, unknown>
-        yield {
-          kind: 'usage',
-          input_tokens: Number(u.input_tokens ?? 0),
-          output_tokens: Number(u.output_tokens ?? 0),
-          cache_read_tokens: Number(inputDetails.cached_tokens ?? 0),
-        }
-      }
-      // `sawTool` must reflect whether THIS stream carried any function_call
-      // item — tracked via the toolOrd map we populated from `output_item.added`.
-      // Previously we scanned `response.output` on the completion envelope, but
-      // that field is empty in streaming mode (items are delivered out-of-band),
-      // so tool-calling responses were silently classified as `stop_reason=stop`
-      // and the engine's round loop never continued. This is the root cause
-      // of the "session silently finalises with empty output" bug.
-      const sawTool = toolOrd.size > 0
-      const outs = (response.output as Record<string, unknown>[] | undefined) ?? []
-      // Fallback: some Responses-API shapes deliver the final message
-      // only inside the `response.completed` payload (no streaming text
-      // deltas) — walk the output array and recover the text so the
-      // engine doesn't emit an empty `node_finished`. Only run when
-      // nothing streamed AND no tool calls, to avoid double-emitting
-      // when streaming worked normally.
-      if (!textStreamed && !sawTool) {
-        const recovered = extractCompletedMessageText(outs)
-        if (recovered) {
-          yield { kind: 'text', text: recovered }
-        }
-      }
-      // Flush accumulated url_citations as the final native_tool delta
-      // for the turn. Only emit when at least one web_search_call ran
-      // this stream — empty/unrelated streams shouldn't push a chip.
-      // The transcript builder uses this delta to render one sources
-      // card per agent turn.
-      if (sawNativeSearch) {
-        yield {
-          kind: 'native_tool',
-          tool: 'web_search',
-          phase: 'completed',
-          sources: nativeSources,
-        }
-      }
-      yield { kind: 'stop', reason: sawTool ? 'tool_calls' : 'stop' }
-      return
-    } else if (t === 'response.error' || t === 'error') {
-      const err = (ev as { error?: unknown }).error ?? ev
-      throw new Error(`Codex stream error: ${JSON.stringify(err)}`)
-    }
-  }
+  yield* normalizeResponsesStream(
+    codex.streamResponses({
+      model,
+      messages,
+      tools,
+      sessionId,
+      chainKey,
+      nativeWebSearch,
+    }),
+  )
 }
 
-/** Walk the `response.output` array from a Responses-API `response.completed`
- *  event and pull out any `output_text` the model emitted as message items.
- *  Shape reference: message items look like
- *    { type: 'message', role: 'assistant',
- *      content: [{ type: 'output_text', text: '...' }, ...] }
- *  — possibly multiple text chunks, possibly interleaved with reasoning
- *  items at sibling level (reasoning items are ignored here; they don't
- *  belong in the user-facing transcript). */
-function extractCompletedMessageText(
-  outs: Record<string, unknown>[],
-): string {
-  const parts: string[] = []
-  for (const item of outs) {
-    if (item.type !== 'message') continue
-    const content = item.content as Record<string, unknown>[] | undefined
-    if (!Array.isArray(content)) continue
-    for (const c of content) {
-      if (c.type === 'output_text' && typeof c.text === 'string' && c.text) {
-        parts.push(c.text)
-      }
-    }
-  }
-  return parts.join('')
+// -------- OpenAI api_key (Responses API direct) --------
+//
+// Same wire shape as Codex (both target the OpenAI Responses API), so the
+// SSE → StreamDelta normalization is shared. The adapter handles the
+// auth + chain-state differences (`previous_response_id + store: true`
+// instead of Codex's `attach_item_ids`).
+
+async function* streamOpenAI(
+  model: string,
+  messages: ChatMessage[],
+  tools: ToolSpec[] | undefined,
+  sessionId: string | undefined,
+  nativeWebSearch: boolean,
+  chainKey: string | undefined,
+): AsyncIterable<StreamDelta> {
+  yield* normalizeResponsesStream(
+    openai.streamResponses({
+      model,
+      messages,
+      tools,
+      sessionId,
+      chainKey,
+      nativeWebSearch,
+    }),
+  )
+}
+
+// -------- Gemini api_key (Google AI Studio) --------
+//
+// Wire shape is unique to Gemini (`contents/parts` rather than
+// `messages`), so unlike Codex/OpenAI which share the Responses
+// normalizer, Gemini uses its own `normalizeGeminiStream`. The shared
+// module also handles `thoughtSignature` capture/echo for Gemini 3.x
+// reasoning continuity (per-chainKey state map).
+
+async function* streamGemini(
+  model: string,
+  messages: ChatMessage[],
+  tools: ToolSpec[] | undefined,
+  sessionId: string | undefined,
+  nativeWebSearch: boolean,
+  chainKey: string | undefined,
+): AsyncIterable<StreamDelta> {
+  // Count assistant turns currently in history — the next assistant
+  // turn we're about to produce gets indexed at this ordinal in chain
+  // state for thoughtSignature round-trip.
+  const assistantOrdinal = messages.reduce(
+    (n, m) => n + (m.role === 'assistant' ? 1 : 0),
+    0,
+  )
+  yield* normalizeGeminiStream(
+    gemini.streamGenerateContent({
+      model,
+      messages,
+      tools,
+      sessionId,
+      chainKey,
+      nativeWebSearch,
+    }),
+    {
+      nativeWebSearch,
+      assistantOrdinalOnCompletion: assistantOrdinal,
+      chainKey: chainKey ?? sessionId,
+    },
+  )
+}
+
+// -------- Vertex AI (Google Cloud) --------
+//
+// Same wire shape as Gemini api_key. Differences live in the adapter:
+//  - service-account JSON → JWT(RS256) → access_token (1h, auto-refresh)
+//  - region-scoped URL (default `global`; us-central1/us-west4 don't
+//    yet carry the Gemini 3 preview models — verified 2026-04-30)
+//  - inflight semaphore (default 6, env-tunable) to absorb the tight
+//    per-region quota without trashing 429-trip the engine.
+
+async function* streamVertex(
+  model: string,
+  messages: ChatMessage[],
+  tools: ToolSpec[] | undefined,
+  sessionId: string | undefined,
+  nativeWebSearch: boolean,
+  chainKey: string | undefined,
+): AsyncIterable<StreamDelta> {
+  const assistantOrdinal = messages.reduce(
+    (n, m) => n + (m.role === 'assistant' ? 1 : 0),
+    0,
+  )
+  yield* normalizeGeminiStream(
+    vertex.streamGenerateContent({
+      model,
+      messages,
+      tools,
+      sessionId,
+      chainKey,
+      nativeWebSearch,
+    }),
+    {
+      nativeWebSearch,
+      assistantOrdinalOnCompletion: assistantOrdinal,
+      chainKey: chainKey ?? sessionId,
+    },
+  )
 }

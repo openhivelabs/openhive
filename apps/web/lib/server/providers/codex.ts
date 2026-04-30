@@ -16,6 +16,13 @@ import crypto from 'node:crypto'
 import { CLIENT_ID } from '../auth/codex'
 import { getAccountLabel, loadToken, saveToken } from '../tokens'
 import { CodexCachingStrategy } from './caching'
+import { redactCredentials } from './errors'
+import {
+  type ResponseInputItem,
+  sseEvents,
+  toResponsesInput,
+  toolsToResponses,
+} from './openai-response-shared'
 import type { ChatMessage, ToolSpec } from './types'
 
 const TOKEN_URL = 'https://auth.openai.com/oauth/token'
@@ -36,6 +43,12 @@ function cache(): Map<string, Session> {
     globalForCache.__openhive_codex_session = new Map()
   }
   return globalForCache.__openhive_codex_session
+}
+
+/** Drop the cached session for `providerId` so a fresh OAuth token isn't
+ *  shadowed by a stale entry. */
+export function clearCodexSessionCache(providerId = 'codex'): void {
+  cache().delete(providerId)
 }
 
 function decodeJwt(t: string): Record<string, unknown> {
@@ -75,7 +88,7 @@ async function refresh(
   })
   if (!resp.ok) {
     throw new Error(
-      `Codex refresh failed (${resp.status}): ${await resp.text()}`,
+      redactCredentials(`Codex refresh failed (${resp.status}): ${await resp.text()}`),
     )
   }
   const data = (await resp.json()) as Record<string, unknown>
@@ -146,112 +159,12 @@ async function getSession(providerId = 'codex'): Promise<Session> {
   return refresh(providerId, record.refresh_token)
 }
 
-// -------- format translation --------
-
-interface ResponseInputItem {
-  type: string
-  role?: string
-  content?: { type: string; text: string }[]
-  call_id?: string
-  output?: string
-  name?: string
-  arguments?: string
-  /** Server-assigned ids — required when re-submitting on subsequent rounds
-   *  so gpt-5/5.5 reasoning models can anchor their prior state. See the
-   *  `attach_item_ids` block below. */
-  id?: string
-  encrypted_content?: string
-  summary?: unknown
-}
-
-function toResponsesInput(
-  messages: ChatMessage[],
-): { system: string | null; items: ResponseInputItem[] } {
-  let system: string | null = null
-  const items: ResponseInputItem[] = []
-  for (const m of messages) {
-    if (m.role === 'system') {
-      system = (system ? `${system}\n\n` : '') + (m.content ?? '')
-      continue
-    }
-    if (m.role === 'tool') {
-      items.push({
-        type: 'function_call_output',
-        call_id: m.tool_call_id ?? '',
-        output: typeof m.content === 'string' ? m.content : '',
-      })
-      continue
-    }
-    if (m.role === 'assistant') {
-      if (typeof m.content === 'string' && m.content) {
-        items.push({
-          type: 'message',
-          role: 'assistant',
-          content: [{ type: 'output_text', text: m.content }],
-        })
-      }
-      for (const tc of m.tool_calls ?? []) {
-        items.push({
-          type: 'function_call',
-          call_id: tc.id,
-          name: tc.function.name,
-          arguments: tc.function.arguments || '{}',
-        })
-      }
-      continue
-    }
-    items.push({
-      type: 'message',
-      role: m.role ?? 'user',
-      content: [
-        {
-          type: 'input_text',
-          text: typeof m.content === 'string' ? m.content : '',
-        },
-      ],
-    })
-  }
-  return { system, items }
-}
-
-function toolsToResponses(tools: ToolSpec[] | undefined): unknown[] | null {
-  if (!tools || tools.length === 0) return null
-  return tools.map((t) => ({
-    type: 'function',
-    name: t.function.name,
-    description: t.function.description ?? '',
-    parameters: t.function.parameters ?? { type: 'object', properties: {} },
-    strict: false,
-  }))
-}
-
-// -------- streaming --------
-
-async function* sseEvents(
-  body: ReadableStream<Uint8Array>,
-): AsyncIterable<Record<string, unknown>> {
-  const decoder = new TextDecoder()
-  let buffer = ''
-  const reader = body.getReader()
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let idx: number
-    while ((idx = buffer.indexOf('\n')) !== -1) {
-      const line = buffer.slice(0, idx)
-      buffer = buffer.slice(idx + 1)
-      if (!line.startsWith('data: ')) continue
-      const raw = line.slice(6).trim()
-      if (!raw) continue
-      try {
-        yield JSON.parse(raw) as Record<string, unknown>
-      } catch {
-        /* skip malformed chunks */
-      }
-    }
-  }
-}
+// `toResponsesInput`, `toolsToResponses`, `sseEvents`, `ResponseInputItem`
+// are now exported from `./openai-response-shared.ts` so the OpenAI api_key
+// adapter (`./openai.ts`) can reuse them. The Responses API wire shape is
+// identical between the chatgpt.com Codex backend and the public
+// `api.openai.com/v1/responses` endpoint, so the translation helpers are
+// genuinely shared.
 
 interface StreamOpts {
   model: string
@@ -513,7 +426,7 @@ async function* streamResponsesOnce(
   })
   if (!resp.ok || !resp.body) {
     const body = resp.body ? await resp.text() : ''
-    throw new Error(`Codex responses ${resp.status}: ${body}`)
+    throw new Error(redactCredentials(`Codex responses ${resp.status}: ${body}`))
   }
 
   // Scratch capture: reasonings + function_call id mappings accrued during
