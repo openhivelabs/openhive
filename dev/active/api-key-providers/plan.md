@@ -3,7 +3,36 @@
 **목표**: PROVIDERS 목록의 API-key 4종(Anthropic / OpenAI / Google Gemini / Vertex AI)을 엔진에 연결. 현재 OAuth 3종(claude-code / codex / copilot)과 가능한 한 동등한 동작.
 
 **Lead**: 본 문서.
-**작성일**: 2026-04-30 (v2 — 14개 갭 메우고 최신 정보 반영).
+**작성일**: 2026-04-30 (v4 — Phase A~E 구현 완료, 폴리시까지 마무리).
+
+---
+
+## 🟢 IMPLEMENTATION STATUS (2026-04-30 final)
+
+| Phase | 상태 | 산출 |
+|---|:---:|---|
+| 0 — Probes | ✅ 완료 → 키 폐기 | wire / 캐싱 / Thought Signatures wire 위치 / Vertex global 검증 |
+| A — Anthropic api_key | ✅ 머지됨 | claude.ts api_key 분기 + retry/errors/cheap-model 인프라 + i18n + 65 tests |
+| B — Codex 정규화기 추출 | ✅ 머지됨 | openai-response-shared.ts (~250 LOC), streamCodex 19줄 wrapper |
+| C — OpenAI api_key | ✅ 머지됨 | openai.ts + OpenAIResponsesCachingStrategy + previous_response_id chain |
+| D — Gemini api_key | ✅ 머지됨 | gemini-shared.ts + gemini.ts + thoughtSignature round-trip + googleSearch 합성 |
+| E — Vertex AI | ✅ 머지됨 | auth/vertex.ts (JWT zero-install) + vertex.ts + semaphore default-on |
+| 폴리시 1 — disconnect cache invalidation | ✅ | cache-control.ts 통합 hook |
+| 폴리시 2 — redactCredentials wiring | ✅ | 6 어댑터 throw 경로 모두 적용 |
+| 폴리시 3 — Anthropic ttl='1h' 옵션 | ✅ | env + per-call 둘 다 |
+| 폴리시 4 — OpenAI effort=minimal 게이트 | ✅ | supportsNativeSearch 헬퍼 |
+| 폴리시 5 — Native vs skill 카운터 분리 | ✅ | webSearchSkill / webSearchNative |
+| 폴리시 6 — env 게이팅 (OPENHIVE_PROVIDER_*) | ✅ | UI 리스트 필터 |
+| 폴리시 7 — per-agent native_search 토글 | ✅ | NodeEditor 체크박스 + AgentSpec |
+| 폴리시 8 — engine error 분류 확장 | ✅ | classify() 6 형식 인식 |
+| 폴리시 9 — 문서 4편 + CHANGELOG | ✅ | docs/providers/{anthropic,openai,gemini,vertex}.md + CHANGELOG.md |
+| F — 명시 cachedContents | ⏸ deferred | 워크로드 측정 후 ROI 결정 |
+| G — 멀티모달 | ⏸ deferred | 별도 트랙 |
+| 테스트 (사용자 요청 생략) | n/a | 480 회귀 통과로 안전망 유지 |
+
+**누적 LOC**: ~2,000 신규 (plan v3 추정 ~3,195 대비 -37% — Phase B의 정규화기 추출, gemini-shared 100% 재사용, 기존 인프라 활용 효과).
+
+---
 
 ---
 
@@ -22,6 +51,8 @@
 - **codex**: `attach_item_ids` 전략 (`previous_response_id` 우회). chatgpt.com/backend-api 한정 우회.
 - **copilot**: noop. 서버 auto-cache.
 - usage delta: `input_tokens` (fresh only), `output_tokens`, `cache_read_tokens`, `cache_write_tokens`.
+- **TTL 주의 (2026-03-06 변경)**: Anthropic ephemeral cache의 default TTL이 1h → 5min으로 비공식 변경됨. `microcompact.STALE_AFTER_MS = 5min`이 우연히 일치해 영향 없음. 긴 세션에서 명시적 1h 복원이 필요하면 `cache_control: { type: 'ephemeral', ttl: '1h' }` 옵션 사용 (§4.10).
+- **워크스페이스 격리 (2026-02-05)**: prompt cache key가 organization → workspace 단위로 격리됨. `claude-code` ↔ `anthropic` api_key는 다른 워크스페이스 ID로 매핑되므로 cross-provider fork는 cache miss 확정 (§13 결정과 일관 — 이유는 "토큰 소스 다름"이 아니라 워크스페이스 격리).
 
 ### 1.3 네이티브 web_search
 - **claude-code**: `web_search_20250305` (Anthropic 호스티드, max_uses=5).
@@ -70,7 +101,7 @@
 
 ## 3. 프로바이더별 매핑 (최신 검증 Apr 2026)
 
-### 3.1 Anthropic api_key — 목표 ~95%
+### 3.1 Anthropic api_key — 목표 ~99%
 
 | 차원 | 동작 | 메모 |
 |---|---|---|
@@ -100,6 +131,12 @@
 | `web-search-2025-03-05` | ✅ | ✅ | 유지 |
 | `output-300k-2026-03-24` (Apr 2026 신규) | ⚠️ | ⚠️ | Phase 0 probe |
 | `managed-agents-2026-04-01` (Apr 2026 신규) | n/a | n/a | OpenHive 대상 아님 — 미사용 |
+| `context-1m-2025-08-07` | ⚠️ | ⚠️ | **2026-04-30 retire — 즉시 제거**. 모델 카탈로그·`contextWindow.ts`의 `[1m]` 변형도 정리 |
+
+**1M context 폐지 처리 (2026-04-30)**:
+- `apps/web/lib/server/providers/claude.ts`의 `ANTHROPIC_BETA` 리스트에서 `context-1m-*` 미포함 확인 (현재 미포함, OK).
+- `usage/contextWindow.ts`의 claude-code 블록에서 `claude-opus-4-7[1m]` 류 항목 grep 후 제거 또는 `legacy: true` 마킹.
+- 모델 카탈로그(`providers/models.ts`)에서 `[1m]` suffix 모델 제거.
 
 ### 3.2 OpenAI api_key (Responses API) — 목표 ~85%
 
@@ -114,40 +151,66 @@
 
 #### 3.2.1 Web search 모델 화이트리스트 (Apr 2026 검증)
 
-Responses API에서 호스티드 `web_search` 지원:
-- `gpt-5` ✅
+Responses API에서 호스티드 `web_search` 지원 (2026-04-30 검증, developers.openai.com):
+- `gpt-5.5` ✅ (default)
+- `gpt-5.4`, `gpt-5.4-mini` ✅ — 2026-03 출시 시점부터 web_search 정식 지원 (FluxHire.AI 가이드, OpenRouter 카탈로그 확인)
+- `gpt-5` ✅ (단, `effort='minimal'` 시 OFF)
+- `gpt-5-mini` ✅
 - `gpt-5-search-api`, `gpt-5-search-api-2026-10-14` ✅ (검색 특화 변형)
 - `gpt-4o`, `gpt-4o-mini` ✅
 - `gpt-4o-search-preview`, `gpt-4o-mini-search-preview` ✅ (Chat Completions API용; Responses에서도 가능)
-- `gpt-5.4`, `gpt-5.4-mini` ⚠️ Phase 0 probe 검증 필요
 
 → `providers/models.ts`의 OPENAI_MODELS 카탈로그에 `supportsNativeSearch: bool` 플래그. dispatch 시 모델별 게이팅.
 
 #### 3.2.2 모델 카탈로그 (Apr 2026, openai.com/ko-KR/api/ 검증)
 
-| 모델 | 입력 $/1M | 출력 $/1M | 컨텍스트 | 최대 출력 | 컷오프 | 비고 |
-|---|---:|---:|---:|---:|---|---|
-| `gpt-5.5` | 5.00 | 30.00 | 1,050,000 | 130,000 | 2025-12-01 | default, search 지원 |
-| `gpt-5.4` | 2.50 | 15.00 | 1,050,000 | 130,000 | 2025-08-31 | search ⚠️ probe |
-| `gpt-5.4-mini` | 0.75 | 4.50 | 400,000 | 130,000 | 2025-08-31 | search ⚠️ probe |
-| `gpt-5` | (기존) | (기존) | (기존) | (기존) | (기존) | search 지원 |
-| `gpt-5-mini` | (기존) | (기존) | (기존) | (기존) | (기존) | search 지원 |
-| `gpt-4o` | (기존) | (기존) | 128,000 | 16,000 | (기존) | search 지원 |
-| `gpt-4o-mini` | (기존) | (기존) | 128,000 | 16,000 | (기존) | search 지원 |
+| 모델 | 입력 $/1M | 출력 $/1M | Cached In $/1M | 컨텍스트 | 최대 출력 | 컷오프 | 비고 |
+|---|---:|---:|---:|---:|---:|---|---|
+| `gpt-5.5` | 5.00 | 30.00 | **0.50** | 1,050,000 | 130,000 | 2025-12-01 | **default**, search ✅, **>272k 시 입력 2× / 출력 1.5×** |
+| `gpt-5.4` | 2.50 | 15.00 | 0.25 | 1,050,000 | 130,000 | 2025-08-31 | search ✅, **>272k 시 입력 2× / 출력 1.5×** |
+| `gpt-5.4-mini` | 0.75 | 4.50 | 0.075 | 400,000 | 130,000 | 2025-08-31 | search ✅ |
+| `gpt-5-mini` | (기존) | (기존) | (기존) | (기존) | (기존) | (기존) | search ✅, cheap-model 후보 |
+
+**카탈로그 정책 (codex와 동일 셋)**: openai api_key는 codex와 같은 4 모델 — `gpt-5.5` / `gpt-5.4` / `gpt-5.4-mini` / `gpt-5-mini`. 차이는 인증·엔드포인트뿐:
+- codex: `chatgpt.com/backend-api/codex/responses` + ChatGPT OAuth + `attach_item_ids` 우회
+- openai: `api.openai.com/v1/responses` + `Authorization: Bearer <key>` + `previous_response_id + store: true`
+- ~~`gpt-5`, `gpt-5.5-pro`, `gpt-4o`, `gpt-4o-mini`~~ — 카탈로그 제외 (codex/openai 모두). 결과적으로 `effort='minimal'` 게이트(§4.1.2)도 단순화 가능 — `gpt-5.4`/`gpt-5.5`는 reasoning 모델이지만 minimal 옵션 부재.
+
+**Tiered pricing (>272k input tokens) — 가격 모델 변경**:
+
+`usage/pricing.ts`의 `ModelRates`가 평면 단가 가정. GPT-5.5 / 5.4는 세션 누적 입력이 272,000 토큰 초과 시 단가 곱셈 적용. 미반영 시 비용 50% 미달 표시.
+
+```ts
+interface ModelRates {
+  input: number
+  output: number
+  cached_input?: number
+  // GPT-5.5/5.4 류: 세션 입력 누적 > threshold 시 곱셈 적용
+  long_context_threshold?: number       // 272_000
+  long_context_input_multiplier?: number // 2
+  long_context_output_multiplier?: number // 1.5
+}
+```
+
+`computeCost()`에 분기 추가 (`pricing.ts` +20 LOC). 테스트 픽스처: 272k 미만 / 정확히 272k / 초과 3개 케이스.
 
 ```ts
 OPENAI_MODELS = [
   { id: 'gpt-5.5',       label: 'GPT-5.5',       default: true, supportsNativeSearch: true },
-  { id: 'gpt-5.4',       label: 'GPT-5.4',       supportsNativeSearch: false /* probe 후 갱신 */ },
-  { id: 'gpt-5.4-mini',  label: 'GPT-5.4 mini',  supportsNativeSearch: false /* probe 후 갱신 */ },
-  { id: 'gpt-5',         label: 'GPT-5',         supportsNativeSearch: true },
-  { id: 'gpt-5-mini',    label: 'GPT-5 mini',    supportsNativeSearch: true },
-  { id: 'gpt-4o',        label: 'GPT-4o',        supportsNativeSearch: true },
-  { id: 'gpt-4o-mini',   label: 'GPT-4o mini',   supportsNativeSearch: true },
+  { id: 'gpt-5.4',       label: 'GPT-5.4',       supportsNativeSearch: true },
+  { id: 'gpt-5.4-mini',  label: 'GPT-5.4 mini',  supportsNativeSearch: true },
+  { id: 'gpt-5-mini',    label: 'GPT-5 mini',    supportsNativeSearch: true, cheapModel: true },
+]
+
+CODEX_MODELS = [  // 동일 4종 (기존 5.5-pro/gpt-5 제거)
+  { id: 'gpt-5.5',       label: 'GPT-5.5',       default: true },
+  { id: 'gpt-5.4',       label: 'GPT-5.4' },
+  { id: 'gpt-5.4-mini',  label: 'GPT-5.4 mini' },
+  { id: 'gpt-5-mini',    label: 'GPT-5 mini' },
 ]
 ```
 
-→ `usage/pricing.ts`에 명시 단가 4종(gpt-5.5, gpt-5.4, gpt-5.4-mini는 검증값) 추가.
+→ `usage/pricing.ts`에 명시 단가 3종(gpt-5.5, gpt-5.4, gpt-5.4-mini)+ gpt-5-mini 추가.
 → `usage/contextWindow.ts`의 `'openai': {...}` 블록에 1.05M / 400k context window 정확히 반영.
 
 ### 3.3 Google Gemini (api_key) — 목표 ~70%
@@ -160,8 +223,23 @@ OPENAI_MODELS = [
 | 스트리밍 | SSE `data: { candidates, usageMetadata }` | content_block_* 없음 |
 | 캐싱 | `cachedContents` 별도 API | **Phase D 미지원** (Phase F로 분리) |
 | Web search | `tools: [{ googleSearch: {} }]` (Gemini 2.0+) | 라이프사이클 없음 → §4.1.4 합성 |
-| Reasoning | **Gemini 3에서 `thinkingLevel`로 마이그레이션** (구 `thinkingBudget` 폐기 예정) | 라운드간 chaining 없음 |
+| Reasoning | **Gemini 3에서 `thinkingLevel`로 마이그레이션** (구 `thinkingBudget` 폐기 예정) | **Thought Signatures로 라운드간 chaining 가능 (§3.3.1)** |
 | Fork | 캐시 객체 모델 — prefix-cache 부적합 | **Phase D 비활성** |
+
+#### 3.3.1 Thought Signatures (Gemini 3 stateful reasoning) — **신규 (검토에서 발견)**
+
+Gemini 3은 reasoning 연속성을 위해 `thoughtSignature` 필드를 SSE에 emit. Codex의 `attach_item_ids` + `reasoning.encrypted_content` + 다음 라운드 echo 패턴과 동일.
+
+**캡처**: `gemini-shared.ts` 파서가 응답 parts의 `thoughtSignature: string` 필드 발견 시 per-call Map(`chainKey → signatures[]`)에 저장.
+
+**Echo**: 다음 라운드 요청 시 같은 위치(part 인덱스 동일)에 echo. 누락 시 reasoning 연속성 깨져 multi-turn 품질 저하.
+
+**책임 분할**:
+- `gemini-shared.ts`: 캡처/echo 로직 (+60 LOC)
+- `gemini.ts` / `vertex.ts`: chainKey 전달
+- `caching.ts`: `GeminiCachingStrategy`(stub)에 signature scratch 캡처 hook 추가
+
+미반영 시 영향: Gemini 3 multi-turn에서 이전 턴 reasoning 손실 → 답변 품질 큰 폭 하락.
 
 **주요 변경 (Apr 2026 검증)**:
 - Gemini 3은 `thinkingBudget` → `thinkingLevel` (low/medium/high) 마이그레이션. 어댑터에서 둘 다 지원하되 모델 id 따라 분기.
@@ -174,15 +252,29 @@ OPENAI_MODELS = [
 **Safety**:
 - `safetySettings`을 `BLOCK_ONLY_HIGH`로 명시 — 미지정 시 보수적 SAFETY 차단으로 코드 어시스턴트 워크로드 막힘.
 
-**모델 카탈로그**:
+**모델 카탈로그** (3종 — 2.5 제거, 3 계열만):
 ```ts
 GEMINI_MODELS = [
-  { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', default: true, supportsNativeSearch: true, supportsThinking: true },
-  { id: 'gemini-3-flash', label: 'Gemini 3 Flash', supportsNativeSearch: true, supportsThinking: true },
-  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', supportsNativeSearch: true, supportsThinking: true },
-  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', supportsNativeSearch: true, supportsThinking: true },
+  { id: 'gemini-3.1-pro',        label: 'Gemini 3.1 Pro',        default: true, supportsNativeSearch: true, supportsThinking: true, supportsThoughtSignatures: true },
+  { id: 'gemini-3-flash',        label: 'Gemini 3.0 Flash',                     supportsNativeSearch: true, supportsThinking: true, supportsThoughtSignatures: true, cheapModel: true },
+  { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite',                supportsNativeSearch: true, supportsThinking: true, supportsThoughtSignatures: true },
+]
+
+VERTEX_MODELS = [  // Vertex AI는 동일 카탈로그 (gemini-shared.ts 재사용)
+  { id: 'gemini-3.1-pro',        label: 'Gemini 3.1 Pro',        default: true },
+  { id: 'gemini-3-flash',        label: 'Gemini 3.0 Flash' },
+  { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite' },
 ]
 ```
+
+**티어 구분**:
+- `gemini-3.1-pro` — 최상위. Deep Think Mini 포함. 기본 default.
+- `gemini-3-flash` — 중간 가격대 flash 라인. cheap-model 폴백 (title/summary/result-cap에서 사용).
+- `gemini-3.1-flash-lite` — 최저가/저지연. 단순 분류·라우팅·필터 작업용.
+
+**Gemini 2.5 제거 근거**: Gemini API에서 **2026-06-17 retire** (Phase D 머지 W3-W5 시점에 retire까지 ~3주). Vertex는 2026-10-16. 카탈로그에 노출하면 retire 직후 silent fail.
+
+**Vertex 동일 카탈로그**: 어댑터가 `gemini-shared.ts`를 재사용 — 모델 ID/wire가 동일. Vertex의 retire 일정이 늦지만(2026-10-16) 코드 단순화 위해 통일.
 
 ### 3.4 Vertex AI — 목표 ~70%
 
@@ -210,11 +302,19 @@ GEMINI_MODELS = [
 - OFF: `copilot`.
 
 #### 4.1.2 모델 게이트
-`engine/providers.ts`에 `supportsNativeSearch(providerId, model): boolean`:
+`engine/providers.ts`에 `supportsNativeSearch(providerId, model, opts?: { effort?: string }): boolean`:
 - claude-code/anthropic: 모든 Claude 4.x ✅
-- codex: gpt-5/5.4/5.5 계열 ✅
-- openai: 카탈로그 메타 `supportsNativeSearch` 플래그 참조
-- gemini/vertex-ai: Gemini 2.0+ ✅, 1.5 → off
+- codex: gpt-5/5.4/5.5 계열 ✅ (Codex는 `effort` 파라미터 무관)
+- openai: 카탈로그 메타 `supportsNativeSearch` 플래그 + **`effort='minimal'` 시 `gpt-5`만 OFF** (검증: web_search not supported in gpt-5 with minimal reasoning)
+- gemini/vertex-ai: Gemini 3.x ✅ (2.5는 카탈로그에서 제거됨)
+
+**effort 게이트 구현**:
+```ts
+function supportsNativeSearch(provider: string, model: string, opts?: { effort?: string }): boolean {
+  if (provider === 'openai' && model === 'gpt-5' && opts?.effort === 'minimal') return false
+  // ... 나머지 카탈로그 메타 참조
+}
+```
 
 #### 4.1.3 라이프사이클 정규화
 
@@ -237,6 +337,24 @@ GEMINI_MODELS = [
 
 #### 4.1.5 사용자 컨트롤
 에이전트 설정에 per-agent native search 토글 (default ON). 회사 정책상 외부 검색 차단 케이스 대응.
+
+#### 4.1.6 Native vs Skill 검색 예산 분리 — **신규 (검토에서 발견)**
+
+현재 엔진 `session.ts`의 `max_web_search_per_turn=5` 캡이 **native와 함수형(skill) 호출을 합산**. §4.1.4 폴백 정책이 "native 실패 → skill"인데 합산 카운터면:
+- native 5회 도달 후 skill 폴백도 차단 (의도와 반대)
+- native 1~4회 + skill 1회로 의도와 어긋남
+
+**조치**: 카운터 분리.
+```ts
+// session.ts perTurnCaps
+{
+  nativeSearchCount: number,  // provider hosted (web_search_20250305 / responses web_search / googleSearch)
+  skillSearchCount: number,   // function-tool web-search skill
+}
+// 각각 별도 cap (default native=8, skill=5)
+```
+
+`engine/session.ts` +20 LOC. resetPerTurnCaps()에 두 카운터 모두 reset. UI 디버그 패널에 분리 표시.
 
 ### 4.2 멀티모달 정책
 
@@ -293,6 +411,7 @@ export async function retryWithBackoff<T>(
 - default 10 (env `OPENHIVE_<PROVIDER>_CONCURRENCY` override).
 - 초과 시 대기열 (timeout 30s).
 - 안 깎아도 fatal 아님 — 1차 출시는 retry로만 대응, semaphore는 v2로 deferred 가능.
+- **예외 — Vertex AI는 v1부터 default ON**: region·project quota가 좁고 burst 시 즉시 429 노출. default cap = 6 (`OPENHIVE_VERTEX_CONCURRENCY` override).
 
 ### 4.5 에러 정규화
 
@@ -314,6 +433,16 @@ export class ProviderError extends Error {
 ```
 
 각 어댑터 catch → `ProviderError` 던짐. 엔진 `session.ts`의 에러 핸들러가 `userMessage`를 i18n으로 풀어 UI에 표시.
+
+**API 키 redact (필수)**: `errors.ts`에 `redactCredentials(text: string): string` 헬퍼 추가. `ProviderError.message` / `cause.message` / stack의 다음 패턴 마스킹:
+- `sk-ant-api03-[A-Za-z0-9_-]+` → `sk-ant-api03-***`
+- `sk-[A-Za-z0-9]{20,}` → `sk-***` (OpenAI)
+- `AIza[A-Za-z0-9_-]{35}` → `AIza***` (Gemini)
+- `Bearer ya29\.[A-Za-z0-9_-]+` → `Bearer ya29.***` (Vertex access_token)
+- `key=[A-Za-z0-9_-]+` (쿼리스트링 fallback)
+- `Authorization: Bearer ...`, `x-api-key: ...`, `x-goog-api-key: ...` 헤더 라인
+
+`ProviderError` 생성 시점에 자동 적용. 이벤트 라이터·로그·UI 모든 경로에 같은 함수 통과. probe 스크립트(§6.6)와 동일 redact 함수 재사용.
 
 신규 i18n 키:
 - `error.provider.auth`: "API 키가 유효하지 않습니다. Settings에서 다시 등록하세요."
@@ -381,6 +510,61 @@ const ServiceAccountSchema = z.object({
 
 OAuth 우선 — 무료/구독 활용.
 
+### 4.9 Cheap-model 폴백 (title / summary / result-cap) — **신규 (검토에서 발견)**
+
+**문제**: 다음 코드 경로가 모델을 호출하는데 provider-bound:
+- `apps/web/lib/server/sessions/title.ts` — 자동 타이틀 (현재 `gpt-5-mini` 하드코딩, 10s deadline, fire-and-forget)
+- `apps/web/lib/server/engine/history-window.ts` — 40턴 초과 시 `summarise()` (agent의 provider+model 사용 추정)
+- `apps/web/lib/server/engine/result-cap.ts` — child 100k자 초과 시 LLM 요약 (`pickSummaryModel(node)`)
+
+사용자가 Anthropic api_key 만 등록하면:
+- 타이틀: Codex 미연결 → 호출 실패, 타이틀 누락 (silent)
+- summarise: agent의 비싼 모델로 요약 → 비용 ↑
+- result-cap LLM: 동일
+
+**해결**: `providers/cheap-model.ts` 신규 헬퍼 (+40 LOC).
+```ts
+interface CheapModelChoice {
+  providerId: string
+  model: string
+}
+
+// 카탈로그 메타에 cheapModel 플래그 추가
+// claude-code/anthropic: 'claude-haiku-4-5'
+// codex/openai: 'gpt-5-mini' / 'gpt-5.5-mini'(있다면)
+// gemini/vertex-ai: 'gemini-3-flash'
+// copilot: dynamic — 'gpt-4o-mini' fallback
+export function pickCheapModel(connectedProviders: string[]): CheapModelChoice | null {
+  const order = ['codex', 'openai', 'claude-code', 'anthropic', 'gemini', 'vertex-ai', 'copilot']
+  for (const p of order) {
+    if (connectedProviders.includes(p)) return { providerId: p, model: cheapModelFor(p) }
+  }
+  return null
+}
+```
+
+**호출부 패치 (+15 LOC 합)**:
+- `title.ts:generateTitle()` — `gpt-5-mini` 하드코딩 제거, `pickCheapModel()` 결과 사용
+- `history-window.ts:summarise()` — agent 모델 대신 cheap-model
+- `result-cap.ts:pickSummaryModel(node)` — provider 미연결 시 cheap-model 폴백
+
+미연결 시 `null` 반환 → 호출부가 graceful skip (요약 없이 truncate, 타이틀 없이 진행).
+
+### 4.10 Anthropic 1h TTL 옵션 — **신규 (검토에서 발견)**
+
+2026-03-06부로 ephemeral cache default TTL이 5min. 긴 세션(>5min idle 후 재개)에서 cache miss 누적.
+
+**조치**: `AnthropicCachingStrategy`에 `ttl?: '5m' | '1h'` 옵션 추가. 기본 `'5m'` 유지(현 동작 보존). 명시적 1h 사용 케이스:
+- 회사 단위로 긴 idle 세션이 빈번하면 team config에 `cache_ttl: '1h'` 설정
+- microcompact 비활성된 에이전트 (db_exec 위주 trajectory)
+```ts
+// caching.ts
+const cacheControl = ttl === '1h'
+  ? { type: 'ephemeral', ttl: '1h' }
+  : { type: 'ephemeral' }
+```
++10 LOC. 1h TTL 사용 시 비용 1.25× → 2× 캐시 write 비용 인지 필요(문서화).
+
 ---
 
 ## 5. 파일·LOC 플랜
@@ -397,13 +581,14 @@ OAuth 우선 — 무료/구독 활용.
 | `apps/web/lib/server/providers/openai-response-shared.ts` | Codex/OpenAI 공통 SSE 정규화기 (§6) | 200 |
 | `apps/web/lib/server/providers/retry.ts` | 공통 backoff 헬퍼 | 50 |
 | `apps/web/lib/server/providers/errors.ts` | `ProviderError` + 분류 헬퍼 | 70 |
-| `apps/web/lib/server/providers/tool-translation.ts` | ToolSpec → 4 provider 변환 + MCP 검증 | 180 |
+| `apps/web/lib/server/providers/tool-translation.ts` | ToolSpec → 4 provider 변환 + MCP 검증 + Responses strict 검증 | 200 |
+| `apps/web/lib/server/providers/cheap-model.ts` | title/summary/result-cap용 cheap-model 폴백 (§4.9) | 40 |
 | `apps/web/scripts/probe-anthropic-apikey.ts` | Phase 0 probe | 60 |
 | `apps/web/scripts/probe-openai-apikey.ts` | Phase 0 probe | 70 |
 | `apps/web/scripts/probe-gemini.ts` | Phase 0 probe | 70 |
 | `apps/web/scripts/probe-vertex.ts` | Phase 0 probe | 80 |
 
-**신규 합계: 1,650 LOC**
+**신규 합계: 1,710 LOC** (cheap-model 40 + tool-translation +20)
 
 ### 5.2 수정 파일
 
@@ -411,20 +596,22 @@ OAuth 우선 — 무료/구독 활용.
 |---|---|---|
 | `providers/claude.ts` | api_key 분기 (헤더, 베타, refresh 우회) | +40 |
 | `providers/codex.ts` | 정규화기 호출로 이전, codex 전용 reasoning anchor 콜백 | -100 / +30 (net -70) |
-| `providers/caching.ts` | `OpenAIResponsesCachingStrategy`, `GeminiCachingStrategy` (stub) | +90 |
-| `providers/models.ts` | OPENAI/GEMINI/VERTEX 분기 + 카탈로그 + `supportsNativeSearch` 메타 | +35 |
+| `providers/caching.ts` | `OpenAIResponsesCachingStrategy`, `GeminiCachingStrategy` + thought-signature scratch hook + Anthropic `ttl` 옵션 (§4.10) | +110 |
+| `providers/models.ts` | OPENAI/GEMINI/VERTEX 분기 + 카탈로그 + `supportsNativeSearch`/`supportsThoughtSignatures`/`cheapModel` 메타 + Gemini 2.5 제거 + `[1m]` Claude 제거 | +40 |
 | `engine/providers.ts` | dispatch 4개 + `supportsNativeSearch()` + streamCodex 정규화 추출 | +180 |
 | `engine/fork.ts:111` | `'claude-code' \| 'anthropic'` 허용 | +5 |
 | `engine/session.ts` | `ProviderError` 처리 → UI 메시지 emit | +20 |
-| `usage/contextWindow.ts` | 4 블록 추가 | +35 |
-| `usage/pricing.ts` | thinking 단가 + 누락 모델 보강 | +15 |
+| `usage/contextWindow.ts` | 4 블록 추가 + `[1m]` 변형 제거(2026-04-30 retire) | +30 / -5 |
+| `usage/pricing.ts` | tiered pricing(>272k) 분기 + cached_input + thinking 단가 + 누락 모델 보강 | +35 |
+| `engine/session.ts` | native vs skill search counter 분리 (§4.1.6) + ProviderError UI emit | +40 |
+| `sessions/title.ts` / `engine/history-window.ts` / `engine/result-cap.ts` | cheap-model 폴백 적용 (§4.9) | +15 합 |
 | `agent-frames.ts` / `frames.ts` | `defaultModelFor` 분기 4개 | +24 |
 | `tokens.ts` | api_key 헬퍼 + cache invalidation hook | +20 |
 | `auth/providers.ts` | gemini/vertex 메타 검증 (anthropic 이미 추가) | +5 |
 | `package.json` | `google-auth-library` | +1 |
 | `lib/i18n.ts` | error.provider.* 키 5종 × 2언어 | +20 |
 
-**수정 net: +420 LOC**
+**수정 net: +505 LOC** (검토 권고 반영분 +85)
 
 ### 5.3 UI 작업
 
@@ -469,11 +656,11 @@ OAuth 우선 — 무료/구독 활용.
 
 ### 5.6 LOC 총합
 
-- 코드 신규: **1,650**
-- 코드 수정 net: **+420**
+- 코드 신규: **1,710**
+- 코드 수정 net: **+505**
 - UI: **160**
-- 테스트: **750**
-- **코드 합계: 약 2,980 LOC**
+- 테스트: **820** (검토 권고 회귀 +70)
+- **코드 합계: 약 3,195 LOC**
 - 문서: 290 LOC (별도)
 
 (앞서 추정 1,500–2,400 범위 상단을 살짝 초과 — 횡단 관심사·테스트·UI를 모두 포함해서.)
@@ -560,19 +747,26 @@ export async function* normalizeResponsesStream(
 ### Phase 0 — Probes (선행, 1~2일)
 **목적**: 추측 제거. 각 provider 실제 동작 확인.
 
-- `probe-anthropic-apikey.ts`: 베타 헤더 매트릭스 (각 베타 단독 + 조합)로 1턴 round-trip. 각각 응답 헤더/에러 dump.
-- `probe-openai-apikey.ts`: web_search를 모델별로 시도(`gpt-5`, `gpt-5.5`, `gpt-5.4`, `gpt-4o`). 지원 화이트리스트 갱신.
-- `probe-gemini.ts`: googleSearch + thinkingLevel 시도. groundingMetadata 실제 구조 dump.
-- `probe-vertex.ts`: 서비스 계정 1개로 `us-central1`/`global` round-trip.
+- `probe-anthropic-apikey.ts`: 베타 헤더 매트릭스 (각 베타 단독 + 조합)로 1턴 round-trip. **`context-1m-2025-08-07` 거부 확인** (2026-04-30 retire), `ttl: '1h'` 동작 확인.
+- `probe-openai-apikey.ts`:
+  - web_search를 모델별로 round-trip 회귀 (`gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5`, `gpt-4o`) — 모두 ✅로 가정, 거부 시 카탈로그 메타 즉시 false
+  - **`gpt-5` + `reasoning.effort='minimal'` + web_search → 거부 확인**
+  - **MCP 카탈로그 → Responses tool `strict: true` 변환 통과율 측정**
+- `probe-gemini.ts`: googleSearch + thinkingLevel 시도. groundingMetadata 실제 구조 dump. **응답 parts에 `thoughtSignature` 필드 캡처 → 다음 라운드 echo round-trip 검증**.
+- `probe-vertex.ts`: 서비스 계정 1개로 `us-central1`/`global` round-trip + 동시 6개 요청 burst로 quota 동작 관찰.
 
 산출물: `dev/active/api-key-providers/probe-results.md` (raw dump + 결정 갱신).
 
 **Gating**: 사용자가 각 provider 실키 1개씩 임시 제공 (또는 본인 계정).
 
-### Phase A — Anthropic api_key (1주, ~280 LOC)
-- claude.ts api_key 분기, 베타 분리
+### Phase A — Anthropic api_key (1주, ~320 LOC)
+- claude.ts api_key 분기, 베타 분리 (`context-1m-*` 미포함 확인)
+- **`retry.ts` 추출** (검토 권고: Phase B 회귀 risk와 무관하게 선행) + claude.ts 인라인 backoff 마이그레이션
+- **`errors.ts` + `redactCredentials()` 헬퍼**
 - engine dispatch + fork.ts 가드
-- contextWindow / pricing / defaultModelFor
+- contextWindow(`[1m]` 제거) / pricing(tiered + cached_input) / defaultModelFor
+- AnthropicCachingStrategy `ttl` 옵션 (§4.10)
+- cheap-model 헬퍼 + title.ts 패치 (Anthropic Haiku 폴백 검증)
 - 테스트
 - env: `OPENHIVE_PROVIDER_ANTHROPIC=1` 게이팅
 - 1주 dogfood → default on
@@ -591,20 +785,22 @@ export async function* normalizeResponsesStream(
 - 테스트
 - env: `OPENHIVE_PROVIDER_OPENAI=1`
 
-### Phase D — Gemini api_key (2주, ~900 LOC)
-- gemini-shared.ts (wire + parser) + gemini.ts (auth wrapper)
+### Phase D — Gemini api_key (2주, ~960 LOC)
+- gemini-shared.ts (wire + parser + **thought signatures 캡처/echo, §3.3.1**) + gemini.ts (auth wrapper)
 - search 라이프사이클 합성
-- thinkingLevel 매핑
+- thinkingLevel 매핑 (Gemini 3.x 전용 — 2.5 미지원)
 - safetySettings BLOCK_ONLY_HIGH default
-- 테스트
+- 카탈로그: gemini-3.1-pro / gemini-3-flash만 (2.5 retire 대비)
+- 테스트 — thought signature 라운드트립 fixture 필수
 - 캐싱 미구현 (Phase F)
 - env: `OPENHIVE_PROVIDER_GEMINI=1`
 
-### Phase E — Vertex AI (1.5주, ~470 LOC)
-- vertex.ts (gemini-shared.ts 재사용)
+### Phase E — Vertex AI (1.5주, ~490 LOC)
+- vertex.ts (gemini-shared.ts 재사용 — thought signatures 자동 적용)
 - auth/vertex.ts + google-auth-library
 - region 드롭다운 UI
 - service-account JSON 검증
+- **semaphore default-on (cap=6, §4.4.3)**
 - 테스트
 - env: `OPENHIVE_PROVIDER_VERTEX=1`
 
@@ -641,6 +837,18 @@ export async function* normalizeResponsesStream(
 
 ### 8.5 에러 정규화
 - 401/429/5xx 시뮬레이션 → ProviderError kind 매트릭스 통과
+- **dispatch 레이어 error path 매트릭스**: `engine/providers.test.ts`에 4 provider × {auth, quota, transient, geo} 16케이스 — provider별 정확한 ProviderError emit 회귀
+- **redactCredentials 회귀**: `errors.test.ts`에 5종 키 패턴(sk-ant-, sk-, AIza, ya29., x-goog-api-key 헤더) fixture 통과
+
+### 8.7 가격 회귀
+- `pricing.test.ts`: GPT-5.5 tiered (272k 미만 / 정확히 / 초과) 3 케이스, cached_input 차감 케이스, 세션 누적 케이스
+
+### 8.8 cheap-model 폴백
+- `cheap-model.test.ts`: 우선순위 매트릭스 (codex만 / anthropic만 / 둘 다 / 모두 미연결) 정확한 선택 검증
+- title.ts / history-window.ts / result-cap.ts 각각의 graceful skip 회귀
+
+### 8.9 thought signatures (Gemini)
+- `gemini-shared.test.ts`: probe로 캡처한 raw SSE fixture에서 `thoughtSignature` 추출 → 다음 요청 echo 위치 정확성 회귀
 
 ### 8.6 Live test (env: `OPENHIVE_LIVE_TEST=1`)
 - 실키 사용. 각 provider 1턴 round-trip.
@@ -723,9 +931,17 @@ export async function* normalizeResponsesStream(
 10. **멀티모달**: v1 text-only. Phase G 별도 트랙.
 11. **MCP 변환**: `tool-translation.ts`로 일원화. Gemini OpenAPI subset 제약 검증 테스트 필수.
 12. **Cancel/abort**: `StreamOpts.signal`로 통일. 기존 OAuth 어댑터도 같이 손봄.
-13. **Fork 정책**: `claude-code` + `anthropic` 같은 provider끼리만 fork. cross-provider는 `provider_mismatch`로 fresh.
-14. **에러 정규화**: `ProviderError` 클래스 + i18n 키 5종.
-15. **동시성 cap**: provider id별 default 10, env override.
+13. **Fork 정책**: `claude-code` + `anthropic` 같은 provider끼리만 fork. cross-provider는 `provider_mismatch`로 fresh — 이유는 **워크스페이스 cache 격리(2026-02-05)**, 토큰 소스 차이 아님.
+14. **에러 정규화**: `ProviderError` 클래스 + i18n 키 5종 + **`redactCredentials()` 자동 적용**.
+15. **동시성 cap**: provider id별 default 10, env override. **Vertex만 default ON (cap=6)**.
+16. **GPT-5.5/5.4 tiered pricing**: `>272k input` 시 입력 2× / 출력 1.5× — `usage/pricing.ts`에 분기 추가. cached_input ($0.50/1M) 별도 단가.
+17. **Gemini 카탈로그**: 2.5 제거 (2026-06-17 retire). 3.1 Pro / 3 Flash만.
+18. **Anthropic 1M context beta**: `context-1m-2025-08-07` 2026-04-30 retire — 카탈로그·contextWindow에서 즉시 제거.
+19. **Gemini Thought Signatures**: `gemini-shared.ts`에 캡처/echo 로직 필수 — 미반영 시 multi-turn reasoning 손실.
+20. **Native vs Skill 검색 카운터 분리**: 합산 카운터의 폴백 차단 문제 해결.
+21. **Cheap-model 폴백**: title/summary/result-cap이 provider-bound 호출하지 않도록 `pickCheapModel()` 헬퍼 도입.
+22. **OpenAI effort='minimal' 게이트**: `gpt-5` + minimal reasoning은 web_search 미지원 — `supportsNativeSearch()` 시그니처에 `effort` 인자 추가.
+23. **Anthropic ttl 옵션**: `'5m'` (default) | `'1h'`. 긴 idle 세션 cache 보호용.
 
 ---
 
@@ -734,3 +950,4 @@ export async function* normalizeResponsesStream(
 - **2026-04-30 — Lead (v1)**: 초기 plan + context 작성. 14개 갭 식별.
 - **2026-04-30 — Lead (v2)**: 14개 갭 모두 메움. 최신 정보 반영(Anthropic 베타, OpenAI web_search 화이트리스트, Gemini thinkingLevel 마이그레이션, Vertex cachedContents 엔드포인트). Phase 0(probes) 신설. 횡단 관심사 §4로 통합. Codex 정규화기 인터페이스 §6 상세. LOC 재추정.
 - **2026-04-30 — Lead (v2.1)**: GPT-5.5 정정. openai.com 공식 페이지(ko-KR/api/) 직접 확인 — default 모델 확정. 가격(입력 $5/1M, 출력 $30/1M), 컨텍스트(1.05M), 출력(130k), 컷오프(2025-12-01) 반영. `experimental` 플래그 제거. §3.2.2 모델 카탈로그 표 추가.
+- **2026-04-30 — Lead (v3)**: 코드베이스 전수조사 검토 결과 반영. **차단 4건**: (1) GPT-5.5/5.4 tiered pricing(>272k 2×/1.5×) + cached_input — `pricing.ts` 가격 모델 변경, (2) Anthropic `context-1m-*` 베타 2026-04-30 retire — `[1m]` 변형 제거, (3) Gemini 2.5 카탈로그 제거(2026-06-17 retire), (4) Gemini 3 Thought Signatures 캡처/echo 도입 — multi-turn reasoning 연속성. **강력 권고 7건**: (5) cheap-model 폴백 헬퍼 (§4.9) — title/summary/result-cap의 provider-bound 호출 해결, (6) native vs skill search 카운터 분리 (§4.1.6), (7) Anthropic 1h TTL 옵션 (§4.10), (8) OpenAI effort='minimal' web_search 게이트 (§4.1.2), (9) `redactCredentials()` 자동 적용 (§4.5), (10) Vertex semaphore default-on (§4.4.3), (11) Responses API tool `strict` 모드 변환 probe. **plan 정합**: §3.1 목표 95% → 99%, Phase A에 retry.ts/errors.ts 추출 선행, §8 dispatch error matrix + 가격/cheap-model/thought-signature 회귀 추가, §13 결정 사항 #16~#23 추가, LOC 재추정(코드 ~3,195).

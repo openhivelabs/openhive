@@ -2,7 +2,31 @@
 
 > 플랜 실행 시 참조해야 하는 파일·결정·주의사항. 읽고 시작하세요.
 
-**Last Updated**: Lead - 2026-04-30 - 초기 컨텍스트 작성
+**Last Updated**: Lead - 2026-04-30 - v4: Phase A~E + 폴리시 9건 모두 구현 완료. Phase F/G만 deferred.
+
+---
+
+## 🟢 IMPLEMENTATION COMPLETE
+
+모든 Phase A~E + 9개 폴리시 항목 구현 완료. 6 provider 전부 dispatch + 회귀 480 tests 통과.
+
+### 산출 파일 (참조용)
+- 신규 어댑터: `providers/{openai,gemini,vertex}.ts`, `auth/vertex.ts`
+- 신규 인프라: `providers/{errors,retry,cheap-model,semaphore,cache-control,openai-response-shared,gemini-shared}.ts`
+- 수정 파일: claude.ts (api_key 분기), codex.ts (helper extract), caching.ts (3 strategies + ttl), engine/providers.ts (dispatch + supportsNativeSearch), engine/fork.ts (gate), engine/session.ts (counter split + native_search opt-out), engine/result-cap.ts (cheap-model 폴백), engine/errors.ts (classify 확장), sessions/title.ts (cheap-model 폴백), team.ts (AgentSpec.native_search), models.ts (-preview suffix), contextWindow.ts ([1m] 제거 + anthropic/openai/gemini/vertex 블록), pricing.ts (tiered + cached_input), agent-frames.ts/frames.ts (defaultModelFor), i18n.ts (error.provider.* + nodeEditor.nativeSearch* + settings.providers.vertex*), tokens.ts (clear* 헬퍼)
+- UI: ProvidersSection.tsx (Vertex 2-칸), NodeEditor.tsx (web search 토글)
+- 문서: docs/providers/{anthropic,openai,gemini,vertex}.md, CHANGELOG.md
+
+### 다음 세션 컨텍스트 회복용 키 사실
+- 6 provider dispatch 매트릭스 완성: claude-code (OAuth), anthropic (api_key), codex (OAuth), openai (api_key), copilot (OAuth), gemini (api_key), vertex-ai (api_key/JWT)
+- Vertex 모델은 **`global` region에서만** 가용 (Gemini 3.x preview 한정, 2026-04-30 probe 검증). UI default `global`.
+- Gemini 모델 ID는 `-preview` suffix 필수 (catalog + contextWindow 모두)
+- Anthropic `[1m]` 변형 모두 제거됨 (2026-04-30 retire)
+- GPT-5.5/5.4 tiered pricing (>272k 시 입력 2× / 출력 1.5×) `usage/pricing.ts:computeCost` 자동 적용
+- Thought Signatures: `gemini-shared.ts`의 per-chainKey `assistantTurns: Map<ordinal, GeminiPart[]>` 캡처/echo
+- Phase F (cachedContents): 워크로드 측정 후 결정. 현재 implicit auto-cache 동작.
+
+---
 
 ---
 
@@ -34,8 +58,8 @@
 - 동일 파일 `decideForkOrFresh` 6-gate 로직 — 그 외 변경 불필요.
 
 ### 1.5 Pricing / Context Window
-- `apps/web/lib/server/usage/pricing.ts:91-156` — PATTERN_PRICING. claude-* / gpt-* / gemini-* 글롭이 이미 거의 전부 커버. **추가 거의 불필요**.
-- `apps/web/lib/server/usage/contextWindow.ts:19-49` — provider별 모델 윈도우 표. **anthropic / openai / gemini / vertex-ai 4개 블록 신규 추가**.
+- `apps/web/lib/server/usage/pricing.ts:91-156` — PATTERN_PRICING. claude-* / gpt-* / gemini-* 글롭이 이미 거의 전부 커버. **`ModelRates` 인터페이스에 tiered pricing(>272k) + `cached_input` 추가 필수** (v3).
+- `apps/web/lib/server/usage/contextWindow.ts:19-49` — provider별 모델 윈도우 표. **anthropic / openai / gemini / vertex-ai 4개 블록 신규 추가**. **`[1m]` Claude 변형은 2026-04-30 retire로 제거** (v3).
 
 ### 1.6 Models catalog
 - `apps/web/lib/server/providers/models.ts` — 현재 `claude-code` / `anthropic`(이미 추가) / `codex` / `copilot` 분기. **`openai` / `gemini` / `vertex-ai` 분기 추가**.
@@ -166,9 +190,16 @@
 ## 6. 추가 주의사항 (v2 보강)
 
 ### 6.1 Gemini 3 thinking 마이그레이션
-- Gemini 3은 `thinkingBudget` (정수 budget) → `thinkingLevel` (low/medium/high) 마이그레이션. Apr 2026 시점에 둘 다 동작하는 듯하지만 `thinkingLevel` 권장.
+- Gemini 3은 `thinkingBudget` (정수 budget) → `thinkingLevel` (low/medium/high) 마이그레이션. **두 파라미터를 같은 요청에 동시 사용 시 에러** — 모델 id 분기 필수.
 - 어댑터: 모델 id가 `gemini-3*`이면 `thinkingLevel`, 그 외(2.5)는 `thinkingBudget`.
+- **Gemini 2.5는 카탈로그에서 제거 (2026-06-17 retire)** — Phase D 머지 시점에 ~3주 남음. 카탈로그 노출 시 retire 직후 silent fail.
 - `effort` → 매핑: low=`low`/0, medium=`medium`/1024, high=`high`/8192.
+
+### 6.1.1 Gemini 3 Thought Signatures (v3 추가)
+- 응답 SSE의 parts에 `thoughtSignature: string` 필드 → reasoning 연속성 anchor (Codex의 `attach_item_ids` + `reasoning.encrypted_content` 등가).
+- **캡처**: `gemini-shared.ts` 파서가 `chainKey → signatures[]` Map(globalThis 키)에 누적.
+- **Echo**: 다음 라운드 요청 시 같은 part 인덱스에 echo. 누락 시 multi-turn 품질 저하.
+- 미반영 시 영향 큼 — Phase D 차단 항목.
 
 ### 6.2 Vertex cachedContents 엔드포인트 차이
 - Gemini API: `https://generativelanguage.googleapis.com/v1beta/cachedContents`
@@ -189,6 +220,9 @@
 ### 6.4 Anthropic prompt-caching beta
 - Apr 2026 시점 prompt caching이 일반 API에 GA됨 (베타 헤더 불필요할 수도).
 - 하지만 기존 `prompt-caching-scope-2026-01-05`는 scope 제어용 별개 베타 — 유지.
+- **Workspace 격리 (2026-02-05)**: cache key가 organization → workspace 단위. cross-provider fork(claude-code ↔ anthropic)는 cache miss 확정.
+- **TTL 변경 (2026-03-06)**: default 1h → 5min. `cache_control: { type: 'ephemeral', ttl: '1h' }` 명시로 1h 복원 가능 (§4.10).
+- **`context-1m-2025-08-07` 베타 2026-04-30 retire** — claude.ts ANTHROPIC_BETA에 미포함 확인됨. 모델 카탈로그에서 `[1m]` 변형 제거.
 - Phase 0 probe로 베타 미포함 vs 포함 동작 차이 확인.
 
 ### 6.5 Codex 정규화기 추출 위험
@@ -209,6 +243,41 @@
 - `oneOf`/`anyOf` 부분 지원.
 - `tool-translation.test.ts`에 현재 MCP 카탈로그 통과율 측정 — 임계 5% 이내 skip.
 
+### 6.9 OpenAI Responses tool `strict: true` (v3 추가)
+- Responses API는 정확한 schema adherence를 위해 `strict: true` 권장.
+- 그러나 strict 모드는 `additionalProperties: false`, 모든 속성 `required` 등 엄격한 제약 — MCP 툴이 위반하는 경우 다수.
+- Phase 0 probe(`probe-openai-apikey.ts`)에 strict 모드 변환 통과율 측정. 임계 미달 시 strict-off 폴백 정책 결정.
+- `tool-translation.ts`의 `toResponses(tools)`에 strict mode 옵션 노출.
+
+### 6.10 GPT-5.5/5.4 Tiered pricing (v3 추가)
+- 입력 토큰 누적 > 272,000 시 **세션 전체에 입력 2× / 출력 1.5× 곱셈**.
+- `usage/pricing.ts`의 `ModelRates` 평면 단가 가정과 충돌 — 분기 필수.
+- 누적 단위는 "응답당 input tokens"가 아니라 "세션 전체"인지 probe 필요. 임시 가정: per-response.
+
+### 6.11 OpenAI gpt-5 + minimal reasoning + web_search 제약 (v3 추가)
+- `reasoning.effort: 'minimal'` 시 web_search 호출 거부 (검증 출처: platform.openai.com docs).
+- `supportsNativeSearch(provider, model, opts?: { effort })` 시그니처에 effort 인자 추가.
+- 카탈로그 메타로 자동화 어려움 — 함수 본문에 special-case 분기.
+
+### 6.12 cheap-model 폴백 (v3 추가)
+- `sessions/title.ts`는 현재 `gpt-5-mini` 하드코딩 → Codex 미연결 시 silent fail.
+- `engine/history-window.ts`의 summarise()와 `engine/result-cap.ts`의 LLM 요약도 동일 영향.
+- `providers/cheap-model.ts`의 `pickCheapModel(connectedProviders)` 헬퍼로 우선순위 폴백:
+  - codex → openai → claude-code → anthropic → gemini → vertex-ai → copilot
+  - cheap 모델 매핑: Haiku 4.5 / gpt-5-mini / gemini-3-flash 등 카탈로그 메타 `cheapModel` 플래그
+- 미연결 시 null 반환 → 호출부 graceful skip.
+
+### 6.13 Native vs Skill 검색 카운터 분리 (v3 추가)
+- 현재 `engine/session.ts`의 `max_web_search_per_turn=5` 캡이 **합산**.
+- §4.1.4 폴백("native 실패 → skill")이 합산 캡 때문에 차단됨.
+- `nativeSearchCount` / `skillSearchCount` 분리. default native=8, skill=5.
+- resetPerTurnCaps()에 두 카운터 모두 reset.
+
+### 6.14 redactCredentials (v3 추가)
+- `providers/errors.ts`에 헬퍼. ProviderError 생성 시점 자동 적용.
+- 마스킹 패턴: `sk-ant-api03-*`, `sk-*` (OpenAI), `AIza...`, `Bearer ya29.*`, `key=...`, `Authorization`/`x-api-key`/`x-goog-api-key` 헤더 라인.
+- probe 스크립트(§6.6)와 동일 함수 재사용.
+
 ---
 
 ## 7. 변경 로그
@@ -217,3 +286,4 @@
 - **2026-04-30 — Lead (v1.1)**: Open Questions 확정. GPT-5.5 포함, Gemini 캐싱 Phase F 분리, Vertex google-auth-library 사용, Gemini 검색 합성, PROVIDERS UI 단계별.
 - **2026-04-30 — Lead (v2)**: 플랜 14개 갭 메움. 최신 정보 검증(Anthropic 베타, OpenAI web_search 화이트리스트, Gemini thinkingLevel 마이그레이션, Vertex cachedContents 엔드포인트). Phase 0(probes) 신설. 횡단 관심사 통합(에러 정규화·rate limit·cancel·보안·마이그레이션·UI·문서). LOC 재추정 (코드 ~2,980, 문서 ~290).
 - **2026-04-30 — Lead (v2.1)**: GPT-5.5 정정. openai.com 공식 페이지 직접 확인하여 default 모델로 확정. 가격·컨텍스트 정확한 값 반영. `experimental` 플래그 모두 제거.
+- **2026-04-30 — Lead (v3)**: 코드베이스 전수조사 검토 결과 반영. §6.1.1(Thought Signatures), §6.4(workspace 격리/TTL/1M retire), §6.9(strict mode), §6.10(tiered pricing), §6.11(effort gate), §6.12(cheap-model), §6.13(검색 카운터), §6.14(redactCredentials) 신규. §1.5에 pricing/contextWindow 갱신 사항 명시.
